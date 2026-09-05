@@ -16,12 +16,16 @@ const (
 )
 
 // Params describes an audio stream.
+// Extradata is the codec private blob the decoder needs at open
+// (Vorbis identification/comment/setup in Xiph lacing). Encoders
+// fill it after a successful open; callers pass it back to NewDecoder.
 type Params struct {
 	ID         ID
 	SampleRate int
 	Channels   int
 	Bitrate    int64
 	Format     SampleFormat
+	Extradata  []byte
 }
 
 // SampleFormat is a PCM sample representation. Numeric values match

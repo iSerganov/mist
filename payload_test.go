@@ -48,15 +48,17 @@ func (s *PayloadSuite) TestTextPayload() {
 }
 
 func (s *PayloadSuite) TestGenerateKeyPair() {
-	s.T().Skip("TODO: X25519 key generation")
 	pub, priv, err := GenerateKeyPair()
 	s.NoError(err)
 	s.Len(pub, PublicKeySize)
 	s.Len(priv, PrivateKeySize)
+	pub2, priv2, err := GenerateKeyPair()
+	s.NoError(err)
+	s.NotEqual(pub, pub2)
+	s.NotEqual(priv, priv2)
 }
 
 func (s *PayloadSuite) TestGenerateSigningKeyPair() {
-	s.T().Skip("TODO: Ed25519 key generation")
 	pub, priv, err := GenerateSigningKeyPair()
 	s.NoError(err)
 	s.Len(pub, SigningPublicKeySize)

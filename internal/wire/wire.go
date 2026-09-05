@@ -1,27 +1,18 @@
-// Package wire defines the encrypted envelope and the inner payload framing.
-//
-// Inner payload (AEAD plaintext):
-//
-//	[ 1 byte  ] version
-//	[ 1 byte  ] payload type
-//	[ 4 bytes ] payload length (uint32, big-endian)
-//	[ N bytes ] payload data
-//	[ 64 bytes ] optional Ed25519 signature (only when sender auth is on)
-//
-// Outer envelope (what is embedded into coefficients):
-//
-//	[ 32 bytes ] ephemeral X25519 public key
-//	[ 12 bytes ] ChaCha20-Poly1305 nonce
-//	[ M bytes  ] ciphertext || 16-byte Poly1305 tag
+// Package wire is the inner payload framing and the outer hybrid-box envelope.
 package wire
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 const (
-	VersionSize       = 1
-	TypeSize          = 1
-	LengthSize        = 4
-	PayloadHeaderSize = VersionSize + TypeSize + LengthSize
+	CurrentVersion    byte = 1
+	VersionSize            = 1
+	TypeSize               = 1
+	LengthSize             = 4
+	PayloadHeaderSize      = VersionSize + TypeSize + LengthSize
+	SignatureSize          = 64
 
 	EphemeralPubSize = 32
 	NonceSize        = 12
@@ -35,26 +26,65 @@ type Payload struct {
 	Version   byte
 	Type      byte
 	Data      []byte
-	Signature []byte // nil when sender authentication is off
+	Signature []byte
 }
 
-// Envelope is the hybrid-encryption box that gets embedded per stego frame.
+// Envelope is the hybrid-encryption box embedded in one stego frame.
 type Envelope struct {
 	EphemeralPub [EphemeralPubSize]byte
 	Nonce        [NonceSize]byte
-	Ciphertext   []byte // includes the 16-byte Poly1305 tag
+	Ciphertext   []byte
 }
 
-// MarshalPayload encodes p in the inner framing layout.
+// MarshalPayload encodes version, type, big-endian length, data, and optional signature.
 func MarshalPayload(p Payload) ([]byte, error) {
-	_ = p
-	return nil, errUnimplemented
+	if p.Version == 0 {
+		p.Version = CurrentVersion
+	}
+	if p.Version != CurrentVersion {
+		return nil, fmt.Errorf("%w: %d", ErrVersion, p.Version)
+	}
+	sigLen := len(p.Signature)
+	if sigLen != 0 && sigLen != SignatureSize {
+		return nil, fmt.Errorf("%w: signature", ErrLength)
+	}
+	out := make([]byte, PayloadHeaderSize+len(p.Data)+sigLen)
+	out[0] = p.Version
+	out[1] = p.Type
+	binary.BigEndian.PutUint32(out[2:6], uint32(len(p.Data)))
+	copy(out[PayloadHeaderSize:], p.Data)
+	copy(out[PayloadHeaderSize+len(p.Data):], p.Signature)
+	return out, nil
 }
 
 // UnmarshalPayload decodes the inner framing layout.
 func UnmarshalPayload(b []byte) (Payload, error) {
-	_ = b
-	return Payload{}, errUnimplemented
+	if len(b) < PayloadHeaderSize {
+		return Payload{}, ErrShort
+	}
+	ver := b[0]
+	if ver != CurrentVersion {
+		return Payload{}, fmt.Errorf("%w: %d", ErrVersion, ver)
+	}
+	n := binary.BigEndian.Uint32(b[2:6])
+	rest := b[PayloadHeaderSize:]
+	if uint64(n) > uint64(len(rest)) {
+		return Payload{}, ErrLength
+	}
+	data := rest[:n]
+	sig := rest[n:]
+	if len(sig) != 0 && len(sig) != SignatureSize {
+		return Payload{}, ErrLength
+	}
+	p := Payload{
+		Version: ver,
+		Type:    b[1],
+		Data:    append([]byte(nil), data...),
+	}
+	if len(sig) == SignatureSize {
+		p.Signature = append([]byte(nil), sig...)
+	}
+	return p, nil
 }
 
 // Marshal encodes the outer envelope as a single byte string for embedding.
@@ -66,20 +96,24 @@ func (e Envelope) Marshal() []byte {
 	return out
 }
 
-// UnmarshalEnvelope decodes an outer envelope. Ciphertext may be empty in
-// the stub; the real implementation must reject inputs shorter than
-// EnvelopeOverhead.
+// UnmarshalEnvelope decodes an outer envelope. b must be at least EnvelopeOverhead.
 func UnmarshalEnvelope(b []byte) (Envelope, error) {
-	_ = b
-	return Envelope{}, errUnimplemented
+	if len(b) < EnvelopeOverhead {
+		return Envelope{}, ErrShort
+	}
+	var env Envelope
+	copy(env.EphemeralPub[:], b[:EphemeralPubSize])
+	copy(env.Nonce[:], b[EphemeralPubSize:EnvelopePrefix])
+	env.Ciphertext = append([]byte(nil), b[EnvelopePrefix:]...)
+	return env, nil
 }
 
-// PutUint32 is the endianness used by the payload length field.
+// PutUint32 writes a big-endian uint32, the payload length encoding.
 func PutUint32(b []byte, v uint32) {
 	binary.BigEndian.PutUint32(b, v)
 }
 
-// Uint32 reads the payload length field.
+// Uint32 reads a big-endian uint32.
 func Uint32(b []byte) uint32 {
 	return binary.BigEndian.Uint32(b)
 }

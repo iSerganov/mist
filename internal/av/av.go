@@ -1,14 +1,9 @@
 // Package av is the cgo boundary to libavformat, libavcodec, and libavutil.
 //
-// This package knows nothing about steganography. It demuxes, muxes,
-// decodes to PCM, and encodes from PCM. Coefficient-domain access lives
-// in package vorbis and package stego.
-//
-// Default builds compile against the C stubs in cgo.c so the tree builds
-// without a system FFmpeg. Replacing those stubs with real libav calls
-// (and adding `#cgo pkg-config: libavformat libavcodec libavutil`) is the
-// implementation step. Builds with CGO_ENABLED=0 use the pure-Go fallback
-// in stub.go; the Go API is identical.
+// This package knows nothing about steganography. It demuxes Ogg, muxes
+// Vorbis packets, decodes to PCM, and encodes from PCM. Residue access
+// lives in package vorbis. CGO builds need a system FFmpeg with libvorbis;
+// CGO_ENABLED=0 uses stub.go so the module still type-checks.
 package av
 
 import (
@@ -19,6 +14,9 @@ import (
 )
 
 // AudioInfo is the subset of AVCodecParameters we need for an audio stream.
+// Extradata is the codec private blob (Vorbis identification/comment/setup
+// in Xiph lacing). The decoder will not open without it. FrameSize is the
+// encoder's required sample count per Send, or 0 if the codec accepts any.
 type AudioInfo struct {
 	CodecID    int
 	SampleRate int
@@ -26,13 +24,22 @@ type AudioInfo struct {
 	SampleFmt  codec.SampleFormat
 	Bitrate    int64
 	DurationUs int64
+	Extradata  []byte
+	FrameSize  int
 }
 
 // Params converts AudioInfo to the codec-layer Params.
 func (a AudioInfo) Params() codec.Params {
 	id := codec.IDNone
-	if a.CodecID == CodecIDVorbis {
+	switch a.CodecID {
+	case CodecIDVorbis:
 		id = codec.IDVorbis
+	case CodecIDPCM:
+		id = codec.IDPCM
+	case CodecIDMP3:
+		id = codec.IDMP3
+	case CodecIDAAC:
+		id = codec.IDAAC
 	}
 	return codec.Params{
 		ID:         id,
@@ -40,6 +47,7 @@ func (a AudioInfo) Params() codec.Params {
 		Channels:   a.Channels,
 		Bitrate:    a.Bitrate,
 		Format:     a.SampleFmt,
+		Extradata:  a.Extradata,
 	}
 }
 
@@ -54,6 +62,7 @@ const (
 )
 
 // Packet is a compressed AVPacket owned by Go after a successful read.
+// Data is a copy; the C buffer is freed before the function returns.
 type Packet struct {
 	Data        []byte
 	StreamIndex int
@@ -64,6 +73,7 @@ type Packet struct {
 }
 
 // Frame is a decoded AVFrame of PCM samples.
+// Planar formats use one Data slice per channel; packed formats use one.
 type Frame struct {
 	Data       [][]byte
 	Linesize   []int

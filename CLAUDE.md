@@ -32,6 +32,7 @@ Do not add `ErrNoMessage`. Failed AEAD / wrong phase / empty frame are the same 
 ```
 emitter.go        NewEmitter, Embed / EmbedReader / EmbedFile → io.ReadCloser
 catcher.go        NewCatcher, Listen / ListenReader / Extract
+example/          Godoc examples: keys, Emitter, Catcher
 mist.go-level     payload, keys, protocol constants, errors
 internal/crypto   X25519 ECDH, HKDF, ChaCha20-Poly1305, optional Ed25519
 internal/wire     inner payload framing + outer envelope bytes
@@ -61,7 +62,7 @@ version u8 | type u8 | length u32be | data | optional Ed25519 sig
 
 Types: `0x01` text, `0x02` image, `0x03` audio, `0x04` file. Phase 1 uses text only; do not change this layout for later types.
 
-Stdlib: `crypto/ecdh` (X25519), `crypto/hkdf` (Go 1.22+), `golang.org/x/crypto/chacha20poly1305`, `crypto/ed25519`. Do not add unused modules until a package actually calls them.
+Implemented in `internal/crypto` + `internal/wire`. HKDF-SHA256 salt `mist-v1`, info `mist-aead-v1` / `mist-pos-v1` (32 bytes each). Seal AAD is the ephemeral public key. `Open` / AEAD failures are always `crypto.ErrOpen`. Wire version is `1`; optional Ed25519 sig is exactly 64 bytes after `data`.
 
 ## Stego invariants
 
@@ -80,35 +81,31 @@ Two embed paths (decide after a spike, keep both interfaces):
 
 ## CGO (`internal/av`)
 
-Go API in `ops.go`. C ABI in `cgo.h`. Default `cgo.c` is a no-libav stub so `go test` works without FFmpeg. `cgo.go` (`//go:build cgo`) wraps it. `stub.go` (`//go:build !cgo`) keeps `CGO_ENABLED=0` building.
+Go API in `ops.go`. C ABI in `cgo.h`. `cgo.c` is real libav (pkg-config: `libavformat libavcodec libavutil`). `cgo.go` + `io.go` are `//go:build cgo`. `stub.go` (`//go:build !cgo`) keeps `CGO_ENABLED=0` type-checking; `av.Available()` is false there.
 
-To implement libav: fill `cgo.c` (or replace it) with real calls, add to the cgo preamble:
-
-```
-#cgo pkg-config: libavformat libavcodec libavutil
-```
-
-Needed libav surface: demux file/URL, demux `io.Reader` via AVIO, mux Ogg to `io.Writer`, decode to PCM, encode Vorbis from PCM. Custom IO uses `mist_av_io_*` + later `//export` read/write callbacks. Map `mist_av_codec_id` to `AV_CODEC_ID_*` in C, not in Go.
+Needed surface (implemented): demux file/URL, demux `io.Reader` via AVIO, mux Ogg to `io.Writer`, decode to PCM, encode Vorbis from PCM. Custom IO uses integer handles + `//export` read/write/seek — never store a Go pointer in C. Map `mist_av_codec_id` to `AV_CODEC_ID_*` in C, not in Go. `ErrAgain` is libav `EAGAIN`.
 
 Sample format numbers already match `AVSampleFormat`. Codec IDs do **not** — they are Mist-local (`CodecIDVorbis = 1`).
 
-Never pass a Go pointer into C for libav to store. Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `Close`. No finalizers.
+Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `Close`. No finalizers. Ogg custom IO must be `io.Seeker`.
+
+`CGO_ENABLED=1` needs system FFmpeg with libvorbis (`pkg-config` must find the three libs). CI installs `libavformat-dev libavcodec-dev libavutil-dev libvorbis-dev` on both lint and test.
 
 ## Status
 
-Stubs only. Public functions return `errUnimplemented`. Fill one layer at a time; do not grow the public API unless the design doc changes.
+`internal/crypto` and `internal/wire` are implemented, including `GenerateKeyPair` / `GenerateSigningKeyPair`. `internal/av` talks to real libav. `internal/codec/vorbis` wraps encode/decode and parses identification headers; residue Huffman/codebook decode is still `ErrBadSetup`. Emitter/Catcher I/O, frame, and stego are still stubs.
 
-Suggested order: `crypto` → `wire` → `av` (real libav) → `vorbis` residue parse → `stego` extract → `frame` + `Catcher` → embed path spike → `Emitter`.
+Suggested order: `vorbis` residue/codebook parse → `stego` extract → `frame` + `Catcher` → embed path spike → `Emitter`.
 
 ## Conventions
 
 - `gofmt`. Tabs. MixedCaps. Getters are `Owner`, not `GetOwner`.
 - Package names: one short word. No `mist.MistFoo`.
-- Doc comments on every exported name. Wrap errors with `%w`.
+- Doc comments on every exported name, at most five lines. Wrap errors with `%w`.
 - Small interfaces at the consumer (`Embedder`, `Codec`). One-method names end in `-er`.
 - Tests use `github.com/stretchr/testify/suite`: one `*Suite` struct per `_test.go` file, `TestXxxSuite` entry point, every case a method. Assertions via `s.Equal` / `s.NoError` / `s.Require()`. Same package as the code under test (gocue style).
 - Skipped tests are the spec for the next implementation pass — fill them, do not delete them.
-- Lint with `make lint` (`golangci-lint run --timeout=5m`). CI is `.github/workflows/ci.yml`, copied from gocue: golangci-lint-action v9 / linter v2.11.4, then `go test -race` with a coverage badge on the `badges` branch. No `.golangci.yml` — default v2 config, same as gocue. No ffmpeg/liquidsoap job until those exist.
+- Lint with `make lint` (`golangci-lint run --timeout=5m`). CI is `.github/workflows/ci.yml`, copied from gocue: golangci-lint-action v9 / linter v2.11.4, then `go test -race` with a coverage badge on the `badges` branch. No `.golangci.yml` — default v2 config, same as gocue. CI installs libav + libvorbis so cgo lint and tests compile.
 
 ## Non-goals (Phase 1)
 

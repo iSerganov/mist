@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iSerganov/mist/actions/workflows/ci.yml/badge.svg)](https://github.com/iSerganov/mist/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/iSerganov/mist/badges/coverage.json)](https://github.com/iSerganov/mist/actions/workflows/ci.yml)
-[![Go Version](https://img.shields.io/badge/Go-1.23+-blue.svg)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.27+-blue.svg)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 Asymmetric-key audio steganography library for Go.
@@ -26,10 +26,24 @@ for, and should not be used for, evading detection of illegal content.
 go get github.com/iSerganov/mist
 ```
 
-A C compiler is required (cgo). System FFmpeg/libav is not required until
-the codec layer is implemented.
+A C compiler is required (cgo). With `CGO_ENABLED=1` (the default),
+system FFmpeg with libvorbis must be on the pkg-config path:
+
+```
+# macOS
+brew install ffmpeg pkg-config
+
+# Debian / Ubuntu
+sudo apt-get install pkg-config libavformat-dev libavcodec-dev libavutil-dev libvorbis-dev
+```
+
+`CGO_ENABLED=0` still type-checks against a pure-Go stub; encode/decode
+then return unimplemented.
 
 ## Usage
+
+Runnable Godoc examples live in the [example](example) package
+(`go test ./example`).
 
 ```go
 pub, priv, err := mist.GenerateKeyPair()
@@ -53,8 +67,9 @@ context.
 
 ## Status
 
-Phase 1 scaffolding: public API, domain types, and the libav cgo boundary
-are in place. Implementations are stubs.
+Public API, domain types, crypto, wire framing, the libav cgo layer,
+and Vorbis encode/decode (plus identification-header parse) are in.
+Residue codebook decode, stego, Emitter, and Catcher I/O are still stubs.
 
 See [CLAUDE.md](CLAUDE.md) for package layout and design constraints.
 

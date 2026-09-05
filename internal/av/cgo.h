@@ -9,17 +9,18 @@ extern "C" {
 #endif
 
 /*
- * Thin C boundary for libav. Stubs in cgo.c compile without FFmpeg
- * headers. The real implementation includes libavformat/avformat.h,
- * libavcodec/avcodec.h, libavutil/avutil.h and maps these types onto
- * AVFormatContext / AVCodecContext / AVPacket / AVFrame / AVIOContext.
+ * C ABI for libavformat / libavcodec / libavutil.
+ * Codec IDs are Mist-local; this layer maps them to AV_CODEC_ID_*.
+ * Sample formats match AVSampleFormat numerically.
+ * Custom IO opaque values are integer handles owned by Go, never Go pointers.
  */
 
 enum mist_av_err {
 	MIST_AV_OK            = 0,
 	MIST_AV_ERR           = -1,
 	MIST_AV_EOF           = -2,
-	MIST_AV_UNIMPLEMENTED = -3
+	MIST_AV_UNIMPLEMENTED = -3,
+	MIST_AV_EAGAIN        = -4
 };
 
 enum mist_av_codec_id {
@@ -30,7 +31,6 @@ enum mist_av_codec_id {
 	MIST_AV_CODEC_AAC    = 4
 };
 
-/* Numeric values match AVSampleFormat. */
 enum mist_av_sample_fmt {
 	MIST_AV_SAMPLE_FMT_NONE = -1,
 	MIST_AV_SAMPLE_FMT_U8   = 0,
@@ -52,12 +52,15 @@ typedef struct mist_av_encoder mist_av_encoder;
 typedef struct mist_av_io      mist_av_io;
 
 typedef struct mist_av_audio_info {
-	int     codec_id;
-	int     sample_rate;
-	int     channels;
-	int     sample_fmt;
-	int64_t bitrate;
-	int64_t duration_us;
+	int      codec_id;
+	int      sample_rate;
+	int      channels;
+	int      sample_fmt;
+	int64_t  bitrate;
+	int64_t  duration_us;
+	uint8_t *extradata;
+	int      extradata_size;
+	int      frame_size;
 } mist_av_audio_info;
 
 typedef struct mist_av_packet {
@@ -84,7 +87,8 @@ typedef int     (*mist_av_read_fn)(void *opaque, uint8_t *buf, int buf_size);
 typedef int     (*mist_av_write_fn)(void *opaque, uint8_t *buf, int buf_size);
 typedef int64_t (*mist_av_seek_fn)(void *opaque, int64_t offset, int whence);
 
-int mist_av_init(void);
+int  mist_av_init(void);
+void mist_av_free(void *p);
 
 mist_av_demuxer *mist_av_demuxer_open(const char *url, char *errbuf, int errlen);
 mist_av_demuxer *mist_av_demuxer_open_io(mist_av_io *io, char *errbuf, int errlen);
@@ -105,11 +109,13 @@ int              mist_av_decoder_receive(mist_av_decoder *dec, mist_av_frame *fr
 void             mist_av_decoder_close(mist_av_decoder *dec);
 
 mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errbuf, int errlen);
-int              mist_av_encoder_send(mist_av_encoder *enc, const mist_av_frame *frame);
+int              mist_av_encoder_info(mist_av_encoder *enc, mist_av_audio_info *info);
+int              mist_av_encoder_send_flt(mist_av_encoder *enc, float **planes, int nplanes, int nb_samples, int64_t pts);
+int              mist_av_encoder_flush(mist_av_encoder *enc);
 int              mist_av_encoder_receive(mist_av_encoder *enc, mist_av_packet *pkt);
 void             mist_av_encoder_close(mist_av_encoder *enc);
 
-mist_av_io *mist_av_io_new(void *opaque, mist_av_read_fn read, mist_av_write_fn write, mist_av_seek_fn seek);
+mist_av_io *mist_av_io_new(int handle, int writable);
 void        mist_av_io_free(mist_av_io *io);
 
 void mist_av_packet_unref(mist_av_packet *pkt);
