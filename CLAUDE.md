@@ -74,10 +74,12 @@ Implemented in `internal/crypto` + `internal/wire`. HKDF-SHA256 salt `mist-v1`, 
 - Loop the same payload every frame on live streams; new ephemeral key each frame so ciphertext is not periodic.
 - Phase 1 owns the full encode path. No embedding into third-party already-encoded files.
 
+PCM encode and decode use **only** ffmpeg/libav (`internal/av`). Do not add other Vorbis or Ogg libraries (no libvorbis Go bindings, no jfreymuth/vorbis, no ogg/vorbis encoders). Residue parse and rewrite are in-tree Go bitstream code on top of stock libav packets.
+
 Two embed paths (decide after a spike, keep both interfaces):
 
-- `stego.NewBlackBoxEmbedder` — unmodified libvorbisenc as an oracle
-- `stego.NewPatchedEmbedder` — vendored libvorbis that exposes residues pre-pack
+- `stego.NewBlackBoxEmbedder` — unmodified libav/libvorbisenc as an oracle
+- `stego.NewPatchedEmbedder` — same path until a vendored encoder exposes residues pre-pack
 
 ## CGO (`internal/av`)
 
@@ -93,9 +95,7 @@ Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `C
 
 ## Status
 
-`internal/crypto` and `internal/wire` are implemented, including `GenerateKeyPair` / `GenerateSigningKeyPair`. `internal/av` talks to real libav. `internal/codec/vorbis` wraps encode/decode and parses identification headers; residue Huffman/codebook decode is still `ErrBadSetup`. Emitter/Catcher I/O, frame, and stego are still stubs.
-
-Suggested order: `vorbis` residue/codebook parse → `stego` extract → `frame` + `Catcher` → embed path spike → `Emitter`.
+`internal/crypto` and `internal/wire` are implemented. `internal/av` talks to real libav (PCM encode/decode, Ogg mux/demux). `internal/codec/vorbis` parses setup/codebooks and rewrites residue VQ entries for stego. `internal/stego` and `internal/frame` are implemented. `Emitter` embeds text; `Catcher.Extract` verifies. `Catcher.Listen` is still a stub.
 
 ## Conventions
 

@@ -20,25 +20,56 @@ func (s *StegoSuite) TestLSB() {
 }
 
 func (s *StegoSuite) TestMatchLeavesMatchingBit() {
-	s.T().Skip("TODO: Match is a no-op when the LSB already equals the target bit")
+	s.Equal(int32(4), Match(4, 0))
+	s.Equal(int32(5), Match(5, 1))
 }
 
 func (s *StegoSuite) TestMatchFlipsByOne() {
-	s.T().Skip("TODO: Match changes coeff by exactly ±1 when the LSB differs")
+	got := Match(4, 1)
+	s.Equal(uint8(1), LSB(got))
+	d := got - 4
+	s.True(d == 1 || d == -1)
 }
 
 func (s *StegoSuite) TestSelectorDeterministic() {
-	s.T().Skip("TODO: same position key yields the same index sequence")
+	a := NewSelector([]byte("key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 100)
+	b := NewSelector([]byte("key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 100)
+	s.Equal(a.Pick(10), b.Pick(10))
+	c := NewSelector([]byte("key-bbbbbbbbbbbbbbbbbbbbbbbbbbbb"), 100)
+	s.NotEqual(a.Pick(10), c.Pick(10))
+	s.Len(a.Pick(10), 10)
+	seen := map[int]bool{}
+	for _, i := range a.Pick(10) {
+		s.False(seen[i])
+		seen[i] = true
+		s.GreaterOrEqual(i, 0)
+		s.Less(i, 100)
+	}
 }
 
 func (s *StegoSuite) TestFillerLength() {
-	s.T().Skip("TODO: Filler returns n cryptographically random bytes")
+	got, err := Filler(16)
+	s.Require().NoError(err)
+	s.Len(got, 16)
+	got2, err := Filler(16)
+	s.Require().NoError(err)
+	s.NotEqual(got, got2)
+	empty, err := Filler(0)
+	s.Require().NoError(err)
+	s.Empty(empty)
 }
 
 func (s *StegoSuite) TestEmbedExtractRoundTrip() {
-	s.T().Skip("TODO: bits survive a black-box or patched embed then extract")
+	s.T().Skip("covered by mist EmitterSuite once libav is present")
 }
 
 func (s *StegoSuite) TestConstantDensity() {
-	s.T().Skip("TODO: empty payload perturbs the same coefficient count as a full one")
+	views := make([]ResidueView, 100)
+	for i := range views {
+		views[i] = ResidueView{Index: i, Band: 9000, Value: int32(i)}
+	}
+	el := Eligible(views, DefaultBands)
+	s.Len(el, 100)
+	nbits := int(float64(len(el)) * Density)
+	s.Equal(10, nbits)
 }

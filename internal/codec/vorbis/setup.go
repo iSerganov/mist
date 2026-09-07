@@ -19,13 +19,13 @@ type Setup struct {
 	BitrateMin int32
 	Blocksize0 int
 	Blocksize1 int
+	tables     *tables
 }
 
 // ParseSetup decodes the three header packets from a fresh Ogg stream.
-// Identification is parsed fully (version, channels, rate, bitrates,
-// blocksizes, framing bit). Comment and setup are only checked for
-// packet type and the six-byte "vorbis" magic — the rest of setup is
-// Huffman/codebook data and is not walked yet.
+// Identification is parsed fully. A setup packet longer than the magic
+// is walked for codebooks, floors, residues, mappings, and modes so
+// Residues can decode audio packets. Comment is still type+magic only.
 func ParseSetup(ident, comment, setup []byte) (*Setup, error) {
 	id, err := parseIdent(ident)
 	if err != nil {
@@ -40,6 +40,13 @@ func ParseSetup(ident, comment, setup []byte) (*Setup, error) {
 	id.Ident = append([]byte(nil), ident...)
 	id.Comment = append([]byte(nil), comment...)
 	id.Codebooks = append([]byte(nil), setup...)
+	if len(setup) > 1+len(magic) {
+		t, err := parseTables(setup, id.Channels)
+		if err != nil {
+			return nil, err
+		}
+		id.tables = t
+	}
 	return id, nil
 }
 
@@ -73,8 +80,9 @@ func parseIdent(pkt []byte) (*Setup, error) {
 		return nil, ErrBadSetup
 	}
 	bs := pkt[28]
-	bs0 := int(bs >> 4)
-	bs1 := int(bs & 0x0f)
+	// Vorbis packs LSB-first: blocksize_0 is the low nibble.
+	bs0 := int(bs & 0x0f)
+	bs1 := int(bs >> 4)
 	if bs0 < 6 || bs0 > 13 || bs1 < 6 || bs1 > 13 || bs0 > bs1 {
 		return nil, ErrBadSetup
 	}

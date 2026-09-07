@@ -2,8 +2,10 @@ package mist
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // EmitterOption configures NewEmitter.
@@ -52,38 +54,44 @@ func NewEmitter(recipientPubKey []byte, opts ...EmitterOption) (*Emitter, error)
 // encoder output — the returned reader produces output as fast as the
 // carrier does.
 func (e *Emitter) Embed(ctx context.Context, source string, payload Payload) (io.ReadCloser, error) {
-	_ = ctx
-	_ = source
-	_ = payload
-	_ = e
-	return nil, errUnimplemented
+	if e == nil {
+		return nil, ErrInvalidKey
+	}
+	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+		return e.embedURL(ctx, source, payload)
+	}
+	rc, err := openSource(source)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return e.embed(ctx, rc, payload)
 }
 
 // EmbedReader is Embed over an already-open carrier (pipe, HTTP body,
 // in-memory buffer). The caller retains ownership of carrier and must
 // close it if it is an io.Closer.
 func (e *Emitter) EmbedReader(ctx context.Context, carrier io.Reader, payload Payload) (io.ReadCloser, error) {
-	_ = ctx
-	_ = carrier
-	_ = payload
-	_ = e
-	return nil, errUnimplemented
+	if e == nil {
+		return nil, ErrInvalidKey
+	}
+	if carrier == nil {
+		return nil, ErrInvalidSource
+	}
+	return e.embed(ctx, carrier, payload)
 }
 
 // EmbedFile is Embed over an *os.File carrier. The file stays owned by
 // the caller.
 func (e *Emitter) EmbedFile(ctx context.Context, carrier *os.File, payload Payload) (io.ReadCloser, error) {
-	_ = ctx
-	_ = carrier
-	_ = payload
-	_ = e
-	return nil, errUnimplemented
-}
-
-// FrameCapacity returns the maximum payload bytes embeddable per stego
-// frame at the library's fixed embedding density, before encryption
-// overhead. Useful for callers who need to know the maximum message size
-// supported without multi-frame spanning (Phase 2).
-func FrameCapacity() int {
-	return 0
+	if e == nil {
+		return nil, ErrInvalidKey
+	}
+	if carrier == nil {
+		return nil, ErrInvalidSource
+	}
+	if _, err := carrier.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+	}
+	return e.embed(ctx, carrier, payload)
 }

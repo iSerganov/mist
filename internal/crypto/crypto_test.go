@@ -86,6 +86,22 @@ func (s *CryptoSuite) TestDeriveKeys() {
 	s.NotEqual(a.Position, c.Position)
 }
 
+func (s *CryptoSuite) TestPositionSeed() {
+	pub, priv, err := GenerateX25519()
+	s.Require().NoError(err)
+	a, err := PositionSeed(pub, 0)
+	s.Require().NoError(err)
+	b, err := PositionSeed(pub, 0)
+	s.Require().NoError(err)
+	s.Equal(a, b)
+	c, err := PositionSeed(pub, 1)
+	s.Require().NoError(err)
+	s.NotEqual(a, c)
+	fromPriv, err := PublicFromPrivate(priv)
+	s.Require().NoError(err)
+	s.Equal(pub, fromPriv)
+}
+
 func (s *CryptoSuite) TestDeriveKeysRejectsEmpty() {
 	_, err := DeriveKeys(nil)
 	s.ErrorIs(err, ErrInvalidKey)

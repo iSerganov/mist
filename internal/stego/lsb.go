@@ -1,12 +1,26 @@
 package stego
 
+import "crypto/rand"
+
 // Match applies LSB matching: if coeff's LSB already equals bit it is
 // left unchanged; otherwise coeff is randomly incremented or decremented
 // by 1. Never use LSB replacement (forcing the bit), which is detectable
 // via sample-pair analysis.
 func Match(coeff int32, bit uint8) int32 {
-	_ = bit
-	return coeff
+	if LSB(coeff) == bit&1 {
+		return coeff
+	}
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		if coeff > 0 {
+			return coeff - 1
+		}
+		return coeff + 1
+	}
+	if b[0]&1 == 0 {
+		return coeff + 1
+	}
+	return coeff - 1
 }
 
 // LSB returns the least significant bit of coeff.

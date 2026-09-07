@@ -8,6 +8,7 @@ import (
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -84,31 +85,64 @@ func DeriveKeys(shared []byte) (Derived, error) {
 
 // Seal encrypts plaintext for recipientPub and returns a wire envelope.
 func Seal(plaintext, recipientPub []byte) (*wire.Envelope, error) {
+	env, _, err := SealDerived(plaintext, recipientPub)
+	return env, err
+}
+
+// SealDerived is Seal plus the HKDF split so Embed can seed positions
+// from the same ephemeral that Listen will re-derive from the envelope.
+func SealDerived(plaintext, recipientPub []byte) (*wire.Envelope, Derived, error) {
 	ephPub, ephPriv, err := GenerateX25519()
 	if err != nil {
-		return nil, err
+		return nil, Derived{}, err
 	}
 	shared, err := SharedSecret(ephPriv, recipientPub)
 	if err != nil {
-		return nil, err
+		return nil, Derived{}, err
 	}
 	keys, err := DeriveKeys(shared)
 	if err != nil {
-		return nil, err
+		return nil, Derived{}, err
 	}
 	aead, err := chacha20poly1305.New(keys.AEAD)
 	if err != nil {
-		return nil, fmt.Errorf("crypto: aead: %w", err)
+		return nil, Derived{}, fmt.Errorf("crypto: aead: %w", err)
 	}
 	var nonce [NonceSize]byte
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
-		return nil, fmt.Errorf("crypto: nonce: %w", err)
+		return nil, Derived{}, fmt.Errorf("crypto: nonce: %w", err)
 	}
 	ct := aead.Seal(nil, nonce[:], plaintext, ephPub)
 	env := &wire.Envelope{Ciphertext: ct}
 	copy(env.EphemeralPub[:], ephPub)
 	env.Nonce = nonce
-	return env, nil
+	return env, keys, nil
+}
+
+// PublicFromPrivate returns the X25519 public key for priv.
+func PublicFromPrivate(priv []byte) ([]byte, error) {
+	sk, err := ecdh.X25519().NewPrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("%w: private", ErrInvalidKey)
+	}
+	return sk.PublicKey().Bytes(), nil
+}
+
+// PositionSeed is the selector key for one stego frame. It is HKDF of
+// the recipient public key and frame index so Listen can pick the same
+// coefficients before the envelope (and its ephemeral) is known.
+func PositionSeed(pub []byte, frameIdx int64) ([]byte, error) {
+	if len(pub) != PublicKeySize {
+		return nil, ErrInvalidKey
+	}
+	var extra [8]byte
+	binary.BigEndian.PutUint64(extra[:], uint64(frameIdx))
+	info := infoPos + string(extra[:])
+	out, err := hkdf.Key(sha256.New, pub, []byte(hkdfSalt), info, PositionKeySize)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: hkdf position seed: %w", err)
+	}
+	return out, nil
 }
 
 // Open decrypts and authenticates env. Failures are ErrOpen, never a typed miss.

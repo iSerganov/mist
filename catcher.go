@@ -87,8 +87,8 @@ func (c *Catcher) ListenReader(ctx context.Context, r io.Reader) (<-chan Result,
 // decrypts and authenticates. It stops at EOF or when ctx is cancelled.
 // source stays owned by the caller.
 func (c *Catcher) Extract(ctx context.Context, source *os.File) ([]Result, error) {
-	_ = ctx
-	_ = source
-	_ = c
-	return nil, errUnimplemented
+	if c == nil {
+		return nil, ErrInvalidKey
+	}
+	return extractFile(ctx, source, c.priv)
 }

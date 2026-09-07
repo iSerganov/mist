@@ -1,11 +1,10 @@
 // Package vorbis is the Phase 1 codec: PCM ↔ Ogg Vorbis via package av,
-// plus a bitstream header parser for later residue extraction.
+// plus a bitstream residue parser used by stego.
 //
-// Standard encode and decode use unmodified libavcodec. Coefficient-domain
-// access does not: libvorbisenc discards quantized residues inside the
-// encoder. Residues therefore classifies header vs audio packets and
-// parses identification fully, but returns ErrBadSetup until codebooks are
-// decoded. Embedding stays in package stego (black-box search or a patch).
+// PCM encode and decode go through unmodified libavcodec only. Residue
+// access is a Go read of the Vorbis packet (Huffman/codebook, stop before
+// iMDCT). Rewrite puts modified residue VQ entries back into the same packet
+// so a stock encoder never has to see the payload bits.
 package vorbis
 
 import (
@@ -30,10 +29,34 @@ const (
 )
 
 // Codec implements codec.Codec for Vorbis.
-type Codec struct{}
+type Codec struct {
+	setup *Setup
+}
 
 // New returns the Vorbis codec.
 func New() *Codec { return &Codec{} }
+
+// Load parses libavcodec Xiph extradata so Residues and Rewrite can
+// walk audio packets. Call this with Encoder.Params().Extradata after
+// a successful libav open.
+func (c *Codec) Load(extra []byte) error {
+	ident, comment, setup, err := SplitExtradata(extra)
+	if err != nil {
+		return err
+	}
+	s, err := ParseSetup(ident, comment, setup)
+	if err != nil {
+		return err
+	}
+	if s.tables == nil {
+		return fmt.Errorf("%w: no codebooks", ErrBadSetup)
+	}
+	c.setup = s
+	return nil
+}
+
+// Setup returns the parsed headers, or nil before Load.
+func (c *Codec) Setup() *Setup { return c.setup }
 
 // Name implements codec.Codec.
 func (*Codec) Name() string { return Name }
@@ -73,17 +96,49 @@ func (*Codec) NewDecoder(p codec.Params) (codec.Decoder, error) {
 }
 
 // Residues classifies a Vorbis packet. Header packets (odd first byte
-// 1/3/5) are ErrBadPacket. Audio packets need Huffman/codebook decode
-// that is not implemented yet, so the return is ErrBadSetup rather than
-// a silent empty slice — callers must not treat that as "no residues".
-func (*Codec) Residues(pkt codec.Packet) ([]codec.Residue, error) {
+// 1/3/5) are ErrBadPacket. Audio packets need Load first; without
+// codebooks the return is ErrBadSetup, not an empty slice.
+func (c *Codec) Residues(pkt codec.Packet) ([]codec.Residue, error) {
 	if len(pkt.Data) == 0 {
 		return nil, ErrBadPacket
 	}
 	if pkt.Data[0]&1 == 1 {
 		return nil, ErrBadPacket
 	}
-	return nil, fmt.Errorf("%w: codebooks not parsed", ErrBadSetup)
+	if c == nil || c.setup == nil || c.setup.tables == nil {
+		return nil, fmt.Errorf("%w: codebooks not parsed", ErrBadSetup)
+	}
+	st, err := decodeAudio(c.setup, pkt.Data)
+	if err != nil {
+		return nil, err
+	}
+	return residuesFrom(st, c.setup.Rate, c.setup.tables.books), nil
+}
+
+// Rewrite writes res (VQ entry indexes from Residues) back into pkt.
+// Prefix bits (mode, windows, floors) are copied unchanged. The result
+// must still be a legal Vorbis packet so libav can decode it to PCM.
+func (c *Codec) Rewrite(pkt codec.Packet, res []codec.Residue) (codec.Packet, error) {
+	if c == nil || c.setup == nil || c.setup.tables == nil {
+		return codec.Packet{}, fmt.Errorf("%w: codebooks not parsed", ErrBadSetup)
+	}
+	if len(pkt.Data) == 0 || pkt.Data[0]&1 == 1 {
+		return codec.Packet{}, ErrBadPacket
+	}
+	st, err := decodeAudio(c.setup, pkt.Data)
+	if err != nil {
+		return codec.Packet{}, err
+	}
+	orig := entryValues(st.progs)
+	applyResidues(st, res)
+	sanitizePrograms(c.setup.tables.books, st.progs, orig)
+	data, err := encodeAudio(c.setup, pkt.Data, st)
+	if err != nil {
+		return codec.Packet{}, err
+	}
+	out := pkt
+	out.Data = data
+	return out, nil
 }
 
 type encoder struct {

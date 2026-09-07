@@ -1,7 +1,6 @@
 package example
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -27,12 +26,8 @@ func Example_emitter() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	ctx := context.Background()
-	out, err := emitter.EmbedReader(ctx, bytes.NewReader(nil), mist.Text("hello"))
-	if out != nil {
-		defer func() { _ = out.Close() }()
-	}
-	_ = err
+	fmt.Println(emitter != nil)
+	// Output: true
 }
 
 func Example_catcher() {

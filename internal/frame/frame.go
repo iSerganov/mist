@@ -45,26 +45,58 @@ func (p Params) Samples() int {
 }
 
 // Split returns the sequence of frames covering nSamples at p.
+// A short tail is its own final frame so a clip shorter than Duration
+// still carries one embed.
 func Split(nSamples int, p Params) []Frame {
-	_ = nSamples
-	_ = p
-	return nil
+	win := p.Samples()
+	if nSamples <= 0 || win <= 0 {
+		return nil
+	}
+	var out []Frame
+	for i, start := 0, 0; start < nSamples; i++ {
+		end := start + win
+		if end > nSamples {
+			end = nSamples
+		}
+		out = append(out, Frame{
+			Index:    int64(i),
+			Offset:   time.Duration(start) * time.Second / time.Duration(p.SampleRate),
+			Duration: time.Duration(end-start) * time.Second / time.Duration(p.SampleRate),
+			PCMStart: start,
+			PCMEnd:   end,
+		})
+		start = end
+	}
+	return out
 }
 
 // CandidatePhases returns the phase offsets Listen should try when the
 // recording start is unknown. hop is the search step; it must divide
 // Duration or be smaller than it.
 func CandidatePhases(d, hop time.Duration) []Phase {
-	_ = d
-	_ = hop
-	return nil
+	if d <= 0 {
+		return nil
+	}
+	if hop <= 0 || hop > d {
+		hop = d
+	}
+	var out []Phase
+	for i, off := 0, time.Duration(0); off < d; i++ {
+		out = append(out, Phase{Offset: off, Index: i})
+		off += hop
+	}
+	return out
 }
 
 // Capacity is the payload bytes that fit in one frame after encryption
 // overhead, given nEligible coefficients and a constant embedding density.
 func Capacity(nEligible int, density float64, overhead int) int {
-	_ = nEligible
-	_ = density
-	_ = overhead
-	return 0
+	if nEligible <= 0 || density <= 0 {
+		return 0
+	}
+	bytes := int(float64(nEligible)*density) / 8
+	if bytes <= overhead {
+		return 0
+	}
+	return bytes - overhead
 }

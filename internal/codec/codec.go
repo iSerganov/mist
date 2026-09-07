@@ -76,12 +76,19 @@ type Packet struct {
 	Flags    int
 }
 
-// Residue is one quantized MDCT residue coefficient.
+// Residue is one quantized residue symbol (a VQ codebook entry).
 type Residue struct {
 	Channel int
 	Band    int
 	Index   int
 	Value   int32
+	// Unflippable marks a symbol whose codebook has no other used entry of
+	// the same code length and opposite LSB parity. Vorbis residue decode
+	// treats running out of bits as "assume zero for the rest", so a
+	// replacement of a different length shifts that boundary and desyncs
+	// every symbol decoded after it. Embedding must skip these symbols
+	// rather than risk that drift.
+	Unflippable bool
 }
 
 // Codec converts between PCM and a compressed bitstream and, when the
