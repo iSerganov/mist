@@ -11,32 +11,70 @@ func codecSampleFmt(n int) codec.SampleFormat {
 	return codec.SampleFormat(n)
 }
 
-func isPlanar(fmt codec.SampleFormat) bool {
-	return fmt == codec.SampleFmtU8P || fmt == codec.SampleFmtS16P ||
-		fmt == codec.SampleFmtS32P || fmt == codec.SampleFmtFLTP ||
-		fmt == codec.SampleFmtDBLP
+func isPlanar(f codec.SampleFormat) bool {
+	l, ok := layouts[f]
+	return ok && l.planar
 }
 
-func frameFloatPlanes(f Frame) [][]float32 {
-	if f.Format == codec.SampleFmtFLTP && len(f.Data) > 0 {
-		out := make([][]float32, len(f.Data))
-		for i, b := range f.Data {
-			out[i] = bytesToFloats(b)
+// layout describes how one libav sample format is packed, so a decoded
+// frame can be read whatever format the decoder happened to produce.
+// Everything upstream of the encoder works in float32.
+type layout struct {
+	width  int
+	planar bool
+	value  func([]byte) float32
+}
+
+var layouts = map[codec.SampleFormat]layout{
+	codec.SampleFmtU8:   {1, false, u8Value},
+	codec.SampleFmtS16:  {2, false, s16Value},
+	codec.SampleFmtS32:  {4, false, s32Value},
+	codec.SampleFmtFLT:  {4, false, fltValue},
+	codec.SampleFmtDBL:  {8, false, dblValue},
+	codec.SampleFmtU8P:  {1, true, u8Value},
+	codec.SampleFmtS16P: {2, true, s16Value},
+	codec.SampleFmtS32P: {4, true, s32Value},
+	codec.SampleFmtFLTP: {4, true, fltValue},
+	codec.SampleFmtDBLP: {8, true, dblValue},
+}
+
+func u8Value(b []byte) float32  { return (float32(b[0]) - 128) / 128 }
+func s16Value(b []byte) float32 { return float32(int16(binary.LittleEndian.Uint16(b))) / 32768 }
+func s32Value(b []byte) float32 { return float32(int32(binary.LittleEndian.Uint32(b))) / 2147483648 }
+func fltValue(b []byte) float32 { return math.Float32frombits(binary.LittleEndian.Uint32(b)) }
+
+func dblValue(b []byte) float32 {
+	return float32(math.Float64frombits(binary.LittleEndian.Uint64(b)))
+}
+
+// FloatPlanes returns one float32 slice per channel, converting from the
+// frame's own sample format. It returns nil for a format libav produced
+// that this package cannot read, which callers treat as no PCM.
+func (f Frame) FloatPlanes() [][]float32 {
+	l, ok := layouts[f.Format]
+	if !ok || f.Channels <= 0 || len(f.Data) == 0 {
+		return nil
+	}
+	if l.planar {
+		out := make([][]float32, 0, len(f.Data))
+		for _, plane := range f.Data {
+			out = append(out, readSamples(plane, l, f.NbSamples))
 		}
 		return out
 	}
-	if f.Format == codec.SampleFmtFLT && len(f.Data) > 0 {
-		inter := bytesToFloats(f.Data[0])
-		return deinterleave(inter, f.Channels, f.NbSamples)
-	}
-	return nil
+	packed := readSamples(f.Data[0], l, f.NbSamples*f.Channels)
+	return deinterleave(packed, f.Channels, f.NbSamples)
 }
 
-func bytesToFloats(b []byte) []float32 {
-	n := len(b) / 4
-	out := make([]float32, n)
-	for i := 0; i < n; i++ {
-		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+// readSamples reads at most n samples; a plane's linesize can exceed the
+// samples actually present because libav pads its buffers.
+func readSamples(b []byte, l layout, n int) []float32 {
+	if avail := len(b) / l.width; n > avail {
+		n = avail
+	}
+	out := make([]float32, max(n, 0))
+	for i := range out {
+		out[i] = l.value(b[i*l.width:])
 	}
 	return out
 }
@@ -46,7 +84,7 @@ func deinterleave(in []float32, ch, n int) [][]float32 {
 		return nil
 	}
 	out := make([][]float32, ch)
-	for c := 0; c < ch; c++ {
+	for c := range out {
 		out[c] = make([]float32, n)
 		for i := 0; i < n && i*ch+c < len(in); i++ {
 			out[c][i] = in[i*ch+c]

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -110,6 +111,47 @@ func (s *CLISuite) drain(enc *av.Encoder, m *av.Muxer) {
 			return
 		}
 		s.Require().NoError(m.WritePacket(pkt))
+	}
+}
+
+// The carrier may be anything the installed FFmpeg decodes, not a list
+// Mist maintains. FLAC and WAV matter most here: they decode to integer
+// samples, so they also cover the conversion into the float planes the
+// Vorbis encoder needs.
+func (s *CLISuite) TestEmbedAcceptsAnyDecodableInput() {
+	s.requireLibav()
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		s.T().Skip("ffmpeg binary not on PATH")
+	}
+	dir := s.T().TempDir()
+
+	tests := []struct {
+		title string
+		name  string
+	}{
+		{"flac decodes to integer samples", "in.flac"},
+		{"wav is packed s16", "in.wav"},
+		{"opus", "in.opus"},
+		{"mp3", "in.mp3"},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			in := filepath.Join(dir, tc.name)
+			cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+				"-f", "lavfi", "-i", "anoisesrc=d=9:c=pink:a=0.5", "-ac", "2", in)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				s.T().Skipf("ffmpeg cannot write %s: %s", tc.name, out)
+			}
+
+			stego := filepath.Join(dir, tc.name+".stego.ogg")
+			s.stdout.Reset()
+			s.Require().NoError(s.run("embed", "-i", in, "-d", "any input "+tc.name, "-o", stego))
+
+			_, priv := keyPaths(stego)
+			s.stdout.Reset()
+			s.Require().NoError(s.run("catch", "-i", stego, "-k", priv))
+			s.Contains(s.stdout.String(), "any input "+tc.name)
+		})
 	}
 }
 

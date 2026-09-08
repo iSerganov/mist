@@ -51,8 +51,16 @@ typedef struct mist_av_decoder mist_av_decoder;
 typedef struct mist_av_encoder mist_av_encoder;
 typedef struct mist_av_io      mist_av_io;
 
+/*
+ * codec_id is Mist-local and covers only the codecs Mist reasons about.
+ * native_codec_id is libav's own AVCodecID, carried verbatim so any input
+ * the installed FFmpeg can decode is usable as a carrier; codec_name is
+ * its display name, for error messages. Both are 0 / empty when unknown.
+ */
 typedef struct mist_av_audio_info {
 	int      codec_id;
+	int      native_codec_id;
+	char     codec_name[32];
 	int      sample_rate;
 	int      channels;
 	int      sample_fmt;
@@ -103,6 +111,8 @@ int            mist_av_muxer_write(mist_av_muxer *m, const mist_av_packet *pkt);
 int            mist_av_muxer_write_trailer(mist_av_muxer *m);
 void           mist_av_muxer_close(mist_av_muxer *m);
 
+/* Reports whether the installed FFmpeg has a decoder for this stream. */
+int              mist_av_can_decode(const mist_av_audio_info *info);
 mist_av_decoder *mist_av_decoder_open(const mist_av_audio_info *info, char *errbuf, int errlen);
 int              mist_av_decoder_send(mist_av_decoder *dec, const mist_av_packet *pkt);
 int              mist_av_decoder_receive(mist_av_decoder *dec, mist_av_frame *frame);

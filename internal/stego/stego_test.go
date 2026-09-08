@@ -64,12 +64,34 @@ func (s *StegoSuite) TestEmbedExtractRoundTrip() {
 }
 
 func (s *StegoSuite) TestConstantDensity() {
-	views := make([]ResidueView, 100)
+	views := make([]ResidueView, 1000)
 	for i := range views {
 		views[i] = ResidueView{Index: i, Band: 9000, Value: int32(i)}
 	}
 	el := Eligible(views, DefaultBands)
-	s.Len(el, 100)
-	nbits := int(float64(len(el)) * Density)
-	s.Equal(10, nbits)
+	s.Len(el, 1000, "in-band residues are all eligible")
+	s.Equal(int(1000*Density), int(float64(len(el))*Density))
+}
+
+// Embedding stays above DefaultBands.FromHz because low-frequency error is
+// the audible kind; anything the codec marked unflippable is out too.
+func (s *StegoSuite) TestEligibleFiltersBandsAndUnflippable() {
+	tests := []struct {
+		title string
+		view  ResidueView
+		want  bool
+	}{
+		{"well inside the band", ResidueView{Band: 9000}, true},
+		{"at the lower bound", ResidueView{Band: DefaultBands.FromHz}, true},
+		{"just below the bound", ResidueView{Band: DefaultBands.FromHz - 1}, false},
+		{"bass", ResidueView{Band: 200}, false},
+		{"above the upper bound", ResidueView{Band: DefaultBands.ToHz}, false},
+		{"in band but unflippable", ResidueView{Band: 9000, Unflippable: true}, false},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			el := Eligible([]ResidueView{tc.view}, DefaultBands)
+			s.Equal(tc.want, len(el) == 1)
+		})
+	}
 }

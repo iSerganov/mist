@@ -62,6 +62,16 @@ func NewMuxer(w io.Writer, info AudioInfo) (*Muxer, error) {
 }
 
 // NewDecoder opens a decoder for info.
+// CanDecode reports whether the installed FFmpeg has a decoder for info.
+// It is the authority on which carriers are usable: Mist does not keep its
+// own list of acceptable input formats.
+func CanDecode(info AudioInfo) bool {
+	if err := ensureInit(); err != nil {
+		return false
+	}
+	return avCanDecode(info)
+}
+
 func NewDecoder(info AudioInfo) (*Decoder, error) {
 	if err := ensureInit(); err != nil {
 		return nil, err

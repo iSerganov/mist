@@ -30,7 +30,11 @@ Do not add `ErrNoMessage`. Failed AEAD / partial frame / empty frame are the sam
 
 A demuxer read already in flight cannot be interrupted, so `Listen` relays the scan through a second channel (`relay`): the channel the caller ranges over closes as soon as `ctx` does, while the scan goroutine ends when its blocked read finally returns. `ListenReader` buffers a non-seekable reader whole (`asSeeker`), so live sources belong in `Listen`, not `ListenReader`.
 
-**Formats.** Output is always Ogg Vorbis — the payload lives in Vorbis residues. Carriers are decoded to PCM and re-encoded, so input need not be Ogg, but `internal/av` maps only Vorbis / MP3 / AAC / PCM s16le; anything else is `ErrUnsupportedCodec` (widen the switch in `cgo.c` to add more). Extraction is Vorbis-only and never re-encodes.
+**Formats.** Output is always Ogg Vorbis — the payload lives in Vorbis residues. Carriers are decoded to PCM and re-encoded, and **the installed FFmpeg decides what input is acceptable**: `AudioInfo.NativeCodecID` carries libav's own `AVCodecID` verbatim and `av.CanDecode` asks libav for a decoder, so Mist keeps no whitelist. `CodecID` stays Mist-local for the codecs Mist reasons about (Vorbis), and is `CodecIDNone` for the rest. An input libav cannot decode is `ErrUnsupportedCodec`. Extraction is Vorbis-only and never re-encodes.
+
+Decoders emit whatever sample format suits them — FLAC gives s32, WAV s16, Vorbis fltp, packed or planar — so `Frame.FloatPlanes` normalises all of them to float planes before the encoder sees them. Never reinterpret frame bytes as float32 directly; that silently produces noise for integer formats.
+
+libav's own logging is set to `AV_LOG_FATAL`: failures already reach Go via return codes and errbuf, and cover art in a normal MP3 otherwise prints warnings into the middle of the CLI's output.
 
 ## Layout
 
@@ -89,7 +93,11 @@ Implemented in `internal/crypto` + `internal/wire`. HKDF-SHA256 salt `mist-v1`, 
 - No sync marker. `FrameDuration` (8s) is a protocol constant shared by Embed and Listen.
 - **Frames are grouped in the packet domain** (`frame.Grouper`, by packet PTS), never by re-slicing PCM. Embed and Listen must derive byte-identical packet sets: one packet's difference changes the eligible count and scrambles every position. Emitter therefore encodes the carrier once, then groups.
 - A listener that joins mid-window cannot align, so it logs once and skips that frame. There is no phase search.
-- Loop the same payload every frame on live streams; new ephemeral key each frame so ciphertext is not periodic.
+- **Audio quality is a hard requirement, and it is easy to destroy.** Three things protect it, all measured on real music against a plain transcode of the same PCM (22.76 dB SDR ceiling): the re-encode bitrate is derived from the source (`encodeBitrate`) rather than fixed; `Density` is 2%; and `DefaultBands` confines embedding above 6 kHz. Together they cost ~0.2 dB. Getting any of them wrong is expensive — a fixed 64 kbps plus 10% density across the full spectrum measured 5.89 dB.
+- **Substitute a flipped residue by vector distance, never by index.** Codebook entries n and n+1 dequantize to unrelated spectral vectors, so honouring a bit by nudging the index swaps in a different sound. `substitute` picks the same-length, correct-parity entry whose dequantized vector is nearest the original's; `codebook.vecs` caches those vectors at parse time.
+- Entry indices can go negative when `Match` steps below zero. Two's complement already gives the right parity, so read the bit from `want & 1` as-is — forcing it to zero embeds the wrong bit and corrupts recovery intermittently.
+- **The payload is embedded once**, in the first frame with room for it. Every other frame is written with CSPRNG filler at the same density — never passed through untouched — so a carrying frame and an empty one leave the same footprint. Nil bits to `stego.Apply` mean "fill with filler". Only a frame with no eligible residues at all is left alone. A carrier where no frame had room is `ErrNoCapacity`.
+- Consequence, accepted deliberately: a listener joining a live stream after the carrying frame recovers nothing, and losing that frame loses the message. Re-sealing per frame (fresh ephemeral each time) is what a live-stream mode would restore.
 - Phase 1 owns the full encode path. No embedding into third-party already-encoded files.
 
 PCM encode and decode use **only** ffmpeg/libav (`internal/av`). Do not add other Vorbis or Ogg libraries (no libvorbis Go bindings, no jfreymuth/vorbis, no ogg/vorbis encoders). Residue parse and rewrite are in-tree Go bitstream code on top of stock libav packets.
@@ -133,6 +141,14 @@ rather than calling `fmt.Fprint*` directly (errcheck flags bare writes to an
 Carrier choice matters: quiet or purely tonal audio yields too few usable
 residues and `embed` fails with `ErrNoCapacity`. Test fixtures use noise, not
 a pure sine, for this reason.
+
+## Make targets
+
+`build` (to `bin/mist`), `embed`, `catch`, `keys`, `test`, `lint`, `clean`.
+`embed` and `catch` take `INPUT=`, `DATA=`, `OUTPUT=`, `KEY=`, `TIMEOUT=`.
+`keys` mints an X25519 pair with OpenSSL and writes the raw 32 bytes as hex —
+OpenSSL emits PKCS#8/SPKI DER, whose last 32 bytes are the key — so its output
+interoperates with `crypto/ecdh` and the CLI's own hex format.
 
 ## Status
 

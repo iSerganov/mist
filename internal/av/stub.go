@@ -12,6 +12,8 @@ func avOpenDemuxerReader(io.Reader) (*Demuxer, error) { return nil, errUnimpleme
 
 func avNewMuxer(io.Writer, AudioInfo) (*Muxer, error) { return nil, errUnimplemented }
 
+func avCanDecode(AudioInfo) bool { return false }
+
 func avNewDecoder(AudioInfo) (*Decoder, error) { return nil, errUnimplemented }
 
 func avNewEncoder(AudioInfo) (*Encoder, error) { return nil, errUnimplemented }

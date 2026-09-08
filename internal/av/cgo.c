@@ -138,10 +138,34 @@ static int copy_packet(const AVPacket *src, mist_av_packet *dst)
 	return 0;
 }
 
+/*
+ * resolve_codec_id prefers the id libav itself reported for the stream, so
+ * any format the installed FFmpeg understands can be decoded. The
+ * Mist-local id is the fallback for infos built by hand (encoder open,
+ * tests), which only ever name codecs Mist knows.
+ */
+static enum AVCodecID resolve_codec_id(const mist_av_audio_info *info)
+{
+	if (info->native_codec_id != AV_CODEC_ID_NONE) {
+		return (enum AVCodecID)info->native_codec_id;
+	}
+	return to_av_codec(info->codec_id);
+}
+
+int mist_av_can_decode(const mist_av_audio_info *info)
+{
+	if (info == NULL) {
+		return 0;
+	}
+	return avcodec_find_decoder(resolve_codec_id(info)) != NULL;
+}
+
 static int fill_info_from_par(const AVCodecParameters *par, int64_t duration_us, mist_av_audio_info *info)
 {
 	memset(info, 0, sizeof(*info));
 	info->codec_id = from_av_codec(par->codec_id);
+	info->native_codec_id = (int)par->codec_id;
+	snprintf(info->codec_name, sizeof(info->codec_name), "%s", avcodec_get_name(par->codec_id));
 	info->sample_rate = par->sample_rate;
 	info->channels = par->ch_layout.nb_channels;
 	info->sample_fmt = par->format;
@@ -161,7 +185,7 @@ static int fill_info_from_par(const AVCodecParameters *par, int64_t duration_us,
 static int apply_info_to_par(AVCodecParameters *par, const mist_av_audio_info *info)
 {
 	par->codec_type = AVMEDIA_TYPE_AUDIO;
-	par->codec_id = to_av_codec(info->codec_id);
+	par->codec_id = resolve_codec_id(info);
 	par->sample_rate = info->sample_rate;
 	par->format = info->sample_fmt;
 	par->bit_rate = info->bitrate;
@@ -210,7 +234,13 @@ static int64_t seek_cb(void *opaque, int64_t offset, int whence)
 int mist_av_init(void)
 {
 	avformat_network_init();
-	av_log_set_level(AV_LOG_ERROR);
+	/*
+	 * Failures reach Go through return codes and errbuf, so libav's own
+	 * chatter is redundant and lands in the middle of the CLI's output:
+	 * cover art in a normal MP3 makes it complain about the image stream
+	 * Mist never looks at. Keep only what precedes a crash.
+	 */
+	av_log_set_level(AV_LOG_FATAL);
 	return MIST_AV_OK;
 }
 
@@ -531,7 +561,7 @@ mist_av_decoder *mist_av_decoder_open(const mist_av_audio_info *info, char *errb
 		set_err(errbuf, errlen, "nil info");
 		return NULL;
 	}
-	const AVCodec *codec = avcodec_find_decoder(to_av_codec(info->codec_id));
+	const AVCodec *codec = avcodec_find_decoder(resolve_codec_id(info));
 	if (codec == NULL) {
 		set_err(errbuf, errlen, "decoder not found");
 		return NULL;
@@ -651,7 +681,7 @@ mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errb
 		set_err(errbuf, errlen, "nil info");
 		return NULL;
 	}
-	const AVCodec *codec = avcodec_find_encoder(to_av_codec(info->codec_id));
+	const AVCodec *codec = avcodec_find_encoder(resolve_codec_id(info));
 	if (codec == NULL) {
 		set_err(errbuf, errlen, "encoder not found");
 		return NULL;

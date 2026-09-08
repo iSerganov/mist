@@ -109,6 +109,12 @@ func avNewMuxer(w io.Writer, info AudioInfo) (*Muxer, error) {
 	}, nil
 }
 
+func avCanDecode(info AudioInfo) bool {
+	cinfo, free := cAudioInfo(info)
+	defer free()
+	return C.mist_av_can_decode(&cinfo) != 0
+}
+
 func avNewDecoder(info AudioInfo) (*Decoder, error) {
 	cinfo, free := cAudioInfo(info)
 	defer free()
@@ -277,7 +283,7 @@ func avEncSend(e *Encoder, f Frame) error {
 	if f.NbSamples == 0 && len(f.Data) == 0 {
 		return mapCErr(C.mist_av_encoder_flush((*C.mist_av_encoder)(e.handle)), "encode flush")
 	}
-	planes := frameFloatPlanes(f)
+	planes := f.FloatPlanes()
 	if len(planes) == 0 {
 		return fmt.Errorf("%w: no pcm", ErrWrite)
 	}
@@ -382,12 +388,13 @@ func mapCErr(rc C.int, op string) error {
 
 func cAudioInfo(a AudioInfo) (C.mist_av_audio_info, func()) {
 	out := C.mist_av_audio_info{
-		codec_id:    C.int(a.CodecID),
-		sample_rate: C.int(a.SampleRate),
-		channels:    C.int(a.Channels),
-		sample_fmt:  C.int(a.SampleFmt),
-		bitrate:     C.int64_t(a.Bitrate),
-		duration_us: C.int64_t(a.DurationUs),
+		codec_id:        C.int(a.CodecID),
+		native_codec_id: C.int(a.NativeCodecID),
+		sample_rate:     C.int(a.SampleRate),
+		channels:        C.int(a.Channels),
+		sample_fmt:      C.int(a.SampleFmt),
+		bitrate:         C.int64_t(a.Bitrate),
+		duration_us:     C.int64_t(a.DurationUs),
 	}
 	if len(a.Extradata) == 0 {
 		return out, func() {}
@@ -404,14 +411,16 @@ func goAudioInfo(a C.mist_av_audio_info) AudioInfo {
 		extra = C.GoBytes(unsafe.Pointer(a.extradata), a.extradata_size)
 	}
 	return AudioInfo{
-		CodecID:    int(a.codec_id),
-		SampleRate: int(a.sample_rate),
-		Channels:   int(a.channels),
-		SampleFmt:  codecSampleFmt(int(a.sample_fmt)),
-		Bitrate:    int64(a.bitrate),
-		DurationUs: int64(a.duration_us),
-		Extradata:  extra,
-		FrameSize:  int(a.frame_size),
+		CodecID:       int(a.codec_id),
+		NativeCodecID: int(a.native_codec_id),
+		CodecName:     C.GoString(&a.codec_name[0]),
+		SampleRate:    int(a.sample_rate),
+		Channels:      int(a.channels),
+		SampleFmt:     codecSampleFmt(int(a.sample_fmt)),
+		Bitrate:       int64(a.bitrate),
+		DurationUs:    int64(a.duration_us),
+		Extradata:     extra,
+		FrameSize:     int(a.frame_size),
 	}
 }
 

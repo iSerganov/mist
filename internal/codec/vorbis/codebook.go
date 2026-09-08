@@ -13,6 +13,29 @@ type codebook struct {
 	quantvals    []uint32
 	quantN       int
 	tree         *hNode
+	// vecs holds the dequantized vector of every used entry, so picking the
+	// least damaging substitute for a stego flip is a lookup rather than a
+	// decode. Built once at parse time and never mutated after.
+	vecs [][]float64
+}
+
+// vector returns entry's dequantized vector, or nil for a codebook with no
+// lookup table, whose entries carry no values to compare.
+func (cb *codebook) vector(entry int) []float64 {
+	if cb.vecs == nil || entry < 0 || entry >= len(cb.vecs) {
+		return nil
+	}
+	return cb.vecs[entry]
+}
+
+func (cb *codebook) buildVectors() {
+	if cb.lookup == 0 || cb.dim <= 0 {
+		return
+	}
+	cb.vecs = make([][]float64, cb.entries)
+	for _, e := range cb.used {
+		cb.vecs[e] = cb.vq(e)
+	}
 }
 
 type hNode struct {
@@ -129,6 +152,7 @@ func unpackCodebook(b *bits) (*codebook, error) {
 		}
 		cb.quantvals[i] = v
 	}
+	cb.buildVectors()
 	return cb, nil
 }
 

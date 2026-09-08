@@ -1,6 +1,9 @@
 package vorbis
 
-import "errors"
+import (
+	"errors"
+	"math"
+)
 
 // resSym is one codebook symbol in residue decode order. Class words
 // have class set; VQ steps carry the buffer offset they add into.
@@ -332,18 +335,15 @@ func sanitizePrograms(books []*codebook, progs []residueProg, orig []int) {
 				continue
 			}
 			cb := books[s.book]
-			wantLen := uint8(0)
+			was := -1
 			if idx < len(orig) {
-				o := orig[idx]
-				if o >= 0 && o < cb.entries {
-					wantLen = cb.lens[o]
-				}
+				was = orig[idx]
 			}
 			idx++
-			if s.entry >= 0 && s.entry < cb.entries && cb.lens[s.entry] == wantLen && wantLen > 0 {
+			if s.entry == was {
 				continue
 			}
-			progs[pi].syms[i].entry = nearestLSBLen(cb, s.entry, wantLen)
+			progs[pi].syms[i].entry = substitute(cb, was, s.entry)
 		}
 	}
 }
@@ -363,16 +363,62 @@ func entryValues(progs []residueProg) []int {
 	return out
 }
 
-// nearestLSBLen finds the used entry closest to want whose LSB matches
-// want's and whose code length equals wantLen (the original entry's
-// length, so the packet's bit length is unchanged). If no entry shares
-// that length, or wantLen is unknown, it falls back to the closest used
-// entry with the right LSB regardless of length.
+// substitute picks the entry that carries want's LSB while damaging the
+// audio as little as possible.
+//
+// Neighbouring codebook indexes are not neighbouring sounds: entry n and
+// n+1 can dequantize to completely unrelated spectral vectors, so honouring
+// a bit by nudging the index swaps one block of audio for another. Among
+// the entries that carry the required bit and keep the codeword length
+// (see sanitizePrograms), this chooses the one whose dequantized vector is
+// nearest the original's, which is what keeps the result inaudible.
+func substitute(cb *codebook, was, want int) int {
+	// want may be negative: Match moves an entry by ±1 and can step below
+	// zero. Two's complement already gives the right parity there, so the
+	// bit must be read from it as-is — forcing it to zero would silently
+	// embed the wrong bit whenever entry 0 was flipped downwards.
+	bit := want & 1
+	wantLen := uint8(0)
+	if was >= 0 && was < cb.entries {
+		wantLen = cb.lens[was]
+	}
+	if ref := cb.vector(was); ref != nil {
+		best, bestD := -1, math.Inf(1)
+		for _, e := range cb.used {
+			if e&1 != bit || (wantLen > 0 && cb.lens[e] != wantLen) {
+				continue
+			}
+			if d := vecDistance(ref, cb.vector(e)); d < bestD {
+				best, bestD = e, d
+			}
+		}
+		if best >= 0 {
+			return best
+		}
+	}
+	return nearestLSBLen(cb, want, wantLen)
+}
+
+func vecDistance(a, b []float64) float64 {
+	if b == nil {
+		return math.Inf(1)
+	}
+	var sum float64
+	for i := range a {
+		if i >= len(b) {
+			break
+		}
+		d := a[i] - b[i]
+		sum += d * d
+	}
+	return sum
+}
+
+// nearestLSBLen is the fallback for codebooks with no lookup table, where
+// entries carry no vector to compare: it keeps the required LSB and code
+// length and otherwise stays as close to want's index as it can.
 func nearestLSBLen(cb *codebook, want int, wantLen uint8) int {
 	bit := want & 1
-	if want < 0 {
-		bit = 0
-	}
 	best, bestD := -1, int(^uint(0)>>1)
 	for _, e := range cb.used {
 		if e&1 != bit || (wantLen > 0 && cb.lens[e] != wantLen) {

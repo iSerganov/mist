@@ -33,6 +33,7 @@ read in an afternoon. Contributions and design discussion are very welcome.
   - [Options](#options)
   - [Errors](#errors)
 - [Choosing a carrier](#choosing-a-carrier)
+  - [Audio quality](#audio-quality)
 - [Supported formats](#supported-formats)
 - [Status and limitations](#status-and-limitations)
 - [Security notes](#security-notes)
@@ -48,7 +49,7 @@ read in an afternoon. Contributions and design discussion are very welcome.
 shape of `age` or NaCl's `box`: a freshly generated ephemeral X25519 key agrees a
 secret with the recipient's public key, HKDF-SHA256 splits that secret into an
 AEAD key, a position-selection key and a length mask, and ChaCha20-Poly1305 seals
-the payload. Because the sender's key is ephemeral and generated per frame, a
+the payload. Because that sender key is ephemeral and generated per message, a
 sender needs no long-term identity at all. An optional Ed25519 signature can be
 added when you *do* want the recipient to know who sent it.
 
@@ -61,14 +62,18 @@ sequentially, and every encode perturbs the same fraction of eligible residues
 whether or not there is a real message — short payloads are padded with CSPRNG
 filler. Presence and absence are meant to leave the same statistical footprint.
 
-**Streams are divided into frames.** A live stream has no known length and a
-listener may arrive at any moment, so the audio is split into self-contained
-8-second frames, each carrying the whole message sealed under a fresh ephemeral
-key. Capturing any one whole frame is enough to recover the payload, and because
-every frame's ciphertext differs, repeating the same message across a long
-broadcast does not produce a correlatable pattern. There is no sync marker to
-give the scheme away: both sides derive frame boundaries from the packet
-timestamps that are already in the stream.
+**Audio is divided into frames, and the message goes into one of them.** The
+carrier is split into self-contained 8-second frames, and the sealed message is
+written into the first frame with room for it. Every other frame is filled with
+CSPRNG bytes at exactly the same density, so the frame carrying the message is
+statistically indistinguishable from the ones carrying nothing — the padding is
+not decoration, it is what stops the payload's location being obvious. There is
+no sync marker either: both sides derive frame boundaries from the packet
+timestamps already present in the stream.
+
+One consequence is worth knowing: because the message lives in a single frame,
+a listener who joins a live broadcast after that frame has passed recovers
+nothing, and a recording that loses that frame loses the message.
 
 ## Requirements
 
@@ -156,10 +161,8 @@ mist catch --input song.stego.ogg --key song.stego.key
 
   → listening…
   ▸ frame 0     23 B  the eagle lands at dawn
-  ▸ frame 1     23 B  the eagle lands at dawn
-  ▸ frame 2     23 B  the eagle lands at dawn
 
-  ✓ 3 frame(s) recovered · end of stream
+  ✓ 1 frame(s) recovered · end of stream
 ```
 
 | Flag | Short | Required | Description |
@@ -168,10 +171,10 @@ mist catch --input song.stego.ogg --key song.stego.key
 | `--key` | `-k` | yes | Private key file |
 | `--timeout` | `-t` | no | Go duration; `0` (the default) reads until the stream ends |
 
-The same message appears once per whole frame, which is the point: a listener
-who joins a broadcast late still gets it from the next frame. A file ends by
-itself; a live stream runs until `--timeout` elapses or you interrupt it. The
-command exits non-zero when nothing was recovered.
+A successful scan reports one frame, since the message is embedded once. `catch`
+keeps reading to the end regardless, because the carrying frame may be anywhere
+in the file. A file ends by itself; a live stream runs until `--timeout` elapses
+or you interrupt it. The command exits non-zero when nothing was recovered.
 
 Frames that carry no message and frames sealed for somebody else's key are
 indistinguishable, so both are skipped in silence. `catch` will never tell you
@@ -262,24 +265,50 @@ and quiet or purely tonal audio simply does not produce many usable ones. A pure
 file that silently carries nothing.
 
 Music, speech, and anything with broadband content are all comfortable carriers.
-As a rough sense of scale, an 8-second frame of noisy stereo audio measured
-around 1.6 KB of usable capacity — ample for text. Longer carriers help too,
-since each additional whole frame is another independent copy of the message.
+As a rough sense of scale, an 8-second frame of ordinary stereo music holds a
+little over a hundred bytes — a sentence or two, not a document. Capacity is
+deliberately modest: embedding is confined to the frequencies where it cannot
+be heard, and every extra byte is extra distortion.
 
-`FrameCapacity()` reports a rough upper bound and currently over-estimates,
-because it does not account for how many residues are actually usable. Treat it
-as a planning hint; the real limit is enforced when you call `Embed`.
+Since the message occupies a single frame, a longer carrier does not buy more
+room; a *richer* one does. If your message does not fit, shorten it or pick a
+carrier with more high-frequency content.
+
+`FrameCapacity()` reports a rough upper bound and over-estimates, because it
+does not account for how many residues are actually usable. Treat it as a
+planning hint; the real limit is enforced when you call `Embed`.
+
+### Audio quality
+
+Mist always decodes and re-encodes, so some loss is unavoidable for a lossy
+source — but the embedding itself should be inaudible. The encode bitrate is
+derived from the carrier's own rate with headroom above it, rather than fixed,
+and the payload is written only above 6 kHz at a low density.
+
+Measured on a 128 kbps MP3, against a plain FFmpeg transcode of the same
+decoded audio (signal-to-distortion, higher is better):
+
+| | SDR |
+|---|---|
+| plain transcode, no embedding | 22.75 dB |
+| mist re-encode, no embedding | 22.76 dB |
+| **mist with a message embedded** | **22.58 dB** |
+
+So the message costs under 0.2 dB — the re-encode itself dominates, and that is
+the price of the format, not of the steganography.
 
 ## Supported formats
 
 **Output is always Ogg Vorbis.** The payload lives in Vorbis residues, so this
 is fixed by the technique rather than by a temporary limitation.
 
-**Input is decoded and re-encoded**, so a carrier need not already be Ogg. The
-cgo layer currently maps four codecs — Vorbis, MP3, AAC and PCM s16le — and
-anything else (FLAC, Opus, ALAC) is rejected with `ErrUnsupportedCodec`, even
-though libav itself could decode it. Widening support is a matter of extending
-one switch in `internal/av/cgo.c`.
+**Input is whatever your FFmpeg can decode.** The carrier is decoded to PCM and
+re-encoded, so it need not already be Ogg, and Mist keeps no list of acceptable
+formats: it carries libav's own codec id through and asks libav whether a
+decoder exists. MP3, FLAC, WAV, Opus, AAC/M4A, ALAC and the rest all work if
+your build supports them, and a format yours cannot decode is reported as
+`ErrUnsupportedCodec` naming the codec. Sample format does not matter either —
+FLAC's integer samples and Vorbis's floats are normalised alike.
 
 Note that an Ogg Vorbis input is still decoded and re-encoded, with the
 generation loss that implies. This is deliberate: Mist owns the whole encode
@@ -328,9 +357,18 @@ building one is an open task.
 ## Development
 
 ```bash
-make test   # go test -race -count=1 ./...
-make lint   # golangci-lint run --timeout=5m
+make build                       # -> bin/mist
+make keys                        # X25519 keypair via OpenSSL -> keys/mist.{pub,key}
+make embed INPUT=song.mp3 DATA="hello" OUTPUT=out.ogg KEY=keys/mist.pub
+make catch INPUT=out.ogg KEY=keys/mist.key TIMEOUT=30s
+make test                        # go test -race -count=1 ./...
+make lint                        # golangci-lint run --timeout=5m
 ```
+
+`make keys` writes the raw key bytes as hex, which is the format the CLI reads.
+OpenSSL stores X25519 keys as PKCS#8/SPKI DER whose final 32 bytes are the key
+itself, so the pair it produces is interchangeable with one `mist embed`
+generates for itself.
 
 [CLAUDE.md](CLAUDE.md) is the design reference: package layout, protocol
 constants, the invariants the stego layer must preserve, and the conventions

@@ -88,10 +88,10 @@ type BandSet struct {
 	ToHz   int
 }
 
-// DefaultBands is a starting high-frequency window. It will be replaced
-// once the perceptual-masking harness exists.
-// DefaultBands includes every residue VQ step. Stock libvorbisenc
-// places almost no VQ symbols in a narrow 8–16 kHz window, so Phase 1
-// treats the full spectrum as eligible and relies on keyed positions
-// plus constant density for the statistical footprint.
-var DefaultBands = BandSet{FromHz: 0, ToHz: 48000}
+// DefaultBands keeps embedding above 6 kHz, where the ear is least
+// sensitive to the error a flipped residue introduces. Perturbing the
+// whole spectrum instead costs about 4 dB of signal-to-distortion on real
+// music; confining it here makes the embedding all but free. Roughly half
+// the flippable residues sit above this bound at normal bitrates, so the
+// capacity given up is modest.
+var DefaultBands = BandSet{FromHz: 6000, ToHz: 48000}

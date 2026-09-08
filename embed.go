@@ -3,11 +3,9 @@ package mist
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/url"
 	"os"
 
@@ -92,7 +90,7 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, params codec.Para
 		ID:         codec.IDVorbis,
 		SampleRate: params.SampleRate,
 		Channels:   params.Channels,
-		Bitrate:    64_000,
+		Bitrate:    encodeBitrate(params.Bitrate),
 		Format:     codec.SampleFmtFLTP,
 	})
 	if err != nil {
@@ -117,56 +115,80 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, params codec.Para
 		return nil, ErrCarrier
 	}
 	all := make([]codec.Packet, 0, len(pkts)+len(flushed))
-	embedded := 0
+	carried := false
 	for _, g := range groups {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		out, ok, err := e.embedGroup(vc, g, plain)
+		out, done, err := e.embedGroup(vc, g, plain, !carried)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			embedded++
-		}
+		carried = carried || done
 		all = append(all, out...)
 	}
-	if embedded == 0 {
+	if !carried {
 		return nil, fmt.Errorf("%w: %d bytes needed", ErrNoCapacity, len(plain)+EnvelopeOverhead)
 	}
 	return muxPackets(info, all)
 }
 
-// embedGroup seals a fresh envelope for one frame and writes it into that
-// frame's packets, reporting whether the payload landed. A frame with no
-// room for even the envelope — a trailing sliver of encoder padding, or
-// audio too quiet to yield residues — passes through untouched.
-func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plain []byte) ([]codec.Packet, bool, error) {
+// embedGroup writes one frame and reports whether the message landed in it.
+// The message rides in the first frame with room for it; every other frame
+// is written with CSPRNG filler at the same density, so a frame carrying
+// the payload and a frame carrying nothing leave the same footprint. Only
+// a frame with no eligible residues at all — a trailing sliver of encoder
+// padding — passes through untouched.
+func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plain []byte, carry bool) ([]codec.Packet, bool, error) {
 	room, err := stego.Capacity(vc, g.Packets)
-	switch {
-	case errors.Is(err, stego.ErrNoResidues):
-		return g.Packets, false, nil
-	case err != nil:
-		return nil, false, fmt.Errorf("%w: %v", ErrCarrier, err)
-	case room < EnvelopeOverhead+len(plain):
+	if errors.Is(err, stego.ErrNoResidues) {
 		return g.Packets, false, nil
 	}
-	env, err := crypto.Seal(plain, e.pub)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("%w: %v", ErrCarrier, err)
+	}
+
+	// Nil bits make Apply fill the whole frame with CSPRNG filler.
+	var bits stego.Bits
+	carrying := carry && room >= EnvelopeOverhead+len(plain)
+	if carrying {
+		env, err := crypto.Seal(plain, e.pub)
+		if err != nil {
+			return nil, false, err
+		}
+		bits = env.Marshal()
 	}
 	pos, err := crypto.PositionSeed(e.pub, g.Index)
 	if err != nil {
 		return nil, false, err
 	}
-	out, err := stego.Apply(vc, pos, g.Packets, env.Marshal())
+	out, err := stego.Apply(vc, pos, g.Packets, bits)
 	if errors.Is(err, stego.ErrCapacity) {
 		return nil, false, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
-	return out, true, nil
+	return out, carrying, nil
+}
+
+// Bitrate bounds for the re-encode. Mist always re-encodes, and a second
+// lossy pass at the source's own rate compounds the loss, so a lossy
+// carrier is given headroom above its rate rather than matched to it.
+const (
+	minBitrate     = 192_000
+	maxBitrate     = 500_000
+	unknownBitrate = 256_000
+)
+
+// encodeBitrate picks the Vorbis target for a carrier of the given rate.
+// A lossless source reports its raw PCM rate — 1411 kbps for CD audio —
+// which is not a meaningful target for a lossy codec, so it is capped.
+func encodeBitrate(source int64) int64 {
+	if source <= 0 {
+		return unknownBitrate
+	}
+	return min(max(source*3/2, minBitrate), maxBitrate)
 }
 
 func frameParams(pcm codec.PCM) frame.Params {
@@ -201,8 +223,9 @@ func decodeCarrierURL(source string) (codec.PCM, codec.Params, []byte, error) {
 
 func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, codec.Params, []byte, error) {
 	info := d.Info()
-	if info.CodecID == av.CodecIDNone {
-		return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: carrier codec", ErrUnsupportedCodec)
+	if !av.CanDecode(info) {
+		return codec.PCM{}, codec.Params{}, nil,
+			fmt.Errorf("%w: this FFmpeg build cannot decode %s", ErrUnsupportedCodec, codecName(info))
 	}
 	dec, err := av.NewDecoder(info)
 	if err != nil {
@@ -288,24 +311,24 @@ func drainPCM(dec *av.Decoder) ([][]float32, int, int, error) {
 	}
 }
 
+// frameToPCM normalises whatever sample format the decoder produced into
+// the float planes the Vorbis encoder takes.
 func frameToPCM(f av.Frame) codec.PCM {
-	planes := make([][]float32, len(f.Data))
-	for i, b := range f.Data {
-		n := len(b) / 4
-		pl := make([]float32, n)
-		for j := 0; j < n; j++ {
-			pl[j] = math.Float32frombits(binary.LittleEndian.Uint32(b[j*4:]))
-		}
-		planes[i] = pl
-	}
 	return codec.PCM{
-		Planes:     planes,
+		Planes:     f.FloatPlanes(),
 		NbSamples:  f.NbSamples,
 		Channels:   f.Channels,
 		SampleRate: f.SampleRate,
-		Format:     f.Format,
+		Format:     codec.SampleFmtFLTP,
 		PTS:        f.PTS,
 	}
+}
+
+func codecName(info av.AudioInfo) string {
+	if info.CodecName == "" {
+		return "this carrier"
+	}
+	return info.CodecName
 }
 
 func marshalPlain(p Payload, senderPriv []byte) ([]byte, error) {

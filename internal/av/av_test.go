@@ -81,6 +81,40 @@ func (s *AVSuite) TestOpenDemuxer() {
 	s.NotEmpty(got.Extradata)
 }
 
+// Mist keeps no list of acceptable inputs: whatever the installed FFmpeg
+// can decode is a usable carrier. The stream's own codec id is carried
+// through verbatim and is what CanDecode answers about.
+func (s *AVSuite) TestCanDecode() {
+	s.requireLibav()
+	raw, _ := s.encodeOgg()
+	path := filepath.Join(s.T().TempDir(), "sine.ogg")
+	s.Require().NoError(os.WriteFile(path, raw, 0o600))
+
+	d, err := OpenDemuxer(path)
+	s.Require().NoError(err)
+	defer func() { _ = d.Close() }()
+
+	info := d.Info()
+	s.NotZero(info.NativeCodecID, "libav's own codec id must survive the boundary")
+	s.Equal("vorbis", info.CodecName)
+
+	tests := []struct {
+		title string
+		info  AudioInfo
+		want  bool
+	}{
+		{"demuxed stream", info, true},
+		{"mist id alone still resolves", AudioInfo{CodecID: CodecIDVorbis}, true},
+		{"native id libav does not know", AudioInfo{NativeCodecID: 0x7fffffff}, false},
+		{"nothing named", AudioInfo{}, false},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			s.Equal(tc.want, CanDecode(tc.info))
+		})
+	}
+}
+
 func (s *AVSuite) TestDemuxMuxRoundTrip() {
 	s.requireLibav()
 	raw, info := s.encodeOgg()
@@ -252,7 +286,7 @@ func shiftPTS(f Frame, pts int64) Frame {
 }
 
 func splitFrame(f Frame, fs int) []Frame {
-	planes := frameFloatPlanes(f)
+	planes := f.FloatPlanes()
 	var out []Frame
 	for off := 0; off < f.NbSamples; off += fs {
 		data := make([][]byte, len(planes))

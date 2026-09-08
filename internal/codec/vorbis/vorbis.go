@@ -330,16 +330,12 @@ func frameFromPCM(p codec.PCM) av.Frame {
 }
 
 func frameToPCM(f av.Frame) codec.PCM {
-	planes := make([][]float32, len(f.Data))
-	for i, b := range f.Data {
-		planes[i] = bytesToFloats(b)
-	}
 	return codec.PCM{
-		Planes:     planes,
+		Planes:     f.FloatPlanes(),
 		NbSamples:  f.NbSamples,
 		Channels:   f.Channels,
 		SampleRate: f.SampleRate,
-		Format:     f.Format,
+		Format:     codec.SampleFmtFLTP,
 		PTS:        f.PTS,
 	}
 }
@@ -348,15 +344,6 @@ func floatsToBytes(in []float32) []byte {
 	out := make([]byte, len(in)*4)
 	for i, v := range in {
 		binary.LittleEndian.PutUint32(out[i*4:], math.Float32bits(v))
-	}
-	return out
-}
-
-func bytesToFloats(b []byte) []float32 {
-	n := len(b) / 4
-	out := make([]float32, n)
-	for i := 0; i < n; i++ {
-		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
 	}
 	return out
 }

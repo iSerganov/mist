@@ -150,7 +150,7 @@ func (s *CatcherSuite) TestExtract() {
 		text  string
 	}{
 		{"single frame", FrameDuration, "one frame"},
-		{"payload repeats across frames", 2 * FrameDuration, "looped every frame"},
+		{"long carrier still carries it once", 3 * FrameDuration, "embedded once"},
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
@@ -160,32 +160,28 @@ func (s *CatcherSuite) TestExtract() {
 
 			got, err := c.Extract(context.Background(), f)
 			s.Require().NoError(err)
-			s.Require().NotEmpty(got)
-			for _, r := range got {
-				s.Equal(tc.text, string(r.Payload.Data))
-			}
+			s.Require().Len(got, 1, "the message is embedded exactly once")
+			s.Equal(tc.text, string(got[0].Payload.Data))
 		})
 	}
 }
 
-// Every whole frame carries the payload afresh, so a listener that joins
-// late still recovers it.
-func (s *CatcherSuite) TestPayloadRepeatsInEveryFrame() {
+// The message goes into the first frame with room for it, however many
+// frames the carrier has.
+func (s *CatcherSuite) TestPayloadEmbeddedOnce() {
 	s.requireLibav()
 	pub, priv, err := GenerateKeyPair()
 	s.Require().NoError(err)
-	f := s.openTemp(s.stego(pub, Text("repeated"), s.carrier(3*FrameDuration)))
+	f := s.openTemp(s.stego(pub, Text("once only"), s.carrier(4*FrameDuration)))
 
 	c, err := NewCatcher(priv)
 	s.Require().NoError(err)
 	got, err := c.Extract(context.Background(), f)
 	s.Require().NoError(err)
 
-	s.Require().GreaterOrEqual(len(got), 3, "one result per whole frame")
-	for i, r := range got {
-		s.Equal("repeated", string(r.Payload.Data))
-		s.Equal(int64(i), r.FrameIdx)
-	}
+	s.Require().Len(got, 1)
+	s.Equal("once only", string(got[0].Payload.Data))
+	s.Equal(int64(0), got[0].FrameIdx)
 }
 
 // A wrong key is indistinguishable from an unmarked carrier: no results,

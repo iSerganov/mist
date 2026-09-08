@@ -17,7 +17,13 @@ import (
 // Density is the fraction of eligible coefficients perturbed on every
 // encode, whether or not a real payload is present. It is a protocol
 // constant: changing it is a breaking change for Listen.
-const Density = 0.10
+//
+// Every perturbed residue is audible damage, so this is kept just high
+// enough to be useful. Measured on real music, 2% inside DefaultBands
+// costs about 0.2 dB of signal-to-distortion against a plain transcode
+// while leaving roughly 130 bytes per 8-second frame. Raising it trades
+// audio quality for capacity in direct proportion: 10% cost 4 dB.
+const Density = 0.02
 
 // Bits is a packed bit string to embed or a bit string just extracted.
 type Bits []byte

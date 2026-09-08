@@ -302,4 +302,46 @@ func (s *EmitterSuite) TestEmbedRejectsCarrierWithoutCapacity() {
 	}
 }
 
+// The message rides in one frame, but every other frame must still be
+// perturbed at the same density — otherwise the carrying frame stands out
+// from the rest and presence becomes detectable without any key.
+func (s *EmitterSuite) TestFillerFramesAreStillPerturbed() {
+	s.requireLibav()
+	c := vorbis.New()
+	enc, err := c.NewEncoder(codec.DefaultVorbis)
+	s.Require().NoError(err)
+	defer func() { _ = enc.Close() }()
+	info := enc.(interface{ Params() codec.Params }).Params()
+	s.Require().NoError(c.Load(info.Extradata))
+
+	pkts, err := enc.Encode(testSine(44100, 2, 44100*3, 440))
+	s.Require().NoError(err)
+	fl, err := enc.Flush()
+	s.Require().NoError(err)
+	pkts = append(pkts, fl...)
+
+	pos := make([]byte, 32)
+	tests := []struct {
+		title string
+		bits  stego.Bits
+	}{
+		{"carrying a payload", stego.Bits(bytes.Repeat([]byte{0x5a}, 8))},
+		{"filler only", nil},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			out, err := stego.Apply(c, pos, pkts, tc.bits)
+			s.Require().NoError(err)
+
+			changed := 0
+			for i := range pkts {
+				if i < len(out) && !bytes.Equal(pkts[i].Data, out[i].Data) {
+					changed++
+				}
+			}
+			s.Greater(changed, 0, "a frame with no payload must still be written to")
+		})
+	}
+}
+
 func (s *EmitterSuite) makeCarrier() []byte { return s.carrier(FrameDuration) }

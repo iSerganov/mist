@@ -17,15 +17,21 @@ import (
 // Extradata is the codec private blob (Vorbis identification/comment/setup
 // in Xiph lacing). The decoder will not open without it. FrameSize is the
 // encoder's required sample count per Send, or 0 if the codec accepts any.
+// NativeCodecID is libav's own AVCodecID for the stream, carried verbatim
+// so any format the installed FFmpeg can decode is usable; CodecID stays
+// Mist-local and is CodecIDNone for everything else. CodecName is libav's
+// display name, for error messages.
 type AudioInfo struct {
-	CodecID    int
-	SampleRate int
-	Channels   int
-	SampleFmt  codec.SampleFormat
-	Bitrate    int64
-	DurationUs int64
-	Extradata  []byte
-	FrameSize  int
+	CodecID       int
+	NativeCodecID int
+	CodecName     string
+	SampleRate    int
+	Channels      int
+	SampleFmt     codec.SampleFormat
+	Bitrate       int64
+	DurationUs    int64
+	Extradata     []byte
+	FrameSize     int
 }
 
 // Params converts AudioInfo to the codec-layer Params.
