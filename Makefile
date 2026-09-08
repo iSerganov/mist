@@ -7,7 +7,14 @@ OUTPUT  ?=
 KEY     ?=
 TIMEOUT ?= 0
 
+LOG ?= info
+
 test:
+	GOTRACEBACK=all MIST_AV_LOG=$(LOG) \
+		go test -v -race -count=1 -cover -timeout 20m ./...
+
+# Same coverage, without the per-test firehose.
+test-quiet:
 	go test -race -count=1 ./...
 
 lint:
@@ -49,4 +56,4 @@ keys:
 clean:
 	rm -rf bin
 
-.PHONY: test lint build embed catch keys clean
+.PHONY: test test-quiet lint build embed catch keys clean

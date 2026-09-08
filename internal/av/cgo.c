@@ -231,16 +231,42 @@ static int64_t seek_cb(void *opaque, int64_t offset, int whence)
 	return mist_av_go_seek((int)(intptr_t)opaque, offset, whence);
 }
 
+/*
+ * Failures reach Go through return codes and errbuf, so libav's own chatter
+ * is redundant and lands in the middle of the CLI's output: cover art in a
+ * normal MP3 makes it complain about the image stream Mist never looks at.
+ * Quiet by default, but MIST_AV_LOG turns it back up for debugging, which is
+ * the only way to see what the codec layer is doing.
+ */
+static int log_level_from_env(void)
+{
+	const char *want = getenv("MIST_AV_LOG");
+	if (want == NULL || want[0] == '\0') {
+		return AV_LOG_FATAL;
+	}
+	static const struct { const char *name; int level; } levels[] = {
+		{ "quiet",   AV_LOG_QUIET   },
+		{ "panic",   AV_LOG_PANIC   },
+		{ "fatal",   AV_LOG_FATAL   },
+		{ "error",   AV_LOG_ERROR   },
+		{ "warning", AV_LOG_WARNING },
+		{ "info",    AV_LOG_INFO    },
+		{ "verbose", AV_LOG_VERBOSE },
+		{ "debug",   AV_LOG_DEBUG   },
+		{ "trace",   AV_LOG_TRACE   },
+	};
+	for (size_t i = 0; i < sizeof(levels) / sizeof(levels[0]); i++) {
+		if (strcmp(want, levels[i].name) == 0) {
+			return levels[i].level;
+		}
+	}
+	return AV_LOG_FATAL;
+}
+
 int mist_av_init(void)
 {
 	avformat_network_init();
-	/*
-	 * Failures reach Go through return codes and errbuf, so libav's own
-	 * chatter is redundant and lands in the middle of the CLI's output:
-	 * cover art in a normal MP3 makes it complain about the image stream
-	 * Mist never looks at. Keep only what precedes a crash.
-	 */
-	av_log_set_level(AV_LOG_FATAL);
+	av_log_set_level(log_level_from_env());
 	return MIST_AV_OK;
 }
 
