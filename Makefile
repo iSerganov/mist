@@ -7,6 +7,8 @@ OUTPUT  ?=
 KEY     ?=
 TIMEOUT ?= 0
 
+# libav's own verbosity during a test run, on top of Go's -v:
+# quiet | error | warning | info | verbose | debug | trace
 LOG ?= info
 
 test:

@@ -361,9 +361,18 @@ make build                       # -> bin/mist
 make keys                        # X25519 keypair via OpenSSL -> keys/mist.{pub,key}
 make embed INPUT=song.mp3 DATA="hello" OUTPUT=out.ogg KEY=keys/mist.pub
 make catch INPUT=out.ogg KEY=keys/mist.key TIMEOUT=30s
-make test                        # go test -race -count=1 ./...
+make test                        # verbose: -v -race -cover, full tracebacks
+make test LOG=trace              # ...and libav logging turned all the way up
+make test-quiet                  # same run, results only
 make lint                        # golangci-lint run --timeout=5m
 ```
+
+`make test` is deliberately loud: every test and subtest is named, `t.Log`
+output is shown, coverage is reported per package, `GOTRACEBACK=all` dumps
+every goroutine on a panic, and `MIST_AV_LOG` lets libav report what the codec
+layer is doing. Set `MIST_AV_LOG` on the `mist` binary too when a carrier
+misbehaves — it defaults to silent so codec chatter never lands in the CLI's
+output.
 
 `make keys` writes the raw key bytes as hex, which is the format the CLI reads.
 OpenSSL stores X25519 keys as PKCS#8/SPKI DER whose final 32 bytes are the key

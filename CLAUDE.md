@@ -34,7 +34,7 @@ A demuxer read already in flight cannot be interrupted, so `Listen` relays the s
 
 Decoders emit whatever sample format suits them — FLAC gives s32, WAV s16, Vorbis fltp, packed or planar — so `Frame.FloatPlanes` normalises all of them to float planes before the encoder sees them. Never reinterpret frame bytes as float32 directly; that silently produces noise for integer formats.
 
-libav's own logging is set to `AV_LOG_FATAL`: failures already reach Go via return codes and errbuf, and cover art in a normal MP3 otherwise prints warnings into the middle of the CLI's output.
+libav's own logging defaults to `AV_LOG_FATAL`: failures already reach Go via return codes and errbuf, and cover art in a normal MP3 otherwise prints warnings into the middle of the CLI's output. `MIST_AV_LOG` (`quiet`…`trace`) raises it — the only way to see what the codec layer is doing, and what `make test` sets.
 
 ## Layout
 
@@ -144,7 +144,10 @@ a pure sine, for this reason.
 
 ## Make targets
 
-`build` (to `bin/mist`), `embed`, `catch`, `keys`, `test`, `lint`, `clean`.
+`build` (to `bin/mist`), `embed`, `catch`, `keys`, `test`, `test-quiet`, `lint`, `clean`.
+`test` is the loud one: `-v -race -count=1 -cover`, `GOTRACEBACK=all`, and
+`MIST_AV_LOG=$(LOG)` so libav talks too; `test-quiet` is the same run without
+the per-test output. 
 `embed` and `catch` take `INPUT=`, `DATA=`, `OUTPUT=`, `KEY=`, `TIMEOUT=`.
 `keys` mints an X25519 pair with OpenSSL and writes the raw 32 bytes as hex —
 OpenSSL emits PKCS#8/SPKI DER, whose last 32 bytes are the key — so its output
