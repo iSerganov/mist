@@ -113,7 +113,7 @@ func (c *Catcher) stream(ctx context.Context, d *av.Demuxer) (<-chan Result, err
 	out := make(chan Result)
 	go func() {
 		defer close(out)
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 		r := retrier{left: c.maxRetries, backoff: c.backoff}
 		for ctx.Err() == nil {
 			pkt, err := d.NextPacket()

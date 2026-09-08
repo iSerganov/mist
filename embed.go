@@ -98,7 +98,7 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, params codec.Para
 	if err != nil {
 		return nil, fmt.Errorf("%w: encoder", ErrCarrier)
 	}
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 	info := enc.(interface{ Params() codec.Params }).Params()
 	if err := vc.Load(info.Extradata); err != nil {
 		return nil, fmt.Errorf("%w: setup", err)
@@ -175,7 +175,7 @@ func decodeCarrier(r io.Reader) (codec.PCM, codec.Params, []byte, error) {
 	if err != nil {
 		return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	return decodeFromDemuxer(d)
 }
 
@@ -188,7 +188,7 @@ func decodeCarrierURL(source string) (codec.PCM, codec.Params, []byte, error) {
 	if err != nil {
 		return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	return decodeFromDemuxer(d)
 }
 
@@ -201,7 +201,7 @@ func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, codec.Params, []byte, error) {
 	if err != nil {
 		return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: decoder", ErrCarrier)
 	}
-	defer dec.Close()
+	defer func() { _ = dec.Close() }()
 	var planes [][]float32
 	var n, ch, rate int
 	for {

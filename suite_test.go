@@ -33,7 +33,7 @@ func (s *audioSuite) carrier(d time.Duration) []byte {
 	c := vorbis.New()
 	enc, err := c.NewEncoder(codec.DefaultVorbis)
 	s.Require().NoError(err)
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 	info := enc.(interface{ Params() codec.Params }).Params()
 
 	n := int(d.Seconds() * testRate)
@@ -44,7 +44,7 @@ func (s *audioSuite) carrier(d time.Duration) []byte {
 
 	rc, err := muxPackets(info, append(pkts, flushed...))
 	s.Require().NoError(err)
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	raw, err := io.ReadAll(rc)
 	s.Require().NoError(err)
 	return raw
@@ -57,7 +57,7 @@ func (s *audioSuite) stego(pub []byte, payload Payload, carrier []byte) []byte {
 	s.Require().NoError(err)
 	out, err := em.EmbedReader(context.Background(), bytes.NewReader(carrier), payload)
 	s.Require().NoError(err)
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	raw, err := io.ReadAll(out)
 	s.Require().NoError(err)
 	return raw

@@ -64,7 +64,7 @@ func (e *Emitter) Embed(ctx context.Context, source string, payload Payload) (io
 	if err != nil {
 		return nil, err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	return e.embed(ctx, rc, payload)
 }
 

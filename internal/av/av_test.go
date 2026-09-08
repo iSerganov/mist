@@ -73,7 +73,7 @@ func (s *AVSuite) TestOpenDemuxer() {
 
 	d, err := OpenDemuxer(path)
 	s.Require().NoError(err)
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	got := d.Info()
 	s.Equal(CodecIDVorbis, got.CodecID)
 	s.Equal(info.SampleRate, got.SampleRate)
@@ -88,7 +88,7 @@ func (s *AVSuite) TestDemuxMuxRoundTrip() {
 	src := bytes.NewReader(raw)
 	d, err := OpenDemuxerReader(src)
 	s.Require().NoError(err)
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 
 	var pkts []Packet
 	for {
@@ -113,7 +113,7 @@ func (s *AVSuite) TestDemuxMuxRoundTrip() {
 
 	d2, err := OpenDemuxerReader(bytes.NewReader(out.data))
 	s.Require().NoError(err)
-	defer d2.Close()
+	defer func() { _ = d2.Close() }()
 	var again []Packet
 	for {
 		pkt, err := d2.NextPacket()
@@ -139,7 +139,7 @@ func (s *AVSuite) TestEncodeDecodePCM() {
 		Bitrate:    64_000,
 	})
 	s.Require().NoError(err)
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 	info := enc.Info()
 	s.NotEmpty(info.Extradata)
 
@@ -149,7 +149,7 @@ func (s *AVSuite) TestEncodeDecodePCM() {
 
 	dec, err := NewDecoder(info)
 	s.Require().NoError(err)
-	defer dec.Close()
+	defer func() { _ = dec.Close() }()
 	var frames []Frame
 	for _, pkt := range pkts {
 		s.NoError(dec.Send(pkt))
@@ -168,7 +168,7 @@ func (s *AVSuite) TestCustomIO() {
 	raw, info := s.encodeOgg()
 	d, err := OpenDemuxerReader(bytes.NewReader(raw))
 	s.Require().NoError(err)
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	s.Equal(info.SampleRate, d.Info().SampleRate)
 	pkt, err := d.NextPacket()
 	s.Require().NoError(err)
@@ -185,7 +185,7 @@ func (s *AVSuite) encodeOgg() ([]byte, AudioInfo) {
 		Bitrate:    64_000,
 	})
 	s.Require().NoError(err)
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 	info := enc.Info()
 
 	var buf rwBuf

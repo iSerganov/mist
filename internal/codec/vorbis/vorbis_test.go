@@ -97,7 +97,7 @@ func (s *VorbisSuite) TestEncodeDecode() {
 	c := New()
 	enc, err := c.NewEncoder(codec.DefaultVorbis)
 	s.Require().NoError(err)
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 
 	p := enc.(*encoder).Params()
 	s.NotEmpty(p.Extradata)
@@ -116,7 +116,7 @@ func (s *VorbisSuite) TestEncodeDecode() {
 
 	dec, err := c.NewDecoder(p)
 	s.Require().NoError(err)
-	defer dec.Close()
+	defer func() { _ = dec.Close() }()
 	var frames []codec.PCM
 	for _, pkt := range pkts {
 		out, err := dec.Decode(pkt)
@@ -137,7 +137,7 @@ func (s *VorbisSuite) TestLoadAndResidues() {
 	c := New()
 	enc, err := c.NewEncoder(codec.DefaultVorbis)
 	s.Require().NoError(err)
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 	p := enc.(*encoder).Params()
 	s.Require().NotEmpty(p.Extradata)
 	n := 16
@@ -233,7 +233,7 @@ func (s *VorbisSuite) TestRewriteAllEntryLSBs() {
 	c := New()
 	enc, err := c.NewEncoder(codec.DefaultVorbis)
 	s.Require().NoError(err)
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 	p := enc.(*encoder).Params()
 	s.Require().NoError(c.Load(p.Extradata))
 	pcm := sinePCM(44100, 2, 8192, 440)
@@ -281,7 +281,7 @@ func (s *VorbisSuite) TestVQStepCount() {
 	c := New()
 	enc, err := c.NewEncoder(codec.DefaultVorbis)
 	s.Require().NoError(err)
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 	p := enc.(*encoder).Params()
 	s.Require().NoError(c.Load(p.Extradata))
 	pcm := sinePCM(44100, 2, 44100, 440)

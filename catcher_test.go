@@ -258,7 +258,7 @@ func (s *CatcherSuite) TestJoinMidStreamLogsAndSkips() {
 
 	d, err := av.OpenDemuxerReader(bytes.NewReader(raw))
 	s.Require().NoError(err)
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 
 	var logs bytes.Buffer
 	sc, err := newScanner(priv, d.Info(), slog.New(slog.NewTextHandler(&logs, nil)))

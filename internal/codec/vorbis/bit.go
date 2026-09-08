@@ -10,8 +10,6 @@ func newBits(d []byte) *bits { return &bits{d: d} }
 
 func (b *bits) remaining() int { return len(b.d)*8 - b.pos }
 
-func (b *bits) eof() bool { return b.pos >= len(b.d)*8 }
-
 func (b *bits) read(n int) (uint32, error) {
 	if n <= 0 {
 		return 0, nil
@@ -30,21 +28,6 @@ func (b *bits) read(n int) (uint32, error) {
 }
 
 func (b *bits) read1() (uint32, error) { return b.read(1) }
-
-func (b *bits) copyPrefix(nbits int) ([]byte, error) {
-	if nbits < 0 || nbits > b.pos {
-		return nil, ErrBadPacket
-	}
-	out := make([]byte, (nbits+7)/8)
-	for i := 0; i < nbits; i++ {
-		by := i / 8
-		bi := uint(i % 8)
-		if (b.d[by]>>bi)&1 == 1 {
-			out[i/8] |= 1 << uint(i%8)
-		}
-	}
-	return out, nil
-}
 
 type writer struct {
 	d   []byte
