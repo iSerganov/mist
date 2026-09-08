@@ -126,7 +126,7 @@ func (s *CryptoSuite) TestSealOpenRoundTrip() {
 			env, err := Seal(tc.plain, pub)
 			s.Require().NoError(err)
 			s.Require().NotNil(env)
-			s.Len(env.Ciphertext, len(tc.plain)+wire.TagSize)
+			s.Len(env.Body, len(tc.plain)+wire.TagSize)
 			got, err := Open(env, priv)
 			s.Require().NoError(err)
 			if len(tc.plain) == 0 {
@@ -147,14 +147,20 @@ func (s *CryptoSuite) TestOpenRejects() {
 	s.Require().NoError(err)
 
 	tamperedCT := *env
-	tamperedCT.Ciphertext = append([]byte{}, env.Ciphertext...)
-	tamperedCT.Ciphertext[0] ^= 0x01
+	tamperedCT.Body = append([]byte{}, env.Body...)
+	tamperedCT.Body[0] ^= 0x01
 
 	tamperedNonce := *env
 	tamperedNonce.Nonce[0] ^= 0x01
 
 	tamperedPub := *env
 	tamperedPub.EphemeralPub[0] ^= 0x01
+
+	tamperedLen := *env
+	tamperedLen.MaskedLen[0] ^= 0x01
+
+	truncated := *env
+	truncated.Body = env.Body[:len(env.Body)-1]
 
 	tests := []struct {
 		title string
@@ -167,6 +173,8 @@ func (s *CryptoSuite) TestOpenRejects() {
 		{"tampered ciphertext", &tamperedCT, priv},
 		{"tampered nonce", &tamperedNonce, priv},
 		{"tampered eph pub", &tamperedPub, priv},
+		{"tampered length", &tamperedLen, priv},
+		{"body shorter than length", &truncated, priv},
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
@@ -186,7 +194,53 @@ func (s *CryptoSuite) TestSealFreshEphemeral() {
 	s.Require().NoError(err)
 	s.NotEqual(a.EphemeralPub, b.EphemeralPub)
 	s.NotEqual(a.Nonce, b.Nonce)
-	s.NotEqual(a.Ciphertext, b.Ciphertext)
+	s.NotEqual(a.Body, b.Body)
+}
+
+// The length field must look like noise to anyone without the private key,
+// otherwise it becomes a presence test for a warden who knows the
+// (public) recipient key and can therefore locate the embedded bits.
+func (s *CryptoSuite) TestMaskedLengthHidesSize() {
+	pub, priv, err := GenerateX25519()
+	s.Require().NoError(err)
+	plain := []byte("same length payload")
+
+	a, err := Seal(plain, pub)
+	s.Require().NoError(err)
+	b, err := Seal(plain, pub)
+	s.Require().NoError(err)
+	s.NotEqual(a.MaskedLen, b.MaskedLen, "equal sizes must not produce equal length fields")
+
+	got, err := Open(a, priv)
+	s.Require().NoError(err)
+	s.Equal(plain, got)
+}
+
+// Body carries constant-density filler past the ciphertext; the length
+// field is what tells the recipient where to stop.
+func (s *CryptoSuite) TestOpenIgnoresTrailingFiller() {
+	pub, priv, err := GenerateX25519()
+	s.Require().NoError(err)
+	plain := []byte("hello mist")
+
+	tests := []struct {
+		title  string
+		filler int
+	}{
+		{"no filler", 0},
+		{"some filler", 32},
+		{"filler larger than ciphertext", 512},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			env, err := Seal(plain, pub)
+			s.Require().NoError(err)
+			env.Body = append(env.Body, bytes.Repeat([]byte{0xab}, tc.filler)...)
+			got, err := Open(env, priv)
+			s.Require().NoError(err)
+			s.Equal(plain, got)
+		})
+	}
 }
 
 func (s *CryptoSuite) TestSealRejectsBadRecipient() {

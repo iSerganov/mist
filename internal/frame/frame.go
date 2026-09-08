@@ -1,32 +1,22 @@
-// Package frame models fixed-duration stego frames and Listen's phase search.
+// Package frame models fixed-duration stego frames.
 //
-// A live stream has no known total length and a receiver may join mid-stream.
-// Mist therefore splits audio into consecutive self-contained frames of
-// duration D (a protocol constant). The same payload is re-sealed with a
-// fresh ephemeral key in every frame.
+// A live stream has no known total length and a receiver may join mid-stream,
+// so Mist divides the compressed packet stream into consecutive self-contained
+// frames of duration D (a protocol constant). The same payload is re-sealed
+// with a fresh ephemeral key in every frame.
 //
-// Frame boundaries are not marked in the bitstream. Listen tries a small
-// set of candidate phase offsets and uses AEAD tag verification as the
-// correctness oracle — the offset that authenticates is the right one;
-// every other offset fails identically to "no message".
+// Frames are grouped in the packet domain, by the timestamps libav already
+// carries, so Embed and Listen derive identical packet sets without either
+// side reanalysing PCM. That agreement is load-bearing: one packet's
+// difference changes the eligible-residue count and scrambles every
+// selected position.
 package frame
 
-import "time"
+import (
+	"time"
 
-// Frame is one self-contained stego unit.
-type Frame struct {
-	Index    int64
-	Offset   time.Duration
-	Duration time.Duration
-	PCMStart int // sample index in the current Listen session
-	PCMEnd   int
-}
-
-// Phase is a candidate frame-boundary offset tried by Listen on join.
-type Phase struct {
-	Offset time.Duration
-	Index  int
-}
+	"github.com/iSerganov/mist/internal/codec"
+)
 
 // Params are the audio properties needed to convert duration to samples.
 type Params struct {
@@ -44,46 +34,74 @@ func (p Params) Samples() int {
 	return int(p.Duration.Seconds() * float64(p.SampleRate))
 }
 
-// Split returns the sequence of frames covering nSamples at p.
-// A short tail is its own final frame so a clip shorter than Duration
-// still carries one embed.
-func Split(nSamples int, p Params) []Frame {
-	win := p.Samples()
-	if nSamples <= 0 || win <= 0 {
-		return nil
-	}
-	var out []Frame
-	for i, start := 0, 0; start < nSamples; i++ {
-		end := start + win
-		if end > nSamples {
-			end = nSamples
-		}
-		out = append(out, Frame{
-			Index:    int64(i),
-			Offset:   time.Duration(start) * time.Second / time.Duration(p.SampleRate),
-			Duration: time.Duration(end-start) * time.Second / time.Duration(p.SampleRate),
-			PCMStart: start,
-			PCMEnd:   end,
-		})
-		start = end
-	}
-	return out
+// Group is one stego frame: the consecutive packets whose timestamps fall
+// in the same window. Partial marks a group whose window did not start at
+// the first packet seen — a listener that joined mid-transmission.
+type Group struct {
+	Index   int64
+	Partial bool
+	Packets []codec.Packet
 }
 
-// CandidatePhases returns the phase offsets Listen should try when the
-// recording start is unknown. hop is the search step; it must divide
-// Duration or be smaller than it.
-func CandidatePhases(d, hop time.Duration) []Phase {
-	if d <= 0 {
-		return nil
+// Grouper assembles packets into Groups as they arrive, so a live stream is
+// scanned without buffering it whole.
+type Grouper struct {
+	window  int64
+	idx     int64
+	open    bool
+	partial bool
+	emitted bool
+	pkts    []codec.Packet
+}
+
+// NewGrouper returns a Grouper for one frame window of p.
+func NewGrouper(p Params) *Grouper {
+	return &Grouper{window: int64(p.Samples())}
+}
+
+// Push adds pkt and returns the group it completed, if any.
+func (g *Grouper) Push(pkt codec.Packet) (Group, bool) {
+	if g.window <= 0 {
+		return Group{}, false
 	}
-	if hop <= 0 || hop > d {
-		hop = d
+	idx := max(pkt.PTS, 0) / g.window
+	var done Group
+	var ok bool
+	if g.open && idx != g.idx {
+		done, ok = g.Flush()
 	}
-	var out []Phase
-	for i, off := 0, time.Duration(0); off < d; i++ {
-		out = append(out, Phase{Offset: off, Index: i})
-		off += hop
+	if !g.open {
+		// Packets rarely land on a window boundary, so a gap only means a
+		// missed frame start for the very first group: after that the
+		// transition was witnessed here.
+		g.open, g.idx = true, idx
+		g.partial = !g.emitted && pkt.PTS > idx*g.window
+	}
+	g.pkts = append(g.pkts, pkt)
+	return done, ok
+}
+
+// Flush returns the group still being assembled, if any.
+func (g *Grouper) Flush() (Group, bool) {
+	if !g.open {
+		return Group{}, false
+	}
+	out := Group{Index: g.idx, Partial: g.partial, Packets: g.pkts}
+	g.open, g.emitted, g.pkts = false, true, nil
+	return out, true
+}
+
+// GroupPackets splits pkts into stego frames.
+func GroupPackets(pkts []codec.Packet, p Params) []Group {
+	g := NewGrouper(p)
+	out := make([]Group, 0, 1)
+	for _, pkt := range pkts {
+		if done, ok := g.Push(pkt); ok {
+			out = append(out, done)
+		}
+	}
+	if done, ok := g.Flush(); ok {
+		out = append(out, done)
 	}
 	return out
 }

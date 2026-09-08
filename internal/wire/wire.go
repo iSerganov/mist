@@ -17,7 +17,7 @@ const (
 	EphemeralPubSize = 32
 	NonceSize        = 12
 	TagSize          = 16
-	EnvelopePrefix   = EphemeralPubSize + NonceSize
+	EnvelopePrefix   = EphemeralPubSize + LengthSize + NonceSize
 	EnvelopeOverhead = EnvelopePrefix + TagSize
 )
 
@@ -30,10 +30,15 @@ type Payload struct {
 }
 
 // Envelope is the hybrid-encryption box embedded in one stego frame.
+// MaskedLen is the ciphertext length XORed with a subkey derived from the
+// ECDH shared secret: the recipient learns exactly how many bytes to read,
+// while an observer holding only the (public) recipient key sees noise.
+// Body holds that ciphertext followed by constant-density filler.
 type Envelope struct {
 	EphemeralPub [EphemeralPubSize]byte
+	MaskedLen    [LengthSize]byte
 	Nonce        [NonceSize]byte
-	Ciphertext   []byte
+	Body         []byte
 }
 
 // MarshalPayload encodes version, type, big-endian length, data, and optional signature.
@@ -89,10 +94,11 @@ func UnmarshalPayload(b []byte) (Payload, error) {
 
 // Marshal encodes the outer envelope as a single byte string for embedding.
 func (e Envelope) Marshal() []byte {
-	out := make([]byte, EnvelopePrefix+len(e.Ciphertext))
-	copy(out[0:EphemeralPubSize], e.EphemeralPub[:])
-	copy(out[EphemeralPubSize:EnvelopePrefix], e.Nonce[:])
-	copy(out[EnvelopePrefix:], e.Ciphertext)
+	out := make([]byte, EnvelopePrefix+len(e.Body))
+	n := copy(out, e.EphemeralPub[:])
+	n += copy(out[n:], e.MaskedLen[:])
+	n += copy(out[n:], e.Nonce[:])
+	copy(out[n:], e.Body)
 	return out
 }
 
@@ -102,9 +108,10 @@ func UnmarshalEnvelope(b []byte) (Envelope, error) {
 		return Envelope{}, ErrShort
 	}
 	var env Envelope
-	copy(env.EphemeralPub[:], b[:EphemeralPubSize])
-	copy(env.Nonce[:], b[EphemeralPubSize:EnvelopePrefix])
-	env.Ciphertext = append([]byte(nil), b[EnvelopePrefix:]...)
+	n := copy(env.EphemeralPub[:], b)
+	n += copy(env.MaskedLen[:], b[n:])
+	n += copy(env.Nonce[:], b[n:])
+	env.Body = append([]byte(nil), b[n:]...)
 	return env, nil
 }
 

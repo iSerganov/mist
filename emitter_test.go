@@ -18,17 +18,11 @@ import (
 )
 
 type EmitterSuite struct {
-	suite.Suite
+	audioSuite
 }
 
 func TestEmitterSuite(t *testing.T) {
 	suite.Run(t, &EmitterSuite{})
-}
-
-func (s *EmitterSuite) requireLibav() {
-	if !av.Available() {
-		s.T().Skip("libav Vorbis encoder not available")
-	}
 }
 
 func (s *EmitterSuite) TestNewEmitterRejectsNilKey() {
@@ -282,54 +276,4 @@ func (s *EmitterSuite) TestEmbedRejectsUnknownScheme() {
 	s.Error(err)
 }
 
-func (s *EmitterSuite) makeCarrier() []byte {
-	s.T().Helper()
-	c := vorbis.New()
-	enc, err := c.NewEncoder(codec.DefaultVorbis)
-	s.Require().NoError(err)
-	defer enc.Close()
-	info := enc.(interface{ Params() codec.Params }).Params()
-	pcm := testSine(44100, 2, 44100*8, 440) // 8s — one protocol frame
-	pkts, err := enc.Encode(pcm)
-	s.Require().NoError(err)
-	fl, err := enc.Flush()
-	s.Require().NoError(err)
-	pkts = append(pkts, fl...)
-	rc, err := muxPackets(info, pkts)
-	s.Require().NoError(err)
-	defer rc.Close()
-	b, err := io.ReadAll(rc)
-	s.Require().NoError(err)
-	return b
-}
-
-func (s *EmitterSuite) writeTemp(b []byte) string {
-	s.T().Helper()
-	f, err := os.CreateTemp(s.T().TempDir(), "mist-*.ogg")
-	s.Require().NoError(err)
-	_, err = f.Write(b)
-	s.Require().NoError(err)
-	s.Require().NoError(f.Close())
-	return f.Name()
-}
-
-func testSine(rate, ch, n int, freq float64) codec.PCM {
-	planes := make([][]float32, ch)
-	for c := 0; c < ch; c++ {
-		planes[c] = make([]float32, n)
-		for i := 0; i < n; i++ {
-			planes[c][i] = float32(sineAt(freq, float64(i), float64(rate)))
-		}
-	}
-	return codec.PCM{
-		Planes:     planes,
-		NbSamples:  n,
-		Channels:   ch,
-		SampleRate: rate,
-		Format:     codec.SampleFmtFLTP,
-	}
-}
-
-func sineAt(freq, i, rate float64) float64 {
-	return 0.2 * (2*(((i*freq/rate)+0.25)-float64(int((i*freq/rate)+0.25))) - 1)
-}
+func (s *EmitterSuite) makeCarrier() []byte { return s.carrier(FrameDuration) }

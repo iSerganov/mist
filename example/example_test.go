@@ -30,6 +30,8 @@ func Example_emitter() {
 	// Output: true
 }
 
+// A finite file ends by itself; a live stream runs until the context is
+// cancelled. The caller tells the two apart with ctx.Err() afterwards.
 func Example_catcher() {
 	_, priv, err := mist.GenerateKeyPair()
 	if err != nil {
@@ -39,12 +41,18 @@ func Example_catcher() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	ctx := context.Background()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	ch, err := catcher.Listen(ctx, "/path/to/recording.ogg")
 	if err != nil {
-		_ = err
-		return
+		return // unreadable source or malformed key
 	}
-	for range ch {
+	for result := range ch {
+		fmt.Println("frame", result.FrameIdx, string(result.Payload.Data))
+	}
+	if ctx.Err() != nil {
+		fmt.Println("stopped by caller")
 	}
 }

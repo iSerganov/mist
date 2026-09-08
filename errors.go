@@ -13,6 +13,3 @@ var (
 	ErrCarrier          = errors.New("mist: unreadable carrier")
 	ErrClosed           = errors.New("mist: already closed")
 )
-
-// errUnimplemented is returned by stubs until the corresponding layer is filled in.
-var errUnimplemented = errors.New("mist: unimplemented")

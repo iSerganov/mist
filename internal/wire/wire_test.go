@@ -17,7 +17,7 @@ func TestWireSuite(t *testing.T) {
 
 func (s *WireSuite) TestSizes() {
 	s.Equal(6, PayloadHeaderSize)
-	s.Equal(EphemeralPubSize+NonceSize, EnvelopePrefix)
+	s.Equal(EphemeralPubSize+LengthSize+NonceSize, EnvelopePrefix)
 	s.Equal(EnvelopePrefix+TagSize, EnvelopeOverhead)
 	s.Equal(64, SignatureSize)
 }
@@ -118,25 +118,38 @@ func (s *WireSuite) TestUnmarshalPayloadDoesNotAliasInput() {
 func (s *WireSuite) TestEnvelopeRoundTrip() {
 	tests := []struct {
 		title string
-		ct    []byte
+		body  []byte
 	}{
 		{"tag only", bytes.Repeat([]byte{0x11}, TagSize)},
 		{"short message", append(bytes.Repeat([]byte{0x22}, 8), bytes.Repeat([]byte{0x33}, TagSize)...)},
 		{"longer", bytes.Repeat([]byte{0x44}, 64+TagSize)},
+		{"body with filler past the ciphertext", bytes.Repeat([]byte{0x55}, 4*TagSize)},
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
 			var env Envelope
 			copy(env.EphemeralPub[:], bytes.Repeat([]byte{0xaa}, EphemeralPubSize))
+			copy(env.MaskedLen[:], []byte{0x01, 0x02, 0x03, 0x04})
 			copy(env.Nonce[:], bytes.Repeat([]byte{0xbb}, NonceSize))
-			env.Ciphertext = tc.ct
+			env.Body = tc.body
 			got, err := UnmarshalEnvelope(env.Marshal())
 			s.Require().NoError(err)
 			s.Equal(env.EphemeralPub, got.EphemeralPub)
+			s.Equal(env.MaskedLen, got.MaskedLen)
 			s.Equal(env.Nonce, got.Nonce)
-			s.Equal(tc.ct, got.Ciphertext)
+			s.Equal(tc.body, got.Body)
 		})
 	}
+}
+
+func (s *WireSuite) TestEnvelopeDoesNotAliasInput() {
+	var env Envelope
+	env.Body = bytes.Repeat([]byte{0x01}, TagSize)
+	raw := env.Marshal()
+	got, err := UnmarshalEnvelope(raw)
+	s.Require().NoError(err)
+	raw[EnvelopePrefix] = 0xff
+	s.Equal(byte(0x01), got.Body[0])
 }
 
 func (s *WireSuite) TestUnmarshalEnvelopeRejects() {

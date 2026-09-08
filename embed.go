@@ -104,64 +104,70 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, params codec.Para
 		return nil, fmt.Errorf("%w: setup", err)
 	}
 	_ = extra
-	frames := frame.Split(pcm.NbSamples, frame.Params{
-		SampleRate: pcm.SampleRate,
-		Channels:   pcm.Channels,
-		Duration:   FrameDuration,
-	})
-	if len(frames) == 0 {
+	pkts, err := enc.Encode(pcm)
+	if err != nil {
+		return nil, err
+	}
+	flushed, err := enc.Flush()
+	if err != nil {
+		return nil, err
+	}
+	groups := frame.GroupPackets(append(pkts, flushed...), frameParams(pcm))
+	if len(groups) == 0 {
 		return nil, ErrCarrier
 	}
-	frames = mergeTrailingCrumb(frames)
-	var all []codec.Packet
-	for i, fr := range frames {
+	all := make([]codec.Packet, 0, len(pkts)+len(flushed))
+	for _, g := range groups {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		slice := slicePCM(pcm, fr.PCMStart, fr.PCMEnd)
-		pkts, err := enc.Encode(slice)
+		out, err := e.embedGroup(vc, g, plain)
 		if err != nil {
 			return nil, err
 		}
-		if i == len(frames)-1 {
-			flushed, err := enc.Flush()
-			if err != nil {
-				return nil, err
-			}
-			pkts = append(pkts, flushed...)
-		}
-		// A trailing frame can be a handful of decoder priming/padding
-		// samples rather than genuine audio (libav's Vorbis round trip
-		// adds a little), too small to hold even the envelope. Pass it
-		// through unmodified: the payload is still recoverable from every
-		// full-sized frame, and there's no way to make a frame this small
-		// look like a real one regardless of what's embedded in it.
-		frameCap, err := stego.Capacity(vc, pkts)
-		if err != nil && !errors.Is(err, stego.ErrNoResidues) {
-			return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
-		}
-		if err != nil || frameCap < EnvelopeOverhead {
-			all = append(all, pkts...)
-			continue
-		}
-		env, err := crypto.Seal(plain, e.pub)
-		if err != nil {
-			return nil, err
-		}
-		pos, err := crypto.PositionSeed(e.pub, fr.Index)
-		if err != nil {
-			return nil, err
-		}
-		pkts, err = stego.Apply(vc, pos, pkts, env.Marshal())
-		if err != nil {
-			if errors.Is(err, stego.ErrCapacity) {
-				return nil, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
-			}
-			return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
-		}
-		all = append(all, pkts...)
+		all = append(all, out...)
 	}
 	return muxPackets(info, all)
+}
+
+// embedGroup seals a fresh envelope for one frame and writes it into that
+// frame's packets. A frame with no room for even the envelope — a trailing
+// sliver of encoder padding — passes through untouched; the payload is
+// still carried by every full-sized frame.
+func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plain []byte) ([]codec.Packet, error) {
+	room, err := stego.Capacity(vc, g.Packets)
+	switch {
+	case errors.Is(err, stego.ErrNoResidues):
+		return g.Packets, nil
+	case err != nil:
+		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+	case room < EnvelopeOverhead:
+		return g.Packets, nil
+	}
+	env, err := crypto.Seal(plain, e.pub)
+	if err != nil {
+		return nil, err
+	}
+	pos, err := crypto.PositionSeed(e.pub, g.Index)
+	if err != nil {
+		return nil, err
+	}
+	out, err := stego.Apply(vc, pos, g.Packets, env.Marshal())
+	if errors.Is(err, stego.ErrCapacity) {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+	}
+	return out, nil
+}
+
+func frameParams(pcm codec.PCM) frame.Params {
+	return frame.Params{
+		SampleRate: pcm.SampleRate,
+		Channels:   pcm.Channels,
+		Duration:   FrameDuration,
+	}
 }
 
 func decodeCarrier(r io.Reader) (codec.PCM, codec.Params, []byte, error) {
@@ -188,6 +194,9 @@ func decodeCarrierURL(source string) (codec.PCM, codec.Params, []byte, error) {
 
 func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, codec.Params, []byte, error) {
 	info := d.Info()
+	if info.CodecID == av.CodecIDNone {
+		return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: carrier codec", ErrUnsupportedCodec)
+	}
 	dec, err := av.NewDecoder(info)
 	if err != nil {
 		return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: decoder", ErrCarrier)
@@ -289,62 +298,6 @@ func frameToPCM(f av.Frame) codec.PCM {
 		SampleRate: f.SampleRate,
 		Format:     f.Format,
 		PTS:        f.PTS,
-	}
-}
-
-// crumbSamples bounds a trailing frame libav's own encode/decode round
-// trip can leave behind (priming/lookahead, typically well under a
-// couple thousand samples) — not genuine trailing audio. Merging it into
-// the previous frame keeps a carrier that is an exact multiple of
-// FrameDuration from spuriously growing an extra, near-empty stego frame
-// with no room for even the protocol envelope.
-const crumbSamples = 4096
-
-// mergeTrailingCrumb folds a final frame shorter than crumbSamples into
-// the one before it, when there is a previous frame to fold into.
-func mergeTrailingCrumb(frames []frame.Frame) []frame.Frame {
-	if len(frames) < 2 {
-		return frames
-	}
-	last := frames[len(frames)-1]
-	if last.PCMEnd-last.PCMStart >= crumbSamples {
-		return frames
-	}
-	frames = frames[:len(frames)-1]
-	prev := &frames[len(frames)-1]
-	prev.PCMEnd = last.PCMEnd
-	prev.Duration += last.Duration
-	return frames
-}
-
-func slicePCM(p codec.PCM, start, end int) codec.PCM {
-	if start < 0 {
-		start = 0
-	}
-	if end > p.NbSamples {
-		end = p.NbSamples
-	}
-	if end < start {
-		end = start
-	}
-	n := end - start
-	planes := make([][]float32, len(p.Planes))
-	for i, pl := range p.Planes {
-		if start < len(pl) {
-			e := end
-			if e > len(pl) {
-				e = len(pl)
-			}
-			planes[i] = pl[start:e]
-		}
-	}
-	return codec.PCM{
-		Planes:     planes,
-		NbSamples:  n,
-		Channels:   p.Channels,
-		SampleRate: p.SampleRate,
-		Format:     codec.SampleFmtFLTP,
-		PTS:        int64(start),
 	}
 }
 

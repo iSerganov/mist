@@ -37,7 +37,7 @@ func (s *PayloadSuite) TestProtocolConstants() {
 	s.Equal(byte(1), Version)
 	s.Equal(32, PublicKeySize)
 	s.Equal(32, PrivateKeySize)
-	s.Equal(PublicKeySize+NonceSize+TagSize, EnvelopeOverhead)
+	s.Equal(PublicKeySize+LengthSize+NonceSize+TagSize, EnvelopeOverhead)
 	s.Equal(8*time.Second, FrameDuration)
 }
 

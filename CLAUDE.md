@@ -21,22 +21,28 @@ FrameCapacity() int
 WithSenderAuth(senderPriv []byte) EmitterOption
 WithMaxRetries(n int) CatcherOption
 WithBackoff(d time.Duration) CatcherOption
+WithLogger(*slog.Logger) CatcherOption   // diagnostics only; never decrypt failures
 ```
 
-`Listen` / `Embed` `source` is a path, `file://` URL, or `http(s)://` URL. Finite files close the channel on EOF; live streams run until `ctx` is cancelled. Distinguish with `ctx.Err()` after range. `Catcher` and `Emitter` copy keys at construction; do not add setters. Embed methods return `io.ReadCloser` (no `mist.Reader` type); the caller must Close it.
+`Listen` / `Embed` `source` is a path, `file://` URL, or `http(s)://` URL. Finite files close the channel on EOF; live streams run until `ctx` is cancelled. Distinguish with `ctx.Err()` after range. A `Listen` called with an already-cancelled context returns a closed channel and no error. `Catcher` and `Emitter` copy keys at construction; do not add setters. Embed methods return `io.ReadCloser` (no `mist.Reader` type); the caller must Close it.
 
-Do not add `ErrNoMessage`. Failed AEAD / wrong phase / empty frame are the same silent skip. Exposing "something was there but I could not decrypt" is a side channel.
+Do not add `ErrNoMessage`. Failed AEAD / partial frame / empty frame are the same silent skip. Exposing "something was there but I could not decrypt" is a side channel.
+
+**Formats.** Output is always Ogg Vorbis — the payload lives in Vorbis residues. Carriers are decoded to PCM and re-encoded, so input need not be Ogg, but `internal/av` maps only Vorbis / MP3 / AAC / PCM s16le; anything else is `ErrUnsupportedCodec` (widen the switch in `cgo.c` to add more). Extraction is Vorbis-only and never re-encodes.
 
 ## Layout
 
 ```
 emitter.go        NewEmitter, Embed / EmbedReader / EmbedFile → io.ReadCloser
-catcher.go        NewCatcher, Listen / ListenReader / Extract
+embed.go          carrier decode, frame loop, mux; FrameCapacity
+catcher.go        NewCatcher, Listen / ListenReader / Extract, options
+extract.go        scanner: packets → groups → authenticated Results
+suite_test.go     shared test fixtures (audioSuite) for both root suites
 example/          Godoc examples: keys, Emitter, Catcher
 mist.go-level     payload, keys, protocol constants, errors
 internal/crypto   X25519 ECDH, HKDF, ChaCha20-Poly1305, optional Ed25519
 internal/wire     inner payload framing + outer envelope bytes
-internal/frame    stego-frame duration, split, Listen phase search, capacity
+internal/frame    stego-frame duration, packet grouping, capacity
 internal/stego    LSB matching, keyed positions, constant density, Embedder/Extractor
 internal/codec    Codec / Encoder / Decoder / Packet / Residue interfaces
 internal/codec/vorbis  Phase 1 codec; residue parse stops before iMDCT
@@ -50,9 +56,15 @@ Root must not import C. Only `internal/av` may use cgo. Crypto and framing must 
 Hybrid box, age/NaCl shape, **fresh ephemeral X25519 per stego frame**:
 
 1. ECDH(ephemeral_priv, recipient_pub) → shared
-2. HKDF(shared) → AEAD key **and** an independent position-selection key
+2. HKDF(shared) → AEAD key, an independent position-selection key, and a length mask
 3. ChaCha20-Poly1305 seal
-4. embed `[ephemeral_pub || nonce || ciphertext||tag]`
+4. embed `[ephemeral_pub || masked_len u32be || nonce || ciphertext||tag || filler]`
+
+`masked_len` is the ciphertext length XORed with the length subkey. It tells the
+recipient exactly how many bytes to read instead of searching for the end, and it
+must stay masked: `PositionSeed` derives from the **public** recipient key, so a
+warden who knows that key can locate the bits — a cleartext length there would be
+a presence test. Everything after the ciphertext is constant-density filler.
 
 Inner plaintext (all encrypted):
 
@@ -62,7 +74,7 @@ version u8 | type u8 | length u32be | data | optional Ed25519 sig
 
 Types: `0x01` text, `0x02` image, `0x03` audio, `0x04` file. Phase 1 uses text only; do not change this layout for later types.
 
-Implemented in `internal/crypto` + `internal/wire`. HKDF-SHA256 salt `mist-v1`, info `mist-aead-v1` / `mist-pos-v1` (32 bytes each). Seal AAD is the ephemeral public key. `Open` / AEAD failures are always `crypto.ErrOpen`. Wire version is `1`; optional Ed25519 sig is exactly 64 bytes after `data`.
+Implemented in `internal/crypto` + `internal/wire`. HKDF-SHA256 salt `mist-v1`, info `mist-aead-v1` / `mist-pos-v1` (32 bytes each) and `mist-len-v1` (4 bytes). `PositionSeed(pub, frameIdx)` keys positions from the recipient public key plus the frame index, which the catcher recovers from packet timestamps. Seal AAD is the ephemeral public key. `Open` / AEAD failures are always `crypto.ErrOpen`. Wire version is `1`; optional Ed25519 sig is exactly 64 bytes after `data`.
 
 ## Stego invariants
 
@@ -70,7 +82,10 @@ Implemented in `internal/crypto` + `internal/wire`. HKDF-SHA256 salt `mist-v1`, 
 - **Constant density** (`stego.Density`): every encode perturbs the same fraction of eligible high-frequency residues. Short/empty payloads get CSPRNG filler. Presence and absence must have the same footprint.
 - **LSB matching** (`±1`), never LSB replacement.
 - Extract from the bitstream: Huffman/codebook decode only. No PCM reanalysis.
-- No sync marker. `FrameDuration` (8s) is a protocol constant shared by Embed and Listen. Phase search uses AEAD as the oracle.
+- LSB matching may only move a residue onto a codebook entry of the **same Huffman code length**. Vorbis treats running out of bits mid-partition as "rest is zero", so a different length shifts that boundary and desyncs every symbol after it. Residues with no same-length, opposite-parity sibling are marked `Unflippable` and excluded from `Eligible`.
+- No sync marker. `FrameDuration` (8s) is a protocol constant shared by Embed and Listen.
+- **Frames are grouped in the packet domain** (`frame.Grouper`, by packet PTS), never by re-slicing PCM. Embed and Listen must derive byte-identical packet sets: one packet's difference changes the eligible count and scrambles every position. Emitter therefore encodes the carrier once, then groups.
+- A listener that joins mid-window cannot align, so it logs once and skips that frame. There is no phase search.
 - Loop the same payload every frame on live streams; new ephemeral key each frame so ciphertext is not periodic.
 - Phase 1 owns the full encode path. No embedding into third-party already-encoded files.
 
@@ -95,7 +110,19 @@ Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `C
 
 ## Status
 
-`internal/crypto` and `internal/wire` are implemented. `internal/av` talks to real libav (PCM encode/decode, Ogg mux/demux). `internal/codec/vorbis` parses setup/codebooks and rewrites residue VQ entries for stego. `internal/stego` and `internal/frame` are implemented. `Emitter` embeds text; `Catcher.Extract` verifies. `Catcher.Listen` is still a stub.
+Phase 1 is feature-complete end to end. All internal packages are implemented; `Emitter` embeds text into every whole frame and `Catcher` recovers it via `Listen` / `ListenReader` / `Extract`, including multi-frame carriers. Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic that ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time); `Embed` over `http(s)` buffers a finite file rather than streaming a live source.
+
+## Design principles
+
+Follow these without being asked; they are why review comments get made.
+
+- **Single responsibility.** One package owns one idea: `frame` owns what a stego frame *is*, `stego` owns positions and density, `crypto` owns keys, `wire` owns byte layout, `av` owns libav. When two layers must agree on something (frame boundaries), give them one shared function rather than two implementations that happen to match.
+- **Policy lives above mechanism.** `internal/av` reports facts (codec is `NONE`); the `mist` layer decides that means `ErrUnsupportedCodec`. Do not push stego or protocol policy into the bindings.
+- **Depend on small consumer-side interfaces** (`rewriter`, `Embedder`, `Codec`), not on concrete types. Inject collaborators — the logger arrives via `WithLogger`, defaulted to discard, never grabbed from a global.
+- **Delete rather than deprecate.** No compatibility shims, no `_ = unused`, no renamed-but-kept helpers. If it is dead, remove it.
+- **Prefer fewer moving parts.** Encode once and group, rather than slicing and re-encoding per frame. A magic constant that needs a paragraph to justify is usually a design smell — the trailing-crumb threshold disappeared when grouping moved to the packet domain.
+- **Comment the why, never the what.** Most functions need none. Comment invariants a reader would otherwise break (why code length must be preserved, why the length field is masked).
+- **Errors:** wrap with `%w`, sentinels in `errors.go`, and never leak "something was there but I couldn't read it" to a caller.
 
 ## Conventions
 
@@ -104,6 +131,8 @@ Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `C
 - Doc comments on every exported name, at most five lines. Wrap errors with `%w`.
 - Small interfaces at the consumer (`Embedder`, `Codec`). One-method names end in `-er`.
 - Tests use `github.com/stretchr/testify/suite`: one `*Suite` struct per `_test.go` file, `TestXxxSuite` entry point, every case a method. Assertions via `s.Equal` / `s.NoError` / `s.Require()`. Same package as the code under test (gocue style).
+- **Table-driven cases inside suite methods**: a `tests := []struct{ title string; ... }` slice plus `s.Run(tc.title, ...)`. Shared fixtures go on an embedded base suite (`audioSuite`), not copied between files.
+- Test the invariant, not the implementation: assert that a wrong key yields nothing, that every whole frame carries the payload, that the length field differs for equal payloads.
 - Skipped tests are the spec for the next implementation pass — fill them, do not delete them.
 - Lint with `make lint` (`golangci-lint run --timeout=5m`). CI is `.github/workflows/ci.yml`, copied from gocue: golangci-lint-action v9 / linter v2.11.4, then `go test -race` with a coverage badge on the `badges` branch. No `.golangci.yml` — default v2 config, same as gocue. CI installs libav + libvorbis so cgo lint and tests compile.
 

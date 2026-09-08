@@ -24,9 +24,13 @@ const (
 	TagSize   = 16
 )
 
-// EnvelopeOverhead is the number of bytes added by hybrid encryption
-// before embedding: ephemeral public key + nonce + Poly1305 tag.
-const EnvelopeOverhead = PublicKeySize + NonceSize + TagSize
+// LengthSize is the masked ciphertext-length field that lets a receiver
+// read exactly the right number of bytes instead of searching for the end.
+const LengthSize = 4
+
+// EnvelopeOverhead is the number of bytes added by hybrid encryption before
+// embedding: ephemeral public key + masked length + nonce + Poly1305 tag.
+const EnvelopeOverhead = PublicKeySize + LengthSize + NonceSize + TagSize
 
 // FrameDuration is the fixed stego-frame length. Embed loops the payload
 // across consecutive frames of this duration; Listen uses the same value

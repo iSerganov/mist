@@ -31,12 +31,14 @@ const (
 	hkdfSalt = "mist-v1"
 	infoAEAD = "mist-aead-v1"
 	infoPos  = "mist-pos-v1"
+	infoLen  = "mist-len-v1"
 )
 
 // Derived is the HKDF split of one ECDH shared secret.
 type Derived struct {
 	AEAD     []byte
 	Position []byte
+	Length   []byte
 }
 
 // GenerateX25519 creates a recipient or ephemeral X25519 keypair.
@@ -80,7 +82,26 @@ func DeriveKeys(shared []byte) (Derived, error) {
 	if err != nil {
 		return Derived{}, fmt.Errorf("crypto: hkdf position: %w", err)
 	}
-	return Derived{AEAD: aead, Position: pos}, nil
+	mask, err := hkdf.Key(sha256.New, shared, salt, infoLen, wire.LengthSize)
+	if err != nil {
+		return Derived{}, fmt.Errorf("crypto: hkdf length: %w", err)
+	}
+	return Derived{AEAD: aead, Position: pos, Length: mask}, nil
+}
+
+// maskLength XORs the big-endian ciphertext length with the derived length
+// subkey. It is its own inverse: only the private key holder can read how
+// many ciphertext bytes follow the prefix.
+func maskLength(mask []byte, b [wire.LengthSize]byte) [wire.LengthSize]byte {
+	for i := range b {
+		b[i] ^= mask[i]
+	}
+	return b
+}
+
+func lengthBytes(n uint32) (b [wire.LengthSize]byte) {
+	binary.BigEndian.PutUint32(b[:], n)
+	return b
 }
 
 // Seal encrypts plaintext for recipientPub and returns a wire envelope.
@@ -113,7 +134,7 @@ func SealDerived(plaintext, recipientPub []byte) (*wire.Envelope, Derived, error
 		return nil, Derived{}, fmt.Errorf("crypto: nonce: %w", err)
 	}
 	ct := aead.Seal(nil, nonce[:], plaintext, ephPub)
-	env := &wire.Envelope{Ciphertext: ct}
+	env := &wire.Envelope{Body: ct, MaskedLen: maskLength(keys.Length, lengthBytes(uint32(len(ct))))}
 	copy(env.EphemeralPub[:], ephPub)
 	env.Nonce = nonce
 	return env, keys, nil
@@ -162,7 +183,12 @@ func Open(env *wire.Envelope, recipientPriv []byte) ([]byte, error) {
 	if err != nil {
 		return nil, ErrOpen
 	}
-	plain, err := aead.Open(nil, env.Nonce[:], env.Ciphertext, env.EphemeralPub[:])
+	raw := maskLength(keys.Length, env.MaskedLen)
+	n := binary.BigEndian.Uint32(raw[:])
+	if n < wire.TagSize || uint64(n) > uint64(len(env.Body)) {
+		return nil, ErrOpen
+	}
+	plain, err := aead.Open(nil, env.Nonce[:], env.Body[:n], env.EphemeralPub[:])
 	if err != nil {
 		return nil, ErrOpen
 	}
