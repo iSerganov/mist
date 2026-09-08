@@ -248,6 +248,56 @@ func (s *CatcherSuite) TestListenStopsWhenContextEnds() {
 	s.Error(ctx.Err())
 }
 
+// A demuxer read already in flight cannot be interrupted, so relay is what
+// keeps Listen's promise: cancel must close the channel even while the scan
+// behind it is parked, or a caller ranging over a quiet live stream hangs
+// until the server speaks again.
+func (s *CatcherSuite) TestRelayClosesOnCancel() {
+	tests := []struct {
+		title  string
+		source func() chan Result
+	}{
+		{"scan parked, nothing to send", func() chan Result { return make(chan Result) }},
+		{"scan has a pending result", func() chan Result {
+			ch := make(chan Result, 1)
+			ch <- Result{Payload: Text("pending")}
+			return ch
+		}},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			out := relay(ctx, tc.source())
+			cancel()
+
+			drained := make(chan struct{})
+			go func() {
+				defer close(drained)
+				for range out {
+				}
+			}()
+			select {
+			case <-drained:
+			case <-time.After(5 * time.Second):
+				s.FailNow("relay kept the channel open after cancel")
+			}
+		})
+	}
+}
+
+func (s *CatcherSuite) TestRelayForwardsUntilSourceCloses() {
+	in := make(chan Result, 2)
+	in <- Result{Payload: Text("one"), FrameIdx: 0}
+	in <- Result{Payload: Text("two"), FrameIdx: 1}
+	close(in)
+
+	var got []string
+	for r := range relay(context.Background(), in) {
+		got = append(got, string(r.Payload.Data))
+	}
+	s.Equal([]string{"one", "two"}, got)
+}
+
 // A listener that joins mid-frame cannot align to the emitter's window, so
 // it says so once and skips that frame rather than failing silently.
 func (s *CatcherSuite) TestJoinMidStreamLogsAndSkips() {

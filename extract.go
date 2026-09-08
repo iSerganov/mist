@@ -103,39 +103,69 @@ func (s *scanner) open(g frame.Group) (Result, bool) {
 }
 
 // stream drains d in the background, emitting one Result per frame that
-// decrypts. It owns d and closes it when the channel closes.
+// decrypts. It owns d and closes it when the scan ends.
+//
+// A demuxer read already in flight cannot be interrupted — a live source
+// may sit inside libav until the server sends more — so the scan is
+// relayed through a second channel. That keeps the promise callers rely
+// on: the channel they range over closes as soon as ctx does, whatever
+// the reader is still waiting for.
 func (c *Catcher) stream(ctx context.Context, d *av.Demuxer) (<-chan Result, error) {
 	sc, err := newScanner(c.priv, d.Info(), c.logger())
 	if err != nil {
 		_ = d.Close()
 		return nil, err
 	}
+	scanned := make(chan Result)
+	go c.scan(ctx, d, sc, scanned)
+	return relay(ctx, scanned), nil
+}
+
+// relay forwards results until in closes or ctx ends, closing its own
+// channel either way. It is what lets Listen honour cancellation while the
+// scan behind it is still parked inside a blocking read.
+func relay(ctx context.Context, in <-chan Result) <-chan Result {
 	out := make(chan Result)
 	go func() {
 		defer close(out)
-		defer func() { _ = d.Close() }()
-		r := retrier{left: c.maxRetries, backoff: c.backoff}
-		for ctx.Err() == nil {
-			pkt, err := d.NextPacket()
-			if errors.Is(err, av.ErrEOF) {
-				if res, ok := sc.flush(); ok {
-					send(ctx, out, res)
-				}
-				return
-			}
-			if err != nil {
-				if !r.wait(ctx) {
+		for {
+			select {
+			case res, ok := <-in:
+				if !ok || !send(ctx, out, res) {
 					return
 				}
-				continue
-			}
-			r.reset(c.maxRetries)
-			if res, ok := sc.push(av.ToCodecPacket(pkt)); ok && !send(ctx, out, res) {
+			case <-ctx.Done():
 				return
 			}
 		}
 	}()
-	return out, nil
+	return out
+}
+
+func (c *Catcher) scan(ctx context.Context, d *av.Demuxer, sc *scanner, out chan<- Result) {
+	defer close(out)
+	defer func() { _ = d.Close() }()
+
+	r := retrier{left: c.maxRetries, backoff: c.backoff}
+	for ctx.Err() == nil {
+		pkt, err := d.NextPacket()
+		if errors.Is(err, av.ErrEOF) {
+			if res, ok := sc.flush(); ok {
+				send(ctx, out, res)
+			}
+			return
+		}
+		if err != nil {
+			if !r.wait(ctx) {
+				return
+			}
+			continue
+		}
+		r.reset(c.maxRetries)
+		if res, ok := sc.push(av.ToCodecPacket(pkt)); ok && !send(ctx, out, res) {
+			return
+		}
+	}
 }
 
 func send(ctx context.Context, ch chan<- Result, r Result) bool {

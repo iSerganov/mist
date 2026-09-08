@@ -117,49 +117,56 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, params codec.Para
 		return nil, ErrCarrier
 	}
 	all := make([]codec.Packet, 0, len(pkts)+len(flushed))
+	embedded := 0
 	for _, g := range groups {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		out, err := e.embedGroup(vc, g, plain)
+		out, ok, err := e.embedGroup(vc, g, plain)
 		if err != nil {
 			return nil, err
 		}
+		if ok {
+			embedded++
+		}
 		all = append(all, out...)
+	}
+	if embedded == 0 {
+		return nil, fmt.Errorf("%w: %d bytes needed", ErrNoCapacity, len(plain)+EnvelopeOverhead)
 	}
 	return muxPackets(info, all)
 }
 
 // embedGroup seals a fresh envelope for one frame and writes it into that
-// frame's packets. A frame with no room for even the envelope — a trailing
-// sliver of encoder padding — passes through untouched; the payload is
-// still carried by every full-sized frame.
-func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plain []byte) ([]codec.Packet, error) {
+// frame's packets, reporting whether the payload landed. A frame with no
+// room for even the envelope — a trailing sliver of encoder padding, or
+// audio too quiet to yield residues — passes through untouched.
+func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plain []byte) ([]codec.Packet, bool, error) {
 	room, err := stego.Capacity(vc, g.Packets)
 	switch {
 	case errors.Is(err, stego.ErrNoResidues):
-		return g.Packets, nil
+		return g.Packets, false, nil
 	case err != nil:
-		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
-	case room < EnvelopeOverhead:
-		return g.Packets, nil
+		return nil, false, fmt.Errorf("%w: %v", ErrCarrier, err)
+	case room < EnvelopeOverhead+len(plain):
+		return g.Packets, false, nil
 	}
 	env, err := crypto.Seal(plain, e.pub)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	pos, err := crypto.PositionSeed(e.pub, g.Index)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out, err := stego.Apply(vc, pos, g.Packets, env.Marshal())
 	if errors.Is(err, stego.ErrCapacity) {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
+		return nil, false, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return nil, false, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
-	return out, nil
+	return out, true, nil
 }
 
 func frameParams(pcm codec.PCM) frame.Params {

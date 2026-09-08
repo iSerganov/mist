@@ -12,4 +12,8 @@ var (
 	ErrUnsupportedCodec = errors.New("mist: unsupported codec")
 	ErrCarrier          = errors.New("mist: unreadable carrier")
 	ErrClosed           = errors.New("mist: already closed")
+	// ErrNoCapacity means no frame in the carrier had room for the
+	// envelope, so nothing was embedded. Quiet or tonal audio yields too
+	// few usable residues; a richer or longer carrier fixes it.
+	ErrNoCapacity = errors.New("mist: carrier has no frame with room for the payload")
 )

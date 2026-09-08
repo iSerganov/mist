@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,6 +275,31 @@ func (s *EmitterSuite) TestEmbedRejectsUnknownScheme() {
 	s.Require().NoError(err)
 	_, err = em.Embed(context.Background(), "http://127.0.0.1:1/does-not-exist.ogg", Text("x"))
 	s.Error(err)
+}
+
+// Skipping a frame with no room is right for a trailing sliver, but a
+// carrier where every frame is skipped means nothing was embedded at all,
+// and the caller must hear about it rather than get a silent no-op file.
+func (s *EmitterSuite) TestEmbedRejectsCarrierWithoutCapacity() {
+	s.requireLibav()
+	pub, _, err := GenerateKeyPair()
+	s.Require().NoError(err)
+	em, err := NewEmitter(pub)
+	s.Require().NoError(err)
+
+	tests := []struct {
+		title   string
+		payload Payload
+	}{
+		{"payload larger than any frame", Text(strings.Repeat("x", 1<<20))},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			_, err := em.EmbedReader(context.Background(),
+				bytes.NewReader(s.carrier(FrameDuration)), tc.payload)
+			s.ErrorIs(err, ErrNoCapacity)
+		})
+	}
 }
 
 func (s *EmitterSuite) makeCarrier() []byte { return s.carrier(FrameDuration) }

@@ -26,13 +26,16 @@ WithLogger(*slog.Logger) CatcherOption   // diagnostics only; never decrypt fail
 
 `Listen` / `Embed` `source` is a path, `file://` URL, or `http(s)://` URL. Finite files close the channel on EOF; live streams run until `ctx` is cancelled. Distinguish with `ctx.Err()` after range. A `Listen` called with an already-cancelled context returns a closed channel and no error. `Catcher` and `Emitter` copy keys at construction; do not add setters. Embed methods return `io.ReadCloser` (no `mist.Reader` type); the caller must Close it.
 
-Do not add `ErrNoMessage`. Failed AEAD / partial frame / empty frame are the same silent skip. Exposing "something was there but I could not decrypt" is a side channel.
+Do not add `ErrNoMessage`. Failed AEAD / partial frame / empty frame are the same silent skip. Exposing "something was there but I could not decrypt" is a side channel. `ErrNoCapacity` is the opposite case and *must* be loud: it means the Emitter embedded into no frame at all, so the caller would otherwise get a silent no-op file. Telling the sender its own request failed leaks nothing to a warden.
+
+A demuxer read already in flight cannot be interrupted, so `Listen` relays the scan through a second channel (`relay`): the channel the caller ranges over closes as soon as `ctx` does, while the scan goroutine ends when its blocked read finally returns. `ListenReader` buffers a non-seekable reader whole (`asSeeker`), so live sources belong in `Listen`, not `ListenReader`.
 
 **Formats.** Output is always Ogg Vorbis — the payload lives in Vorbis residues. Carriers are decoded to PCM and re-encoded, so input need not be Ogg, but `internal/av` maps only Vorbis / MP3 / AAC / PCM s16le; anything else is `ErrUnsupportedCodec` (widen the switch in `cgo.c` to add more). Extraction is Vorbis-only and never re-encodes.
 
 ## Layout
 
 ```
+cmd/mist          cobra CLI: embed / catch, colour output, signal handling
 emitter.go        NewEmitter, Embed / EmbedReader / EmbedFile → io.ReadCloser
 embed.go          carrier decode, frame loop, mux; FrameCapacity
 catcher.go        NewCatcher, Listen / ListenReader / Extract, options
@@ -108,9 +111,32 @@ Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `C
 
 `CGO_ENABLED=1` needs system FFmpeg with libvorbis (`pkg-config` must find the three libs). CI installs `libavformat-dev libavcodec-dev libavutil-dev libvorbis-dev` on both lint and test.
 
+## CLI (`cmd/mist`)
+
+```
+mist embed --input <file|url> --data <text> [--key pub] [--output out.ogg]
+mist catch --input <file|url> --key <priv> [--timeout 30s]
+```
+
+Built on cobra. `embed` mints a keypair when `--key` is omitted and writes it
+beside the output (`out.pub` / `out.key`, private mode 0600); keys are hex so
+they can be inspected. Output defaults to `<input>.stego.ogg`. `catch` prints
+each frame as it is recovered and exits non-zero when nothing was.
+
+Signals (`SIGINT`/`SIGTERM`/`SIGHUP`) cancel the command's context via
+`signal.NotifyContext`; SIGKILL cannot be trapped. Colour is disabled for
+pipes, `TERM=dumb`, `NO_COLOR` and `--no-color`. All output goes through
+`printf` in `ui.go` — tests swap the `out` writer — so add rendering there
+rather than calling `fmt.Fprint*` directly (errcheck flags bare writes to an
+`io.Writer`).
+
+Carrier choice matters: quiet or purely tonal audio yields too few usable
+residues and `embed` fails with `ErrNoCapacity`. Test fixtures use noise, not
+a pure sine, for this reason.
+
 ## Status
 
-Phase 1 is feature-complete end to end. All internal packages are implemented; `Emitter` embeds text into every whole frame and `Catcher` recovers it via `Listen` / `ListenReader` / `Extract`, including multi-frame carriers. Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic that ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time); `Embed` over `http(s)` buffers a finite file rather than streaming a live source.
+Phase 1 is feature-complete end to end, with a `cmd/mist` CLI over it. All internal packages are implemented; `Emitter` embeds text into every whole frame and `Catcher` recovers it via `Listen` / `ListenReader` / `Extract`, including multi-frame carriers. Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic that ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time); `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns.
 
 ## Design principles
 
