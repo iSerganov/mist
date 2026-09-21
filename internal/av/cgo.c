@@ -171,6 +171,9 @@ int mist_av_is_lossless(int native_codec_id)
 static void copy_token(char *dst, size_t dstlen, const char *src)
 {
 	size_t i = 0;
+	if (dstlen == 0) {
+		return;
+	}
 	if (src == NULL) {
 		dst[0] = '\0';
 		return;
@@ -886,26 +889,33 @@ static const enum AVSampleFormat fmt_pref[] = {
 	AV_SAMPLE_FMT_U8,  AV_SAMPLE_FMT_U8P,
 };
 
-static const enum AVSampleFormat *supported_fmts(const AVCodec *codec, AVCodecContext *ctx)
+// supported_fmts fills *out with codec's supported sample formats and
+// returns 1, or returns 0 if the query itself failed. avcodec_get_supported_
+// config leaves *out NULL on success too, meaning every format is
+// supported — callers must not read that the same way as a failed query.
+static int supported_fmts(const AVCodec *codec, AVCodecContext *ctx, const enum AVSampleFormat **out)
 {
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
-	const enum AVSampleFormat *fmts = NULL;
-	if (avcodec_get_supported_config(ctx, codec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0,
-	                                 (const void **)&fmts, NULL) < 0) {
-		return NULL;
-	}
-	return fmts;
+	*out = NULL;
+	return avcodec_get_supported_config(ctx, codec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0,
+	                                    (const void **)out, NULL) >= 0;
 #else
 	(void)ctx;
-	return codec->sample_fmts;
+	*out = codec->sample_fmts;
+	return 1;
 #endif
 }
 
 static enum AVSampleFormat pick_sample_fmt(const AVCodec *codec, AVCodecContext *ctx)
 {
-	const enum AVSampleFormat *have = supported_fmts(codec, ctx);
-	if (have == NULL) {
+	const enum AVSampleFormat *have = NULL;
+	if (!supported_fmts(codec, ctx, &have)) {
 		return AV_SAMPLE_FMT_FLTP;
+	}
+	if (have == NULL) {
+		// Query succeeded and reports no constraint: every format the
+		// encoder could want is open, so lead with fmt_pref's own choice.
+		return fmt_pref[0];
 	}
 	for (size_t i = 0; i < sizeof(fmt_pref) / sizeof(fmt_pref[0]); i++) {
 		for (int j = 0; have[j] != AV_SAMPLE_FMT_NONE; j++) {
@@ -1042,9 +1052,9 @@ int mist_av_encoder_send_flt(mist_av_encoder *enc, float **planes, int nplanes, 
 		const float *src = planes[c < nplanes ? c : nplanes - 1];
 		for (int i = 0; i < nb_samples; i++) {
 			if (planar) {
-				store_sample(fr->data[c], i, fmt, src[i]);
+				store_sample(fr->extended_data[c], i, fmt, src[i]);
 			} else {
-				store_sample(fr->data[0], i * ch + c, fmt, src[i]);
+				store_sample(fr->extended_data[0], i * ch + c, fmt, src[i]);
 			}
 		}
 	}

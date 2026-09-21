@@ -175,10 +175,12 @@ func (w *windower) ready(final bool) []sampleFrame {
 			index:   w.idx,
 		})
 		// The frame just handed out still points at these planes, so the
-		// remainder must be a fresh backing array, not a reslice.
+		// remainder is capped at its own length (a three-index slice):
+		// cap==len forces the next append to allocate instead of
+		// overwriting what the caller was just given, without copying now.
 		next := make([][]float32, len(w.planes))
 		for i, p := range w.planes {
-			next[i] = append([]float32(nil), p[n:]...)
+			next[i] = p[n:len(p):len(p)]
 		}
 		w.planes, w.idx = next, w.idx+1
 	}

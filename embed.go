@@ -190,6 +190,13 @@ func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plain []byte, carr
 		return nil, false, err
 	}
 	out, err := stego.Apply(vc, pos, g.Packets, bits)
+	// A group whose eligible residues fall below the density floor for even
+	// one bit is left alone, the same as one with none at all — carrying is
+	// already false here, since room >= EnvelopeOverhead+len(plain) implies
+	// at least one slot.
+	if errors.Is(err, stego.ErrNoResidues) {
+		return g.Packets, false, nil
+	}
 	if errors.Is(err, stego.ErrCapacity) {
 		return nil, false, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
 	}

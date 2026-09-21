@@ -129,9 +129,13 @@ func splitPCM(p codec.PCM, fs int) []codec.PCM {
 	for off := 0; off < p.NbSamples; off += fs {
 		chunk := make([][]float32, len(planes))
 		for i, pl := range planes {
+			if off+fs <= len(pl) {
+				chunk[i] = pl[off : off+fs]
+				continue
+			}
 			sl := make([]float32, fs)
 			if off < len(pl) {
-				copy(sl, pl[off:min(off+fs, len(pl))])
+				copy(sl, pl[off:len(pl)])
 			}
 			chunk[i] = sl
 		}

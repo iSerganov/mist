@@ -157,7 +157,9 @@ func (d *Demuxer) Info() AudioInfo { return d.info }
 // Info returns the audio parameters the muxer was opened with.
 func (m *Muxer) Info() AudioInfo { return m.info }
 
-// Info returns the decoder parameters.
+// Info returns exactly what NewDecoder was called with, never refreshed
+// from the opened codec context: callers who need the stego grid a stream
+// was written at want the demuxer's own probed AudioInfo, not this.
 func (d *Decoder) Info() AudioInfo { return d.info }
 
 // Info returns the encoder parameters.
