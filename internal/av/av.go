@@ -25,6 +25,7 @@ type AudioInfo struct {
 	CodecID       int
 	NativeCodecID int
 	CodecName     string
+	Container     string
 	SampleRate    int
 	Channels      int
 	SampleFmt     codec.SampleFormat
@@ -32,6 +33,29 @@ type AudioInfo struct {
 	DurationUs    int64
 	Extradata     []byte
 	FrameSize     int
+}
+
+// Format is one output target: an encoder plus the container libav wraps
+// it in. Every field is libav's own answer — CodecName from
+// avcodec_get_name, Lossless from AV_CODEC_PROP_LOSSLESS — so which
+// codecs qualify is the installed FFmpeg's decision, not a list here.
+type Format struct {
+	Container string
+	CodecName string
+	Ext       string
+	CodecID   int
+	Lossless  bool
+}
+
+// Info returns the encoder parameters for writing f.
+func (f Format) Info(rate, channels int, bitrate int64) AudioInfo {
+	return AudioInfo{
+		NativeCodecID: f.CodecID,
+		Container:     f.Container,
+		SampleRate:    rate,
+		Channels:      channels,
+		Bitrate:       bitrate,
+	}
 }
 
 // Params converts AudioInfo to the codec-layer Params.

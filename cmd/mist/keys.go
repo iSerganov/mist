@@ -36,10 +36,11 @@ func readKey(path string, want int) ([]byte, error) {
 	return key, nil
 }
 
-// stegoPath derives the output name from the carrier: song.ogg → song.stego.ogg.
-func stegoPath(input string) string {
+// stegoPath derives the output name from the carrier and the format that
+// will be written: song.flac → song.stego.ogg, or .flac, or .wav.
+func stegoPath(input, ext string) string {
 	base := strings.TrimSuffix(input, filepath.Ext(input))
-	return base + ".stego.ogg"
+	return base + ".stego." + ext
 }
 
 // keyPaths names the keypair after the file it unlocks.

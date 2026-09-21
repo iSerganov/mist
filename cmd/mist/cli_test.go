@@ -155,6 +155,73 @@ func (s *CLISuite) TestEmbedAcceptsAnyDecodableInput() {
 	}
 }
 
+// The output extension picks the format, the way ffmpeg's does, and the
+// result has to come back out through catch whatever that format was.
+func (s *CLISuite) TestEmbedOutputExtensionPicksFormat() {
+	s.requireLibav()
+	dir := s.T().TempDir()
+	in := s.carrier(dir, 20*time.Second)
+
+	tests := []struct {
+		title string
+		name  string
+		codec string
+	}{
+		{"ogg is the default path", "out.ogg", ""},
+		{"flac", "out.flac", ""},
+		{"wav", "out.wav", ""},
+		{"caf holding alac", "out.caf", "alac"},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			if _, err := mist.LookupFormat(tc.name, tc.codec); err != nil {
+				s.T().Skipf("this FFmpeg cannot write %s: %v", tc.name, err)
+			}
+			stego := filepath.Join(dir, tc.name)
+			args := []string{"embed", "-i", in, "-d", "hidden in " + tc.name, "-o", stego}
+			if tc.codec != "" {
+				args = append(args, "--out-codec", tc.codec)
+			}
+			s.stdout.Reset()
+			s.Require().NoError(s.run(args...))
+
+			_, priv := keyPaths(stego)
+			s.stdout.Reset()
+			s.Require().NoError(s.run("catch", "-i", stego, "-k", priv))
+			s.Contains(s.stdout.String(), "hidden in "+tc.name)
+		})
+	}
+}
+
+// A target Mist cannot embed into must fail before any work is done, not
+// produce a file with nothing in it.
+func (s *CLISuite) TestEmbedRejectsUnwritableFormats() {
+	dir := s.T().TempDir()
+	tests := []struct {
+		title string
+		args  []string
+	}{
+		{"lossy output", []string{"-o", filepath.Join(dir, "out.mp3")}},
+		{"unknown extension", []string{"-o", filepath.Join(dir, "out.zzz")}},
+		{"lossy codec", []string{"-o", filepath.Join(dir, "out.mka"), "--out-codec", "aac"}},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			args := append([]string{"embed", "-i", "absent.wav", "-d", "hi"}, tc.args...)
+			err := s.run(args...)
+			s.Require().Error(err)
+			s.ErrorIs(err, mist.ErrUnsupportedCodec)
+		})
+	}
+}
+
+func (s *CLISuite) TestFormatsListsWritableTargets() {
+	s.requireLibav()
+	s.Require().NoError(s.run("formats"))
+	s.Contains(s.stdout.String(), "flac")
+	s.Contains(s.stdout.String(), "vorbis")
+}
+
 func (s *CLISuite) TestKeyRoundTrip() {
 	dir := s.T().TempDir()
 	path := filepath.Join(dir, "k.key")
@@ -199,17 +266,19 @@ func (s *CLISuite) TestDerivedPaths() {
 	tests := []struct {
 		title string
 		input string
+		ext   string
 		stego string
 		pub   string
 		priv  string
 	}{
-		{"plain name", "song.ogg", "song.stego.ogg", "song.stego.pub", "song.stego.key"},
-		{"nested dir", "a/b/song.wav", "a/b/song.stego.ogg", "a/b/song.stego.pub", "a/b/song.stego.key"},
-		{"no extension", "song", "song.stego.ogg", "song.stego.pub", "song.stego.key"},
+		{"plain name", "song.ogg", "ogg", "song.stego.ogg", "song.stego.pub", "song.stego.key"},
+		{"nested dir", "a/b/song.wav", "ogg", "a/b/song.stego.ogg", "a/b/song.stego.pub", "a/b/song.stego.key"},
+		{"no extension", "song", "ogg", "song.stego.ogg", "song.stego.pub", "song.stego.key"},
+		{"lossless target", "song.mp3", "flac", "song.stego.flac", "song.stego.pub", "song.stego.key"},
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
-			stego := stegoPath(tc.input)
+			stego := stegoPath(tc.input, tc.ext)
 			s.Equal(tc.stego, stego)
 			pub, priv := keyPaths(stego)
 			s.Equal(tc.pub, pub)

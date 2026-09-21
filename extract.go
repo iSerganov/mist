@@ -16,71 +16,61 @@ import (
 	"github.com/iSerganov/mist/internal/wire"
 )
 
-// scanner turns a demuxed packet stream into authenticated payloads. Every
-// failure below the setup layer is a silent skip: a frame that carries no
-// payload and a frame this key cannot open must be indistinguishable.
-type scanner struct {
-	priv    []byte
-	pub     []byte
-	log     *slog.Logger
-	vc      *vorbis.Codec
-	grouper *frame.Grouper
-	joined  bool
+// scanner turns a demuxed packet stream into authenticated payloads. It
+// has one implementation per embedding domain — Vorbis residues, lossless
+// PCM samples — and both decrypt through the same opener, because only
+// where the bits were hidden differs.
+type scanner interface {
+	push(codec.Packet) (Result, bool)
+	flush() (Result, bool)
+	Close() error
 }
 
-func newScanner(priv []byte, info av.AudioInfo, log *slog.Logger) (*scanner, error) {
+// newScanner picks the domain the stream was embedded in. Extraction is
+// possible wherever Emit could write: Vorbis, whose residues Mist parses,
+// and any lossless codec, whose samples come back unchanged.
+func newScanner(priv []byte, info av.AudioInfo, log *slog.Logger) (scanner, error) {
 	pub, err := crypto.PublicFromPrivate(priv)
 	if err != nil {
 		return nil, ErrInvalidKey
 	}
-	if info.CodecID != av.CodecIDVorbis {
-		return nil, fmt.Errorf("%w: extraction reads Vorbis residues", ErrUnsupportedCodec)
-	}
-	vc := vorbis.New()
-	if err := vc.Load(info.Extradata); err != nil {
-		return nil, fmt.Errorf("%w: setup: %v", ErrCarrier, err)
-	}
+	o := &opener{priv: priv, pub: pub, log: log}
 	p := info.Params()
-	return &scanner{
-		priv: priv,
-		pub:  pub,
-		log:  log,
-		vc:   vc,
-		grouper: frame.NewGrouper(frame.Params{
-			SampleRate: p.SampleRate,
-			Channels:   p.Channels,
-			Duration:   FrameDuration,
-		}),
-	}, nil
-}
-
-func (s *scanner) push(pkt codec.Packet) (Result, bool) {
-	if g, ok := s.grouper.Push(pkt); ok {
-		return s.open(g)
-	}
-	return Result{}, false
-}
-
-func (s *scanner) flush() (Result, bool) {
-	if g, ok := s.grouper.Flush(); ok {
-		return s.open(g)
-	}
-	return Result{}, false
-}
-
-func (s *scanner) open(g frame.Group) (Result, bool) {
-	if g.Partial {
-		if !s.joined {
-			s.joined = true
-			s.log.Info("joined in the middle of transmission, cannot decrypt", "frame", g.Index)
+	fp := frame.Params{SampleRate: p.SampleRate, Channels: p.Channels, Duration: FrameDuration}
+	switch {
+	case info.CodecID == av.CodecIDVorbis:
+		vc := vorbis.New()
+		if err := vc.Load(info.Extradata); err != nil {
+			return nil, fmt.Errorf("%w: setup: %v", ErrCarrier, err)
 		}
-		return Result{}, false
+		return &residueScanner{opener: o, vc: vc, grouper: frame.NewGrouper(fp)}, nil
+	case av.Lossless(info.NativeCodecID):
+		dec, err := av.NewDecoder(info)
+		if err != nil {
+			return nil, fmt.Errorf("%w: decoder: %v", ErrCarrier, err)
+		}
+		return &sampleScanner{
+			opener: o,
+			dec:    dec,
+			win:    newWindower(fp, av.SampleScale(info.SampleFmt)),
+		}, nil
+	default:
+		return nil, fmt.Errorf("%w: %s is lossy and carries no recoverable bits",
+			ErrUnsupportedCodec, codecName(info))
 	}
-	pos, err := crypto.PositionSeed(s.pub, g.Index)
-	if err != nil {
-		return Result{}, false
-	}
-	bits, err := stego.Recover(s.vc, pos, g.Packets)
+}
+
+// opener is the half of a scan that does not depend on where the bits
+// came from. Every failure here is a silent skip: a frame that carries no
+// payload and a frame this key cannot open must be indistinguishable.
+type opener struct {
+	priv   []byte
+	pub    []byte
+	log    *slog.Logger
+	joined bool
+}
+
+func (o *opener) open(idx int64, bits stego.Bits, err error) (Result, bool) {
 	if err != nil {
 		return Result{}, false
 	}
@@ -88,7 +78,7 @@ func (s *scanner) open(g frame.Group) (Result, bool) {
 	if err != nil {
 		return Result{}, false
 	}
-	plain, err := crypto.Open(&env, s.priv)
+	plain, err := crypto.Open(&env, o.priv)
 	if err != nil {
 		return Result{}, false
 	}
@@ -98,8 +88,120 @@ func (s *scanner) open(g frame.Group) (Result, bool) {
 	}
 	return Result{
 		Payload:  Payload{Type: PayloadType(p.Type), Data: p.Data},
-		FrameIdx: g.Index,
+		FrameIdx: idx,
 	}, true
+}
+
+// seed derives this frame's position key, or reports that the frame
+// cannot be read at all.
+func (o *opener) seed(idx int64) ([]byte, bool) {
+	pos, err := crypto.PositionSeed(o.pub, idx)
+	return pos, err == nil
+}
+
+// partial logs the single diagnostic a scan emits. A listener that joined
+// mid-window cannot align to it, and there is no phase search.
+func (o *opener) partial(idx int64) (Result, bool) {
+	if !o.joined {
+		o.joined = true
+		o.log.Info("joined in the middle of transmission, cannot decrypt", "frame", idx)
+	}
+	return Result{}, false
+}
+
+// residueScanner reads bits from quantized Vorbis residues.
+type residueScanner struct {
+	*opener
+	vc      *vorbis.Codec
+	grouper *frame.Grouper
+}
+
+func (s *residueScanner) push(pkt codec.Packet) (Result, bool) {
+	if g, ok := s.grouper.Push(pkt); ok {
+		return s.group(g)
+	}
+	return Result{}, false
+}
+
+func (s *residueScanner) flush() (Result, bool) {
+	if g, ok := s.grouper.Flush(); ok {
+		return s.group(g)
+	}
+	return Result{}, false
+}
+
+func (s *residueScanner) Close() error { return nil }
+
+func (s *residueScanner) group(g frame.Group) (Result, bool) {
+	if g.Partial {
+		return s.partial(g.Index)
+	}
+	pos, ok := s.seed(g.Index)
+	if !ok {
+		return Result{}, false
+	}
+	bits, err := stego.Recover(s.vc, pos, g.Packets)
+	return s.open(g.Index, bits, err)
+}
+
+// sampleScanner reads bits from decoded PCM, which a lossless codec
+// returns exactly as Embed left it.
+type sampleScanner struct {
+	*opener
+	dec *av.Decoder
+	win *windower
+}
+
+func (s *sampleScanner) push(pkt codec.Packet) (Result, bool) {
+	frames, err := s.dec.Decode(pkt)
+	if err != nil {
+		return Result{}, false
+	}
+	return s.frames(frames)
+}
+
+func (s *sampleScanner) flush() (Result, bool) {
+	_ = s.dec.Send(av.Packet{})
+	tail, err := av.DrainPCM(s.dec)
+	if err != nil {
+		return Result{}, false
+	}
+	if res, ok := s.frames(tail); ok {
+		return res, true
+	}
+	return s.read(s.win.flush())
+}
+
+func (s *sampleScanner) Close() error { return s.dec.Close() }
+
+func (s *sampleScanner) frames(pcm []codec.PCM) (Result, bool) {
+	for _, p := range pcm {
+		if res, ok := s.read(s.win.push(p)); ok {
+			return res, true
+		}
+	}
+	return Result{}, false
+}
+
+// read returns the first window that decrypts. Like the residue path it
+// surfaces one Result per call; a carrier with more than one carrying
+// frame is not something Embed produces.
+func (s *sampleScanner) read(windows []sampleFrame) (Result, bool) {
+	for _, w := range windows {
+		if w.partial {
+			s.partial(w.index)
+			continue
+		}
+		pos, ok := s.seed(w.index)
+		if !ok {
+			continue
+		}
+		bits, err := stego.RecoverSamples(w.Samples, pos)
+		if res, ok := s.open(w.index, bits, err); ok {
+			return res, true
+		}
+	}
+	return Result{}, false
 }
 
 // stream drains d in the background, emitting one Result per frame that
@@ -142,9 +244,10 @@ func relay(ctx context.Context, in <-chan Result) <-chan Result {
 	return out
 }
 
-func (c *Catcher) scan(ctx context.Context, d *av.Demuxer, sc *scanner, out chan<- Result) {
+func (c *Catcher) scan(ctx context.Context, d *av.Demuxer, sc scanner, out chan<- Result) {
 	defer close(out)
 	defer func() { _ = d.Close() }()
+	defer func() { _ = sc.Close() }()
 
 	r := retrier{left: c.maxRetries, backoff: c.backoff}
 	for ctx.Err() == nil {

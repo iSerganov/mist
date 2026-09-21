@@ -72,6 +72,34 @@ func CanDecode(info AudioInfo) bool {
 	return avCanDecode(info)
 }
 
+// Lossless reports libav's own AV_CODEC_PROP_LOSSLESS for a stream's
+// native codec id. Mist keeps no list of lossless codecs of its own.
+func Lossless(nativeCodecID int) bool {
+	if err := ensureInit(); err != nil {
+		return false
+	}
+	return avIsLossless(nativeCodecID)
+}
+
+// FindFormat resolves an output target the way ffmpeg's command line
+// does. name is a container short name ("flac"), an output path whose
+// extension names one ("song.flac"), or an encoder name ("alac"); codec,
+// when not empty, overrides the encoder the container defaults to.
+func FindFormat(name, codec string) (Format, error) {
+	if err := ensureInit(); err != nil {
+		return Format{}, err
+	}
+	return avFindFormat(name, codec)
+}
+
+// Formats lists every output target this FFmpeg build can write.
+func Formats() []Format {
+	if err := ensureInit(); err != nil {
+		return nil
+	}
+	return avListFormats()
+}
+
 func NewDecoder(info AudioInfo) (*Decoder, error) {
 	if err := ensureInit(); err != nil {
 		return nil, err

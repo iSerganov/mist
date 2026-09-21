@@ -30,6 +30,28 @@ func Example_emitter() {
 	// Output: true
 }
 
+// The output format follows ffmpeg's contract: WithFormat takes a
+// container name or the output path naming one, and WithCodec overrides
+// the encoder for a container that holds several. A target this FFmpeg
+// cannot embed into is rejected here, before any carrier is read.
+func Example_losslessOutput() {
+	pub, _, err := mist.GenerateKeyPair()
+	if err != nil {
+		log.Fatal(err)
+	}
+	emitter, err := mist.NewEmitter(pub, mist.WithFormat("song.flac"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	format, err := mist.LookupFormat("song.flac", "")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(emitter != nil, format.Container, format.Lossless)
+	// Output: true flac true
+}
+
 // A finite file ends by itself; a live stream runs until the context is
 // cancelled. The caller tells the two apart with ctx.Err() afterwards.
 func Example_catcher() {

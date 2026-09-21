@@ -4,6 +4,7 @@ NAME    ?= mist
 INPUT   ?=
 DATA    ?=
 OUTPUT  ?=
+CODEC   ?=
 KEY     ?=
 TIMEOUT ?= 0
 
@@ -26,12 +27,18 @@ build:
 	@mkdir -p $(dir $(BIN))
 	go build -o $(BIN) ./cmd/mist
 
-# make embed INPUT=song.mp3 DATA="hello" [OUTPUT=out.ogg] [KEY=keys/mist.pub]
+# make embed INPUT=song.mp3 DATA="hello" [OUTPUT=out.flac] [CODEC=alac] [KEY=keys/mist.pub]
+# OUTPUT's extension picks the format, as it does for ffmpeg; see make formats.
 embed: build
-	@test -n "$(INPUT)" || { echo "usage: make embed INPUT=<file|url> DATA=<text> [OUTPUT=..] [KEY=..]"; exit 2; }
-	@test -n "$(DATA)"  || { echo "usage: make embed INPUT=<file|url> DATA=<text> [OUTPUT=..] [KEY=..]"; exit 2; }
+	@test -n "$(INPUT)" || { echo "usage: make embed INPUT=<file|url> DATA=<text> [OUTPUT=..] [CODEC=..] [KEY=..]"; exit 2; }
+	@test -n "$(DATA)"  || { echo "usage: make embed INPUT=<file|url> DATA=<text> [OUTPUT=..] [CODEC=..] [KEY=..]"; exit 2; }
 	./$(BIN) embed --input "$(INPUT)" --data "$(DATA)" \
-		$(if $(OUTPUT),--output "$(OUTPUT)") $(if $(KEY),--key "$(KEY)")
+		$(if $(OUTPUT),--output "$(OUTPUT)") $(if $(CODEC),--out-codec "$(CODEC)") \
+		$(if $(KEY),--key "$(KEY)")
+
+# Every output format the installed FFmpeg can write.
+formats: build
+	./$(BIN) formats
 
 # make catch INPUT=out.ogg KEY=keys/mist.key [TIMEOUT=30s]
 catch: build
@@ -58,4 +65,4 @@ keys:
 clean:
 	rm -rf bin
 
-.PHONY: test test-quiet lint build embed catch keys clean
+.PHONY: test test-quiet lint build embed catch formats keys clean

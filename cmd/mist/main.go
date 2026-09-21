@@ -33,10 +33,11 @@ func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "mist",
 		Short: "Asymmetric-key audio steganography",
-		Long: "  Hide a message inside Ogg Vorbis audio using only the recipient's\n" +
-			"  public key. Only the matching private key can read it back.\n\n" +
-			"  The payload lives in the compressed audio itself, not in tags or\n" +
-			"  container metadata, so a digital recording of a stream carries it.",
+		Long: "  Hide a message inside audio using only the recipient's public key.\n" +
+			"  Only the matching private key can read it back.\n\n" +
+			"  The payload lives in the audio itself, not in tags or container\n" +
+			"  metadata, so a digital recording of a stream carries it. Output is\n" +
+			"  Ogg Vorbis or any lossless format FFmpeg can write; see `formats`.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
@@ -44,6 +45,6 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 	root.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable coloured output")
-	root.AddCommand(newEmbedCmd(), newCatchCmd())
+	root.AddCommand(newEmbedCmd(), newCatchCmd(), newFormatsCmd())
 	return root
 }

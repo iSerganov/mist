@@ -7,6 +7,7 @@
 #include "cgo.h"
 
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,7 @@
 #include <libavformat/version.h>
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/common.h>
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
 #include <libavutil/mem.h>
@@ -160,6 +162,164 @@ int mist_av_can_decode(const mist_av_audio_info *info)
 	return avcodec_find_decoder(resolve_codec_id(info)) != NULL;
 }
 
+int mist_av_is_lossless(int native_codec_id)
+{
+	const AVCodecDescriptor *d = avcodec_descriptor_get((enum AVCodecID)native_codec_id);
+	return d != NULL && (d->props & AV_CODEC_PROP_LOSSLESS) != 0;
+}
+
+static void copy_token(char *dst, size_t dstlen, const char *src)
+{
+	size_t i = 0;
+	if (src == NULL) {
+		dst[0] = '\0';
+		return;
+	}
+	for (; src[i] != '\0' && src[i] != ',' && i + 1 < dstlen; i++) {
+		dst[i] = src[i];
+	}
+	dst[i] = '\0';
+}
+
+/*
+ * muxer_for finds a container for id. An audio-only muxer that names id as
+ * its own default is the natural home (wav for pcm_s16le, caf for alac);
+ * anything else that merely accepts the codec is the fallback.
+ */
+static const AVOutputFormat *muxer_for(enum AVCodecID id)
+{
+	const AVOutputFormat *f = NULL;
+	void                 *it = NULL;
+	while ((f = av_muxer_iterate(&it)) != NULL) {
+		if (av_guess_codec(f, NULL, NULL, NULL, AVMEDIA_TYPE_AUDIO) == id &&
+		    f->video_codec == AV_CODEC_ID_NONE) {
+			return f;
+		}
+	}
+	it = NULL;
+	while ((f = av_muxer_iterate(&it)) != NULL) {
+		if (avformat_query_codec(f, id, FF_COMPLIANCE_NORMAL) == 1) {
+			return f;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * find_audio_encoder takes either name libav knows a codec by: the
+ * encoder's own ("dca", "libvorbis") or the codec's ("dts", "vorbis").
+ * The two differ often enough that accepting only one would make a name
+ * Mist itself printed unusable as --out-codec.
+ */
+static const AVCodec *find_audio_encoder(const char *name)
+{
+	const AVCodec *enc = avcodec_find_encoder_by_name(name);
+	if (enc == NULL) {
+		const AVCodecDescriptor *d = avcodec_descriptor_get_by_name(name);
+		if (d != NULL) {
+			enc = avcodec_find_encoder(d->id);
+		}
+	}
+	if (enc == NULL || enc->type != AVMEDIA_TYPE_AUDIO) {
+		return NULL;
+	}
+	return enc;
+}
+
+static int fill_format(const AVOutputFormat *ofmt, enum AVCodecID id, mist_av_format *out)
+{
+	memset(out, 0, sizeof(*out));
+	copy_token(out->container, sizeof(out->container), ofmt->name);
+	snprintf(out->codec_name, sizeof(out->codec_name), "%s", avcodec_get_name(id));
+	copy_token(out->ext, sizeof(out->ext), ofmt->extensions);
+	if (out->ext[0] == '\0') {
+		copy_token(out->ext, sizeof(out->ext), ofmt->name);
+	}
+	out->codec_id = (int)id;
+	out->lossless = mist_av_is_lossless((int)id);
+	return MIST_AV_OK;
+}
+
+int mist_av_format_find(const char *name, const char *codec, mist_av_format *out)
+{
+	if (name == NULL || out == NULL || name[0] == '\0') {
+		return MIST_AV_ERR;
+	}
+	/* Passing name as both lets libav take it as -f or as an output path. */
+	const AVOutputFormat *ofmt = av_guess_format(name, name, NULL);
+
+	if (codec != NULL && codec[0] != '\0') {
+		const AVCodec *enc = find_audio_encoder(codec);
+		if (enc == NULL) {
+			return MIST_AV_ERR;
+		}
+		if (ofmt == NULL || avformat_query_codec(ofmt, enc->id, FF_COMPLIANCE_NORMAL) != 1) {
+			ofmt = muxer_for(enc->id);
+		}
+		return ofmt == NULL ? MIST_AV_ERR : fill_format(ofmt, enc->id, out);
+	}
+	if (ofmt != NULL) {
+		enum AVCodecID id = av_guess_codec(ofmt, NULL, NULL, NULL, AVMEDIA_TYPE_AUDIO);
+		if (id != AV_CODEC_ID_NONE && avcodec_find_encoder(id) != NULL) {
+			return fill_format(ofmt, id, out);
+		}
+	}
+	const AVCodec *enc = find_audio_encoder(name);
+	if (enc == NULL) {
+		return MIST_AV_ERR;
+	}
+	ofmt = muxer_for(enc->id);
+	return ofmt == NULL ? MIST_AV_ERR : fill_format(ofmt, enc->id, out);
+}
+
+/*
+ * mist_av_format_list writes every writable target as a newline-separated
+ * list: container names first, since those are what a caller would type,
+ * then the encoder names that no container is default for. Lossy codecs
+ * are left to the Go layer to filter — this reports what libav can write.
+ */
+int mist_av_format_list(char *buf, int buflen)
+{
+	int                   n = 0;
+	const AVOutputFormat *f = NULL;
+	void                 *it = NULL;
+	const AVCodec        *c = NULL;
+
+	if (buf == NULL || buflen <= 0) {
+		return MIST_AV_ERR;
+	}
+	buf[0] = '\0';
+	while ((f = av_muxer_iterate(&it)) != NULL) {
+		enum AVCodecID id = av_guess_codec(f, NULL, NULL, NULL, AVMEDIA_TYPE_AUDIO);
+		char           name[32];
+		/*
+		 * No extension means no file: the checksum and null muxers are
+		 * writable audio targets libav will happily accept, and useless
+		 * as carriers.
+		 */
+		if (id == AV_CODEC_ID_NONE || avcodec_find_encoder(id) == NULL || f->extensions == NULL) {
+			continue;
+		}
+		copy_token(name, sizeof(name), f->name);
+		n += snprintf(buf + n, (size_t)(buflen - n), "%s\t%d\n", name, (int)id);
+		if (n >= buflen) {
+			return MIST_AV_OK;
+		}
+	}
+	it = NULL;
+	while ((c = av_codec_iterate(&it)) != NULL) {
+		if (c->type != AVMEDIA_TYPE_AUDIO || !av_codec_is_encoder(c) ||
+		    !mist_av_is_lossless((int)c->id) || muxer_for(c->id) == NULL) {
+			continue;
+		}
+		n += snprintf(buf + n, (size_t)(buflen - n), "%s\t%d\n", c->name, (int)c->id);
+		if (n >= buflen) {
+			return MIST_AV_OK;
+		}
+	}
+	return MIST_AV_OK;
+}
+
 static int fill_info_from_par(const AVCodecParameters *par, int64_t duration_us, mist_av_audio_info *info)
 {
 	memset(info, 0, sizeof(*info));
@@ -189,6 +349,15 @@ static int apply_info_to_par(AVCodecParameters *par, const mist_av_audio_info *i
 	par->sample_rate = info->sample_rate;
 	par->format = info->sample_fmt;
 	par->bit_rate = info->bitrate;
+	/*
+	 * Depth, twice: raw-PCM containers size their blocks from the coded
+	 * bits, and a codec that stores its own depth (TTA) writes the raw
+	 * bits into its header and refuses to be read back without them.
+	 */
+	par->bits_per_coded_sample = av_get_bits_per_sample(par->codec_id);
+	if (info->sample_fmt >= 0) {
+		par->bits_per_raw_sample = av_get_bytes_per_sample(info->sample_fmt) * 8;
+	}
 	av_channel_layout_default(&par->ch_layout, info->channels > 0 ? info->channels : 2);
 	if (info->extradata_size > 0 && info->extradata != NULL) {
 		par->extradata = av_mallocz((size_t)info->extradata_size + AV_INPUT_BUFFER_PADDING_SIZE);
@@ -455,9 +624,10 @@ static mist_av_muxer *muxer_alloc(const char *url, const mist_av_audio_info *inf
 		set_err(errbuf, errlen, "oom");
 		return NULL;
 	}
-	int err = avformat_alloc_output_context2(&m->fmt, NULL, "ogg", url);
+	const char *container = info->container[0] != '\0' ? info->container : "ogg";
+	int         err = avformat_alloc_output_context2(&m->fmt, NULL, container, url);
 	if (err < 0 || m->fmt == NULL) {
-		set_averr(errbuf, errlen, err, "alloc ogg");
+		set_averr(errbuf, errlen, err, "alloc container");
 		av_free(m);
 		return NULL;
 	}
@@ -701,6 +871,52 @@ void mist_av_decoder_close(mist_av_decoder *dec)
 	av_free(dec);
 }
 
+/*
+ * Sample formats in the order Mist wants them. Stego bits sit in the LSB
+ * of the integer grid the encoder quantizes to, so a narrow grid is a
+ * shallower carrier: s16 first keeps a lossless target at CD depth rather
+ * than the u8 some encoders (wavpack) happen to list first. Vorbis offers
+ * only fltp and lands there whatever this list says.
+ */
+static const enum AVSampleFormat fmt_pref[] = {
+	AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_S16P,
+	AV_SAMPLE_FMT_S32, AV_SAMPLE_FMT_S32P,
+	AV_SAMPLE_FMT_FLT, AV_SAMPLE_FMT_FLTP,
+	AV_SAMPLE_FMT_DBL, AV_SAMPLE_FMT_DBLP,
+	AV_SAMPLE_FMT_U8,  AV_SAMPLE_FMT_U8P,
+};
+
+static const enum AVSampleFormat *supported_fmts(const AVCodec *codec, AVCodecContext *ctx)
+{
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
+	const enum AVSampleFormat *fmts = NULL;
+	if (avcodec_get_supported_config(ctx, codec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0,
+	                                 (const void **)&fmts, NULL) < 0) {
+		return NULL;
+	}
+	return fmts;
+#else
+	(void)ctx;
+	return codec->sample_fmts;
+#endif
+}
+
+static enum AVSampleFormat pick_sample_fmt(const AVCodec *codec, AVCodecContext *ctx)
+{
+	const enum AVSampleFormat *have = supported_fmts(codec, ctx);
+	if (have == NULL) {
+		return AV_SAMPLE_FMT_FLTP;
+	}
+	for (size_t i = 0; i < sizeof(fmt_pref) / sizeof(fmt_pref[0]); i++) {
+		for (int j = 0; have[j] != AV_SAMPLE_FMT_NONE; j++) {
+			if (have[j] == fmt_pref[i]) {
+				return fmt_pref[i];
+			}
+		}
+	}
+	return have[0] != AV_SAMPLE_FMT_NONE ? have[0] : AV_SAMPLE_FMT_FLTP;
+}
+
 mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errbuf, int errlen)
 {
 	if (info == NULL) {
@@ -724,8 +940,11 @@ mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errb
 		return NULL;
 	}
 	e->ctx->sample_rate = info->sample_rate > 0 ? info->sample_rate : 44100;
-	e->ctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
-	e->ctx->bit_rate = info->bitrate > 0 ? info->bitrate : 64000;
+	e->ctx->sample_fmt = pick_sample_fmt(codec, e->ctx);
+	/* A lossless encoder ignores bit_rate; forcing one makes it complain. */
+	if (info->bitrate > 0) {
+		e->ctx->bit_rate = info->bitrate;
+	}
 	av_channel_layout_default(&e->ctx->ch_layout, info->channels > 0 ? info->channels : 2);
 	e->ctx->time_base = (AVRational){1, e->ctx->sample_rate};
 	int err = avcodec_open2(e->ctx, codec, NULL);
@@ -745,6 +964,8 @@ int mist_av_encoder_info(mist_av_encoder *enc, mist_av_audio_info *info)
 	}
 	memset(info, 0, sizeof(*info));
 	info->codec_id = from_av_codec(enc->ctx->codec_id);
+	info->native_codec_id = (int)enc->ctx->codec_id;
+	snprintf(info->codec_name, sizeof(info->codec_name), "%s", avcodec_get_name(enc->ctx->codec_id));
 	info->sample_rate = enc->ctx->sample_rate;
 	info->channels = enc->ctx->ch_layout.nb_channels;
 	info->sample_fmt = enc->ctx->sample_fmt;
@@ -759,6 +980,40 @@ int mist_av_encoder_info(mist_av_encoder *enc, mist_av_audio_info *info)
 	}
 	info->frame_size = enc->ctx->frame_size;
 	return MIST_AV_OK;
+}
+
+/*
+ * store_sample writes one float sample in the encoder's own format. The
+ * scale factors are powers of two and match the decode side in sample.go
+ * exactly, which is what lets a bit placed in a sample's LSB survive the
+ * encode/decode round trip of a lossless codec.
+ */
+static void store_sample(uint8_t *dst, int i, int fmt, float v)
+{
+	switch (fmt) {
+	case AV_SAMPLE_FMT_U8:
+	case AV_SAMPLE_FMT_U8P:
+		dst[i] = (uint8_t)(av_clip(lrintf(v * 128.0f), -128, 127) + 128);
+		break;
+	case AV_SAMPLE_FMT_S16:
+	case AV_SAMPLE_FMT_S16P:
+		((int16_t *)dst)[i] = (int16_t)av_clip(lrintf(v * 32768.0f), -32768, 32767);
+		break;
+	case AV_SAMPLE_FMT_S32:
+	case AV_SAMPLE_FMT_S32P:
+		((int32_t *)dst)[i] = (int32_t)av_clipl_int32(llrint((double)v * 2147483648.0));
+		break;
+	case AV_SAMPLE_FMT_FLT:
+	case AV_SAMPLE_FMT_FLTP:
+		((float *)dst)[i] = v;
+		break;
+	case AV_SAMPLE_FMT_DBL:
+	case AV_SAMPLE_FMT_DBLP:
+		((double *)dst)[i] = (double)v;
+		break;
+	default:
+		break;
+	}
 }
 
 int mist_av_encoder_send_flt(mist_av_encoder *enc, float **planes, int nplanes, int nb_samples, int64_t pts)
@@ -781,14 +1036,17 @@ int mist_av_encoder_send_flt(mist_av_encoder *enc, float **planes, int nplanes, 
 		return MIST_AV_ERR;
 	}
 	int ch = enc->ctx->ch_layout.nb_channels;
-	int copy = nplanes < ch ? nplanes : ch;
-	if (enc->ctx->sample_fmt == AV_SAMPLE_FMT_FLTP) {
-		for (int i = 0; i < copy; i++) {
-			memcpy(fr->data[i], planes[i], (size_t)nb_samples * sizeof(float));
+	int fmt = enc->ctx->sample_fmt;
+	int planar = av_sample_fmt_is_planar(fmt);
+	for (int c = 0; c < ch; c++) {
+		const float *src = planes[c < nplanes ? c : nplanes - 1];
+		for (int i = 0; i < nb_samples; i++) {
+			if (planar) {
+				store_sample(fr->data[c], i, fmt, src[i]);
+			} else {
+				store_sample(fr->data[0], i * ch + c, fmt, src[i]);
+			}
 		}
-	} else {
-		av_frame_free(&fr);
-		return MIST_AV_ERR;
 	}
 	err = avcodec_send_frame(enc->ctx, fr);
 	av_frame_free(&fr);

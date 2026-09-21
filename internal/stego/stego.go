@@ -102,16 +102,11 @@ func Apply(c rewriter, posKey []byte, pkts []codec.Packet, bits Bits) ([]codec.P
 // for the protocol envelope before calling Apply. It returns ErrNoResidues
 // if pkts has no eligible residues at all (e.g. a near-empty tail frame).
 func Capacity(c rewriter, pkts []codec.Packet) (int, error) {
-	_, views, err := collectResidues(c, pkts)
+	res, err := collectResidues(c, pkts)
 	if err != nil {
 		return 0, err
 	}
-	el := Eligible(views, DefaultBands)
-	if len(el) == 0 {
-		return 0, ErrNoResidues
-	}
-	nbits := int(float64(len(el)) * Density)
-	return nbits / 8, nil
+	return slots(res.Len()) / 8, nil
 }
 
 // Recover reads the constant-density bit string from packets.
@@ -135,88 +130,64 @@ func (x *extractor) Extract(packets []codec.Packet) (Bits, error) {
 	if x == nil || x.codec == nil {
 		return nil, errUnimplemented
 	}
-	res, views, err := collectResidues(x.codec, packets)
+	res, err := collectResidues(x.codec, packets)
 	if err != nil {
 		return nil, err
 	}
-	_ = res
-	el := Eligible(views, DefaultBands)
-	if len(el) == 0 {
-		return nil, ErrNoResidues
-	}
-	nbits := int(float64(len(el)) * Density)
-	if nbits < 1 {
-		return nil, ErrNoResidues
-	}
-	sel := NewSelector(x.posKey, len(el))
-	pos := sel.Pick(nbits)
-	out := make([]byte, (nbits+7)/8)
-	for i, p := range pos {
-		bit := LSB(views[el[p]].Value)
-		if bit == 1 {
-			out[i/8] |= 1 << uint(i%8)
-		}
-	}
-	return out, nil
+	return lift(res, x.posKey)
 }
 
 func embedPackets(c rewriter, posKey []byte, pkts []codec.Packet, bits Bits) ([]codec.Packet, error) {
-	res, views, err := collectResidues(c, pkts)
+	res, err := collectResidues(c, pkts)
 	if err != nil {
 		return nil, err
 	}
-	el := Eligible(views, DefaultBands)
-	if len(el) == 0 {
-		return nil, ErrNoResidues
+	if err := place(res, posKey, bits); err != nil {
+		return nil, err
 	}
-	nbits := int(float64(len(el)) * Density)
-	if nbits < 1 {
-		return nil, ErrNoResidues
-	}
-	need := (nbits + 7) / 8
-	if len(bits) > need {
-		return nil, ErrCapacity
-	}
-	payload := make([]byte, need)
-	copy(payload, bits)
-	if len(bits) < need {
-		pad, err := Filler(need - len(bits))
-		if err != nil {
-			return nil, err
-		}
-		copy(payload[len(bits):], pad)
-	}
-	sel := NewSelector(posKey, len(el))
-	pos := sel.Pick(nbits)
-	for i, p := range pos {
-		bit := (payload[i/8] >> uint(i%8)) & 1
-		ri := el[p]
-		views[ri].Value = Match(views[ri].Value, bit)
-		res[ri].Value = views[ri].Value
-	}
-	return rewriteAll(c, pkts, res)
+	return rewriteAll(c, pkts, res.all)
 }
 
-func collectResidues(c rewriter, pkts []codec.Packet) ([]codec.Residue, []ResidueView, error) {
-	var res []codec.Residue
+// residues is the carrier over one frame's quantized Vorbis residues:
+// the eligible subset of the symbols the packets decoded to.
+type residues struct {
+	all      []codec.Residue
+	views    []ResidueView
+	eligible []int
+}
+
+func (r *residues) Len() int       { return len(r.eligible) }
+func (r *residues) At(i int) int32 { return r.views[r.eligible[i]].Value }
+
+func (r *residues) Set(i int, v int32) {
+	r.views[r.eligible[i]].Value = v
+	r.all[r.eligible[i]].Value = v
+}
+
+func collectResidues(c rewriter, pkts []codec.Packet) (*residues, error) {
+	var all []codec.Residue
 	for _, pkt := range pkts {
 		if len(pkt.Data) == 0 || pkt.Data[0]&1 == 1 {
 			continue
 		}
 		r, err := c.Residues(pkt)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		res = append(res, r...)
+		all = append(all, r...)
 	}
-	if len(res) == 0 {
-		return nil, nil, ErrNoResidues
+	if len(all) == 0 {
+		return nil, ErrNoResidues
 	}
-	views := make([]ResidueView, len(res))
-	for i, r := range res {
+	views := make([]ResidueView, len(all))
+	for i, r := range all {
 		views[i] = ResidueView{Index: r.Index, Band: r.Band, Value: r.Value, Unflippable: r.Unflippable}
 	}
-	return res, views, nil
+	el := Eligible(views, DefaultBands)
+	if len(el) == 0 {
+		return nil, ErrNoResidues
+	}
+	return &residues{all: all, views: views, eligible: el}, nil
 }
 
 func rewriteAll(c rewriter, pkts []codec.Packet, res []codec.Residue) ([]codec.Packet, error) {
