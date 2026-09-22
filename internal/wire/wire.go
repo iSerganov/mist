@@ -115,6 +115,61 @@ func UnmarshalEnvelope(b []byte) (Envelope, error) {
 	return env, nil
 }
 
+// Span framing lets a payload that does not fit in one stego frame spread
+// across several. It exists only when spanning is actually needed: a
+// payload that fits one frame keeps Payload's own framing unmodified, so
+// the common case pays none of this overhead and every file already
+// embedded under it stays readable.
+//
+// The two magic bytes are chosen outside CurrentVersion's value space, so
+// a span chunk can never be mistaken for (or mistaken by) a complete,
+// unspanned Payload: UnmarshalPayload rejects any other version outright.
+const (
+	spanStart    byte = 0x00
+	spanContinue byte = 0x02
+
+	SpanStartHeaderSize    = 1 + LengthSize
+	SpanContinueHeaderSize = 1
+)
+
+// MarshalSpanStart frames the first chunk of a spanned payload: totalLen is
+// the full marshaled Payload's length, and chunk is the slice of it this
+// frame carries.
+func MarshalSpanStart(totalLen uint32, chunk []byte) []byte {
+	out := make([]byte, SpanStartHeaderSize+len(chunk))
+	out[0] = spanStart
+	binary.BigEndian.PutUint32(out[1:5], totalLen)
+	copy(out[SpanStartHeaderSize:], chunk)
+	return out
+}
+
+// MarshalSpanContinue frames a later chunk of a spanned payload.
+func MarshalSpanContinue(chunk []byte) []byte {
+	out := make([]byte, SpanContinueHeaderSize+len(chunk))
+	out[0] = spanContinue
+	copy(out[SpanContinueHeaderSize:], chunk)
+	return out
+}
+
+// UnmarshalSpanStart reports whether b opens a spanned payload, and if so
+// the total marshaled length to expect across every chunk and the slice
+// this one carries.
+func UnmarshalSpanStart(b []byte) (totalLen uint32, chunk []byte, ok bool) {
+	if len(b) < SpanStartHeaderSize || b[0] != spanStart {
+		return 0, nil, false
+	}
+	return binary.BigEndian.Uint32(b[1:5]), b[SpanStartHeaderSize:], true
+}
+
+// UnmarshalSpanContinue reports whether b is a later chunk of a spanned
+// payload, and if so the slice it carries.
+func UnmarshalSpanContinue(b []byte) (chunk []byte, ok bool) {
+	if len(b) < SpanContinueHeaderSize || b[0] != spanContinue {
+		return nil, false
+	}
+	return b[SpanContinueHeaderSize:], true
+}
+
 // PutUint32 writes a big-endian uint32, the payload length encoding.
 func PutUint32(b []byte, v uint32) {
 	binary.BigEndian.PutUint32(b, v)

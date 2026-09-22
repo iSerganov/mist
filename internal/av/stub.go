@@ -14,6 +14,12 @@ func avNewMuxer(io.Writer, AudioInfo) (*Muxer, error) { return nil, errUnimpleme
 
 func avCanDecode(AudioInfo) bool { return false }
 
+func avIsLossless(int) bool { return false }
+
+func avFindFormat(string, string) (Format, error) { return Format{}, errUnimplemented }
+
+func avListFormats() []Format { return nil }
+
 func avNewDecoder(AudioInfo) (*Decoder, error) { return nil, errUnimplemented }
 
 func avNewEncoder(AudioInfo) (*Encoder, error) { return nil, errUnimplemented }

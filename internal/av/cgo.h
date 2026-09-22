@@ -56,11 +56,13 @@ typedef struct mist_av_io      mist_av_io;
  * native_codec_id is libav's own AVCodecID, carried verbatim so any input
  * the installed FFmpeg can decode is usable as a carrier; codec_name is
  * its display name, for error messages. Both are 0 / empty when unknown.
+ * container is the muxer short name to write, empty meaning "ogg".
  */
 typedef struct mist_av_audio_info {
 	int      codec_id;
 	int      native_codec_id;
 	char     codec_name[32];
+	char     container[32];
 	int      sample_rate;
 	int      channels;
 	int      sample_fmt;
@@ -70,6 +72,21 @@ typedef struct mist_av_audio_info {
 	int      extradata_size;
 	int      frame_size;
 } mist_av_audio_info;
+
+/*
+ * mist_av_format is one resolved output target: an encoder plus the
+ * container libav will wrap it in. Every field is libav's own answer —
+ * codec_name from avcodec_get_name, lossless from the codec descriptor's
+ * AV_CODEC_PROP_LOSSLESS — so which codecs qualify is the installed
+ * FFmpeg's decision, not a list kept here.
+ */
+typedef struct mist_av_format {
+	char container[32];
+	char codec_name[32];
+	char ext[16];
+	int  codec_id;
+	int  lossless;
+} mist_av_format;
 
 typedef struct mist_av_packet {
 	uint8_t *data;
@@ -98,6 +115,17 @@ typedef int64_t (*mist_av_seek_fn)(void *opaque, int64_t offset, int whence);
 int  mist_av_init(void);
 void mist_av_free(void *p);
 
+/*
+ * Resolves an output target the way ffmpeg's own command line does: name
+ * is a container short name ("flac"), an output filename whose extension
+ * names one ("song.flac"), or an encoder name ("alac"); codec, when not
+ * NULL, overrides the encoder the container would default to. Both are
+ * pure libav lookups. mist_av_format_list names every target this build
+ * can write, one "container\tcodec_id" line each.
+ */
+int mist_av_format_find(const char *name, const char *codec, mist_av_format *out);
+int mist_av_format_list(char *buf, int buflen);
+
 mist_av_demuxer *mist_av_demuxer_open(const char *url, char *errbuf, int errlen);
 mist_av_demuxer *mist_av_demuxer_open_io(mist_av_io *io, char *errbuf, int errlen);
 int              mist_av_demuxer_audio_info(mist_av_demuxer *d, mist_av_audio_info *info);
@@ -113,6 +141,8 @@ void           mist_av_muxer_close(mist_av_muxer *m);
 
 /* Reports whether the installed FFmpeg has a decoder for this stream. */
 int              mist_av_can_decode(const mist_av_audio_info *info);
+/* Reports libav's own AV_CODEC_PROP_LOSSLESS for a native AVCodecID. */
+int              mist_av_is_lossless(int native_codec_id);
 mist_av_decoder *mist_av_decoder_open(const mist_av_audio_info *info, char *errbuf, int errlen);
 int              mist_av_decoder_send(mist_av_decoder *dec, const mist_av_packet *pkt);
 int              mist_av_decoder_receive(mist_av_decoder *dec, mist_av_frame *frame);

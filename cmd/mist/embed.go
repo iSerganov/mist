@@ -17,6 +17,7 @@ type embedOptions struct {
 	output string
 	data   string
 	key    string
+	codec  string
 }
 
 func newEmbedCmd() *cobra.Command {
@@ -25,8 +26,10 @@ func newEmbedCmd() *cobra.Command {
 		Use:   "embed",
 		Short: "Hide text inside an audio file",
 		Long: "  Encrypt --data for a recipient public key and embed it into --input,\n" +
-			"  writing a new Ogg Vorbis file. The message is re-sealed in every\n" +
-			"  8-second frame, so any whole frame of the result carries it.\n\n" +
+			"  writing a new audio file. The output format follows the --output\n" +
+			"  extension the way ffmpeg's does — .ogg, .flac, .wav and every other\n" +
+			"  lossless format this FFmpeg can write. Run `mist formats` to see\n" +
+			"  them, and use --out-codec where one container holds several.\n\n" +
 			"  Without --key a fresh keypair is generated and both files are\n" +
 			"  reported when the run finishes.",
 		Args: cobra.NoArgs,
@@ -38,16 +41,21 @@ func newEmbedCmd() *cobra.Command {
 	f.StringVarP(&o.input, "input", "i", "", "carrier audio file: path, file:// or http(s):// URL")
 	f.StringVarP(&o.data, "data", "d", "", "text to hide")
 	f.StringVarP(&o.key, "key", "k", "", "recipient public key file (a new keypair is created when omitted)")
-	f.StringVarP(&o.output, "output", "o", "", "destination file (default: <input>.stego.ogg)")
+	f.StringVarP(&o.output, "output", "o", "", "destination file; its extension picks the format (default: <input>.stego.ogg)")
+	f.StringVar(&o.codec, "out-codec", "", "encoder to use when the container holds more than one (e.g. alac for .m4a)")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("data")
 	return cmd
 }
 
 func runEmbed(ctx context.Context, o *embedOptions) error {
+	format, err := mist.LookupFormat(o.output, o.codec)
+	if err != nil {
+		return fmt.Errorf("%w — run `mist formats` for what this FFmpeg build can write", err)
+	}
 	output := o.output
 	if output == "" {
-		output = stegoPath(o.input)
+		output = stegoPath(o.input, format.Ext)
 	}
 
 	pub, priv, err := recipientKey(o.key)
@@ -58,7 +66,7 @@ func runEmbed(ctx context.Context, o *embedOptions) error {
 	header("embed")
 	field("carrier", bold(o.input), "")
 	field("payload", bold(fmt.Sprintf("%d bytes", len(o.data))), "text")
-	field("output", bold(output), "")
+	field("output", bold(output), describeFormat(format))
 	if priv != nil {
 		field("recipient", bold("new keypair"), "no --key given")
 	} else {
@@ -67,14 +75,13 @@ func runEmbed(ctx context.Context, o *embedOptions) error {
 	step("re-encoding carrier and embedding…")
 
 	started := time.Now()
-	emitter, err := mist.NewEmitter(pub)
+	emitter, err := mist.NewEmitter(pub, mist.WithFormat(output), mist.WithCodec(o.codec))
 	if err != nil {
 		return err
 	}
 	stream, err := emitter.Embed(ctx, o.input, mist.Text(o.data))
 	if errors.Is(err, mist.ErrNoCapacity) {
-		return fmt.Errorf("%w — quiet or tonal audio yields too few usable residues; "+
-			"try a longer carrier or one with richer content", err)
+		return fmt.Errorf("%w — %s", err, capacityHint(format))
 	}
 	if err != nil {
 		return err

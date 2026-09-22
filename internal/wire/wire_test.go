@@ -176,3 +176,90 @@ func (s *WireSuite) TestPutUint32() {
 	s.Equal([]byte{1, 2, 3, 4}, b)
 	s.Equal(uint32(0x01020304), Uint32(b))
 }
+
+func (s *WireSuite) TestSpanStartRoundTrip() {
+	tests := []struct {
+		title    string
+		totalLen uint32
+		chunk    []byte
+	}{
+		{"empty chunk", 0, nil},
+		{"short chunk", 42, []byte("abc")},
+		{"chunk longer than totalLen", 3, []byte("abcdef")}, // totalLen is informational only here
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			raw := MarshalSpanStart(tc.totalLen, tc.chunk)
+			gotLen, gotChunk, ok := UnmarshalSpanStart(raw)
+			s.Require().True(ok)
+			s.Equal(tc.totalLen, gotLen)
+			if len(tc.chunk) == 0 {
+				s.Empty(gotChunk)
+			} else {
+				s.Equal(tc.chunk, gotChunk)
+			}
+		})
+	}
+}
+
+func (s *WireSuite) TestSpanContinueRoundTrip() {
+	tests := []struct {
+		title string
+		chunk []byte
+	}{
+		{"empty chunk", nil},
+		{"short chunk", []byte("xyz")},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			raw := MarshalSpanContinue(tc.chunk)
+			gotChunk, ok := UnmarshalSpanContinue(raw)
+			s.Require().True(ok)
+			if len(tc.chunk) == 0 {
+				s.Empty(gotChunk)
+			} else {
+				s.Equal(tc.chunk, gotChunk)
+			}
+		})
+	}
+}
+
+// A span chunk's magic byte must never collide with a real Payload
+// version, and the two span markers must never be mistaken for each
+// other — that is what lets a reader tell all three framings apart with
+// no other signal.
+func (s *WireSuite) TestSpanMagicDoesNotCollide() {
+	start := MarshalSpanStart(5, []byte("hi"))
+	_, err := UnmarshalPayload(start)
+	s.ErrorIs(err, ErrVersion, "a span-start chunk must never parse as a complete Payload")
+	s.NotEqual(CurrentVersion, start[0])
+
+	cont := MarshalSpanContinue([]byte("hello there"))
+	_, err = UnmarshalPayload(cont)
+	s.ErrorIs(err, ErrVersion, "a span-continue chunk must never parse as a complete Payload")
+	s.NotEqual(CurrentVersion, cont[0])
+
+	_, _, ok := UnmarshalSpanStart(cont)
+	s.False(ok, "a continue chunk must never be read as a start chunk")
+	_, ok = UnmarshalSpanContinue(start)
+	s.False(ok, "a start chunk must never be read as a continue chunk")
+}
+
+func (s *WireSuite) TestUnmarshalSpanRejectsShortInput() {
+	tests := []struct {
+		title string
+		in    []byte
+	}{
+		{"nil", nil},
+		{"empty", []byte{}},
+		{"one byte short of the header", make([]byte, SpanStartHeaderSize-1)},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			_, _, ok := UnmarshalSpanStart(tc.in)
+			s.False(ok)
+		})
+	}
+	_, ok := UnmarshalSpanContinue(nil)
+	s.False(ok)
+}

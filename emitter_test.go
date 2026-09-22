@@ -66,7 +66,7 @@ func (s *EmitterSuite) TestApplyRecoverSamePackets() {
 	enc, err := c.NewEncoder(codec.DefaultVorbis)
 	s.Require().NoError(err)
 	defer func() { _ = enc.Close() }()
-	info := enc.(interface{ Params() codec.Params }).Params()
+	info := enc.(*av.Encoder).Info()
 	s.Require().NoError(c.Load(info.Extradata))
 	pcm := testSine(44100, 2, 8192, 440)
 	pkts, err := enc.Encode(pcm)
@@ -311,7 +311,7 @@ func (s *EmitterSuite) TestFillerFramesAreStillPerturbed() {
 	enc, err := c.NewEncoder(codec.DefaultVorbis)
 	s.Require().NoError(err)
 	defer func() { _ = enc.Close() }()
-	info := enc.(interface{ Params() codec.Params }).Params()
+	info := enc.(*av.Encoder).Info()
 	s.Require().NoError(c.Load(info.Extradata))
 
 	pkts, err := enc.Encode(testSine(44100, 2, 44100*3, 440))

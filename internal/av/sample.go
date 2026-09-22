@@ -38,6 +38,24 @@ var layouts = map[codec.SampleFormat]layout{
 	codec.SampleFmtDBLP: {8, true, dblValue},
 }
 
+// SampleScale is the integer grid a sample format quantizes to, as a
+// multiplier on the float planes this package reports. It is the inverse
+// of the conversion store_sample performs in cgo.c, so round(v*scale) of a
+// decoded sample returns exactly the integer the encoder wrote.
+//
+// Deeper formats are capped at 24 bits: float32 carries 24 mantissa bits,
+// and a grid finer than that would not survive the float pipeline intact.
+func SampleScale(f codec.SampleFormat) float32 {
+	switch f {
+	case codec.SampleFmtU8, codec.SampleFmtU8P:
+		return 128
+	case codec.SampleFmtS16, codec.SampleFmtS16P:
+		return 1 << 15
+	default:
+		return 1 << 23
+	}
+}
+
 func u8Value(b []byte) float32  { return (float32(b[0]) - 128) / 128 }
 func s16Value(b []byte) float32 { return float32(int16(binary.LittleEndian.Uint16(b))) / 32768 }
 func s32Value(b []byte) float32 { return float32(int32(binary.LittleEndian.Uint32(b))) / 2147483648 }

@@ -10,6 +10,9 @@ package av
 
 /*
 #cgo pkg-config: libavformat libavcodec libavutil
+// store_sample calls lrintf, and pkg-config's libav flags do not pull in libm,
+// so GNU ld drops it and the link fails with "DSO missing from command line".
+#cgo LDFLAGS: -lm
 #include "cgo.h"
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +22,7 @@ import "C"
 import (
 	"fmt"
 	"io"
+	"strings"
 	"unsafe"
 )
 
@@ -115,6 +119,52 @@ func avCanDecode(info AudioInfo) bool {
 	return C.mist_av_can_decode(&cinfo) != 0
 }
 
+func avIsLossless(nativeCodecID int) bool {
+	return C.mist_av_is_lossless(C.int(nativeCodecID)) != 0
+}
+
+func avFindFormat(name, codecName string) (Format, error) {
+	cname, ccodec := C.CString(name), C.CString(codecName)
+	defer C.free(unsafe.Pointer(cname))
+	defer C.free(unsafe.Pointer(ccodec))
+	var out C.mist_av_format
+	if C.mist_av_format_find(cname, ccodec, &out) != C.MIST_AV_OK {
+		return Format{}, fmt.Errorf("%w: no encoder or container for %q", ErrOpen, name)
+	}
+	return Format{
+		Container: C.GoString(&out.container[0]),
+		CodecName: C.GoString(&out.codec_name[0]),
+		Ext:       C.GoString(&out.ext[0]),
+		CodecID:   int(out.codec_id),
+		Lossless:  out.lossless != 0,
+	}, nil
+}
+
+// avListFormats resolves every container the C layer named through
+// avFindFormat, so a listed target and a requested one cannot disagree.
+func avListFormats() []Format {
+	const bufLen = 1 << 14
+	buf := (*C.char)(C.malloc(bufLen))
+	if buf == nil {
+		return nil
+	}
+	defer C.free(unsafe.Pointer(buf))
+	if C.mist_av_format_list(buf, bufLen) != C.MIST_AV_OK {
+		return nil
+	}
+	var out []Format
+	for _, line := range strings.Split(C.GoString(buf), "\n") {
+		name, _, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		if f, err := avFindFormat(name, ""); err == nil {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 func avNewDecoder(info AudioInfo) (*Decoder, error) {
 	cinfo, free := cAudioInfo(info)
 	defer free()
@@ -147,6 +197,9 @@ func avNewEncoder(info AudioInfo) (*Encoder, error) {
 		_ = avEncClose(e)
 		return nil, err
 	}
+	// The encoder knows nothing about containers, so the one it was opened
+	// for survives the refresh: Info() then says everything a muxer needs.
+	e.info.Container = info.Container
 	return e, nil
 }
 
@@ -395,6 +448,12 @@ func cAudioInfo(a AudioInfo) (C.mist_av_audio_info, func()) {
 		sample_fmt:      C.int(a.SampleFmt),
 		bitrate:         C.int64_t(a.Bitrate),
 		duration_us:     C.int64_t(a.DurationUs),
+	}
+	for i, b := range []byte(a.Container) {
+		if i >= len(out.container)-1 {
+			break
+		}
+		out.container[i] = C.char(b)
 	}
 	if len(a.Extradata) == 0 {
 		return out, func() {}

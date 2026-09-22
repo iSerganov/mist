@@ -18,10 +18,12 @@ import (
 	"github.com/iSerganov/mist/internal/wire"
 )
 
-// FrameCapacity returns the maximum payload bytes embeddable per stego
-// frame at the library's fixed embedding density, before encryption
-// overhead. Useful for callers who need to know the maximum message size
-// supported without multi-frame spanning (Phase 2).
+// FrameCapacity returns a rough upper bound on the payload bytes
+// embeddable per stego frame at the library's fixed embedding density,
+// before encryption overhead. It is a planning heuristic for a typical
+// carrier, not the real limit Embed enforces — EstimateCapacity reports
+// that, for an actual carrier, and also accounts for Embed spanning the
+// payload across frames when it does not fit in a single one.
 func FrameCapacity() int {
 	return frame.Capacity(typicalEligible(), stego.Density, EnvelopeOverhead)
 }
@@ -43,11 +45,11 @@ func (e *Emitter) embed(ctx context.Context, r io.Reader, payload Payload) (io.R
 	if err := e.validate(ctx, payload); err != nil {
 		return nil, err
 	}
-	pcm, params, extra, err := decodeCarrier(r)
+	pcm, info, err := decodeCarrier(r)
 	if err != nil {
 		return nil, err
 	}
-	return e.embedPCM(ctx, pcm, params, extra, payload)
+	return e.embedPCM(ctx, pcm, info, payload)
 }
 
 // embedURL decodes carrier directly via libav's own URL handling (path,
@@ -58,11 +60,11 @@ func (e *Emitter) embedURL(ctx context.Context, source string, payload Payload) 
 	if err := e.validate(ctx, payload); err != nil {
 		return nil, err
 	}
-	pcm, params, extra, err := decodeCarrierURL(source)
+	pcm, info, err := decodeCarrierURL(source)
 	if err != nil {
 		return nil, err
 	}
-	return e.embedPCM(ctx, pcm, params, extra, payload)
+	return e.embedPCM(ctx, pcm, info, payload)
 }
 
 // validate checks the arguments common to every embed entry point before
@@ -80,28 +82,39 @@ func (e *Emitter) validate(ctx context.Context, payload Payload) error {
 	return nil
 }
 
-func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, params codec.Params, extra []byte, payload Payload) (io.ReadCloser, error) {
+// embedPCM opens the encoder for the Emitter's target and embeds through
+// whichever domain that target allows. A lossless codec hands its samples
+// back bit for bit, so the payload goes into PCM before the encoder runs;
+// Vorbis does not, so it goes into the residues the encoder produced. The
+// frame layout, the density and the crypto are the same either way.
+func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo, payload Payload) (io.ReadCloser, error) {
 	plain, err := marshalPlain(payload, e.senderPriv)
 	if err != nil {
 		return nil, err
 	}
-	vc := vorbis.New()
-	enc, err := vc.NewEncoder(codec.Params{
-		ID:         codec.IDVorbis,
-		SampleRate: params.SampleRate,
-		Channels:   params.Channels,
-		Bitrate:    encodeBitrate(params.Bitrate),
-		Format:     codec.SampleFmtFLTP,
-	})
+	enc, err := av.NewEncoder(e.target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(e.target, info.Params())))
 	if err != nil {
-		return nil, fmt.Errorf("%w: encoder", ErrCarrier)
+		return nil, fmt.Errorf("%w: encoder: %v", ErrCarrier, err)
 	}
 	defer func() { _ = enc.Close() }()
-	info := enc.(interface{ Params() codec.Params }).Params()
-	if err := vc.Load(info.Extradata); err != nil {
-		return nil, fmt.Errorf("%w: setup", err)
+
+	if e.target.Lossless {
+		pcm = padToWindow(pcm, enc.Window())
+		if err := e.embedSamples(ctx, pcm, av.SampleScale(enc.Info().SampleFmt), plain); err != nil {
+			return nil, err
+		}
+		return encodeAndMux(enc, pcm, nil)
 	}
-	_ = extra
+	return encodeAndMux(enc, pcm, func(pkts []codec.Packet) ([]codec.Packet, error) {
+		return e.embedResidues(ctx, enc.Info(), pkts, frameParams(pcm), plain)
+	})
+}
+
+// encodeAndMux runs the carrier through the encoder and writes the result.
+// rewrite, when set, gets every packet before muxing — the hook the Vorbis
+// path embeds in, and the one a lossless path has no use for because its
+// bits were already in the PCM.
+func encodeAndMux(enc *av.Encoder, pcm codec.PCM, rewrite func([]codec.Packet) ([]codec.Packet, error)) (io.ReadCloser, error) {
 	pkts, err := enc.Encode(pcm)
 	if err != nil {
 		return nil, err
@@ -110,85 +123,182 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, params codec.Para
 	if err != nil {
 		return nil, err
 	}
-	groups := frame.GroupPackets(append(pkts, flushed...), frameParams(pcm))
+	all := append(pkts, flushed...)
+	if rewrite != nil {
+		if all, err = rewrite(all); err != nil {
+			return nil, err
+		}
+	}
+	return muxPackets(enc.Info(), all)
+}
+
+// embedResidues is the Vorbis path: group the encoder's packets into stego
+// frames and rewrite residue LSBs in each.
+//
+// Grouping needs pkts' timestamps, but Ogg does not store one per packet —
+// only a granule position per page — so a demuxer reconstructs each
+// packet's timestamp from that using standard Vorbis block-size
+// accounting. At a genuine block-size transition (a loud/quiet transient
+// in the source), that reconstruction can land a packet one window short
+// or long of what the encoder itself reported, shifting it into a
+// different stego frame than Embed used here. Grouping the encoder's own
+// packets would then disagree with what Listen sees in the written file —
+// silently, since it just looks like a broken span or a missed frame.
+// canonicalPackets removes the mismatch by asking the same question
+// Listen will: it muxes pkts once (unrewritten) and demuxes them straight
+// back, so grouping runs on the exact packet stream — same order, same
+// count, same reconstructed timestamps — any reader gets. Rewrite never
+// changes a packet's size (same-Huffman-length substitution only), so
+// this canonical stream's own container layout, and the timestamps a
+// reader reconstructs from it, are unaffected by which frames end up
+// carrying real data.
+func (e *Emitter) embedResidues(ctx context.Context, info av.AudioInfo, pkts []codec.Packet, fp frame.Params, plain []byte) ([]codec.Packet, error) {
+	pkts, err := canonicalPackets(info, pkts)
+	if err != nil {
+		return nil, err
+	}
+	vc := vorbis.New()
+	if err := vc.Load(info.Extradata); err != nil {
+		return nil, fmt.Errorf("%w: setup", err)
+	}
+	groups := frame.GroupPackets(pkts, fp)
 	if len(groups) == 0 {
 		return nil, ErrCarrier
 	}
-	all := make([]codec.Packet, 0, len(pkts)+len(flushed))
-	carried := false
-	for _, g := range groups {
+	rooms, err := groupRooms(ctx, vc, groups)
+	if err != nil {
+		return nil, err
+	}
+	plan := planChunks(plain, rooms)
+	if plan == nil {
+		return nil, noCapacity(plain)
+	}
+	all := make([]codec.Packet, 0, len(pkts))
+	for i, g := range groups {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		out, done, err := e.embedGroup(vc, g, plain, !carried)
+		out, err := e.embedGroup(vc, g, plan[i])
 		if err != nil {
 			return nil, err
 		}
-		carried = carried || done
 		all = append(all, out...)
 	}
-	if !carried {
-		return nil, fmt.Errorf("%w: %d bytes needed", ErrNoCapacity, len(plain)+EnvelopeOverhead)
-	}
-	return muxPackets(info, all)
+	return all, nil
 }
 
-// embedGroup writes one frame and reports whether the message landed in it.
-// The message rides in the first frame with room for it; every other frame
-// is written with CSPRNG filler at the same density, so a frame carrying
-// the payload and a frame carrying nothing leave the same footprint. Only
-// a frame with no eligible residues at all — a trailing sliver of encoder
-// padding — passes through untouched.
-func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plain []byte, carry bool) ([]codec.Packet, bool, error) {
-	room, err := stego.Capacity(vc, g.Packets)
-	if errors.Is(err, stego.ErrNoResidues) {
-		return g.Packets, false, nil
-	}
+// canonicalPackets round-trips pkts through an in-memory mux/demux pass so
+// their timestamps match what any reader — Listen included — reconstructs
+// from the container, rather than what the encoder itself reported. See
+// embedResidues for why the two can differ.
+func canonicalPackets(info av.AudioInfo, pkts []codec.Packet) ([]codec.Packet, error) {
+	rc, err := muxPackets(info, pkts)
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return nil, err
 	}
-
-	// Nil bits make Apply fill the whole frame with CSPRNG filler.
-	var bits stego.Bits
-	carrying := carry && room >= EnvelopeOverhead+len(plain)
-	if carrying {
-		env, err := crypto.Seal(plain, e.pub)
+	defer func() { _ = rc.Close() }()
+	d, err := av.OpenDemuxerReader(asSeeker(rc))
+	if err != nil {
+		return nil, fmt.Errorf("%w: canonicalize: %v", ErrCarrier, err)
+	}
+	defer func() { _ = d.Close() }()
+	out := make([]codec.Packet, 0, len(pkts))
+	for {
+		pkt, err := d.NextPacket()
+		if errors.Is(err, av.ErrEOF) {
+			break
+		}
 		if err != nil {
-			return nil, false, err
+			return nil, fmt.Errorf("%w: canonicalize: %v", ErrCarrier, err)
+		}
+		out = append(out, av.ToCodecPacket(pkt))
+	}
+	return out, nil
+}
+
+// groupRooms reports each Vorbis stego frame's real capacity in bytes —
+// the same room stego.Capacity would report to Apply — without writing
+// anything, so planChunks can decide where the payload goes before any
+// frame is touched. A group with no eligible residues at all reports 0
+// rather than failing: it is left untouched either way.
+func groupRooms(ctx context.Context, vc *vorbis.Codec, groups []frame.Group) ([]int, error) {
+	rooms := make([]int, len(groups))
+	for i, g := range groups {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		room, err := stego.Capacity(vc, g.Packets)
+		if errors.Is(err, stego.ErrNoResidues) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+		}
+		rooms[i] = room
+	}
+	return rooms, nil
+}
+
+// embedGroup writes one frame. plainChunk is the framed bytes planChunks
+// assigned this frame this round, or nil to fill it with CSPRNG filler at
+// the same density — never left untouched unless it has no eligible
+// residues at all, a trailing sliver of encoder padding.
+func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plainChunk []byte) ([]codec.Packet, error) {
+	var bits stego.Bits
+	if plainChunk != nil {
+		env, err := crypto.Seal(plainChunk, e.pub)
+		if err != nil {
+			return nil, err
 		}
 		bits = env.Marshal()
 	}
 	pos, err := crypto.PositionSeed(e.pub, g.Index)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	out, err := stego.Apply(vc, pos, g.Packets, bits)
+	if errors.Is(err, stego.ErrNoResidues) {
+		return g.Packets, nil
+	}
 	if errors.Is(err, stego.ErrCapacity) {
-		return nil, false, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
-	return out, carrying, nil
+	return out, nil
 }
 
-// Bitrate bounds for the re-encode. Mist always re-encodes, and a second
-// lossy pass at the source's own rate compounds the loss, so a lossy
-// carrier is given headroom above its rate rather than matched to it.
+// Bitrate bounds for a lossy re-encode.
 const (
 	minBitrate     = 192_000
 	maxBitrate     = 500_000
 	unknownBitrate = 256_000
 )
 
-// encodeBitrate picks the Vorbis target for a carrier of the given rate.
-// A lossless source reports its raw PCM rate — 1411 kbps for CD audio —
-// which is not a meaningful target for a lossy codec, so it is capped.
-func encodeBitrate(source int64) int64 {
-	if source <= 0 {
+// targetBitrate picks the encode rate for a carrier of the given params.
+// A lossless encoder decides its own size from the audio, and forcing a
+// rate on it only makes it complain, so it is asked for none.
+//
+// A lossy target is given headroom above the source instead of matching
+// it: Mist always re-encodes, and a second pass at the source's own rate
+// compounds the loss. A lossless source reports its raw PCM rate — 1411
+// kbps for CD audio — which is no target at all, so it is capped.
+func targetBitrate(f av.Format, params codec.Params) int64 {
+	switch {
+	case f.Lossless:
+		return 0
+	case params.Bitrate <= 0:
 		return unknownBitrate
+	default:
+		return min(max(params.Bitrate*3/2, minBitrate), maxBitrate)
 	}
-	return min(max(source*3/2, minBitrate), maxBitrate)
+}
+
+// noCapacity reports that no frame had room, the one embed failure that
+// must be loud: the caller would otherwise get a silent no-op file.
+func noCapacity(plain []byte) error {
+	return fmt.Errorf("%w: %d bytes needed", ErrNoCapacity, len(plain)+EnvelopeOverhead)
 }
 
 func frameParams(pcm codec.PCM) frame.Params {
@@ -199,10 +309,10 @@ func frameParams(pcm codec.PCM) frame.Params {
 	}
 }
 
-func decodeCarrier(r io.Reader) (codec.PCM, codec.Params, []byte, error) {
+func decodeCarrier(r io.Reader) (codec.PCM, av.AudioInfo, error) {
 	d, err := av.OpenDemuxerReader(asSeeker(r))
 	if err != nil {
-		return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
 	defer func() { _ = d.Close() }()
 	return decodeFromDemuxer(d)
@@ -212,115 +322,94 @@ func decodeCarrier(r io.Reader) (codec.PCM, codec.Params, []byte, error) {
 // path, a file:// URL, or an http(s):// URL — without tunneling it
 // through a Go io.Reader. This is the only route into a plain http(s)
 // source, since it does not arrive as an io.Reader in the first place.
-func decodeCarrierURL(source string) (codec.PCM, codec.Params, []byte, error) {
+func decodeCarrierURL(source string) (codec.PCM, av.AudioInfo, error) {
 	d, err := av.OpenDemuxer(source)
 	if err != nil {
-		return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
 	defer func() { _ = d.Close() }()
 	return decodeFromDemuxer(d)
 }
 
-func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, codec.Params, []byte, error) {
+func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, av.AudioInfo, error) {
 	info := d.Info()
 	if !av.CanDecode(info) {
-		return codec.PCM{}, codec.Params{}, nil,
+		return codec.PCM{}, av.AudioInfo{},
 			fmt.Errorf("%w: this FFmpeg build cannot decode %s", ErrUnsupportedCodec, codecName(info))
 	}
 	dec, err := av.NewDecoder(info)
 	if err != nil {
-		return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: decoder", ErrCarrier)
+		return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: decoder", ErrCarrier)
 	}
 	defer func() { _ = dec.Close() }()
-	var planes [][]float32
-	var n, ch, rate int
+	var acc accumulator
 	for {
 		pkt, err := d.NextPacket()
 		if errors.Is(err, av.ErrEOF) {
 			break
 		}
 		if err != nil {
-			return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+			return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
 		if err := dec.Send(pkt); err != nil && !errors.Is(err, av.ErrAgain) {
-			return codec.PCM{}, codec.Params{}, nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+			return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
-		more, c, rt, err := drainPCM(dec)
-		if err != nil {
-			return codec.PCM{}, codec.Params{}, nil, err
-		}
-		if ch == 0 && c > 0 {
-			ch, rate = c, rt
-			planes = make([][]float32, ch)
-		}
-		for i := range more {
-			if i < len(planes) {
-				planes[i] = append(planes[i], more[i]...)
-			}
-		}
-		if len(more) > 0 {
-			n += len(more[0])
+		if err := acc.drain(dec); err != nil {
+			return codec.PCM{}, av.AudioInfo{}, err
 		}
 	}
 	_ = dec.Send(av.Packet{})
-	more, _, _, err := drainPCM(dec)
+	if err := acc.drain(dec); err != nil {
+		return codec.PCM{}, av.AudioInfo{}, err
+	}
+	if acc.n == 0 || len(acc.planes) == 0 {
+		return codec.PCM{}, av.AudioInfo{}, ErrCarrier
+	}
+	return acc.pcm(), info, nil
+}
+
+// accumulator collects a decoder's output into one contiguous set of
+// float planes. Mist re-encodes the whole carrier, so it needs all of it.
+type accumulator struct {
+	planes [][]float32
+	n      int
+	ch     int
+	rate   int
+}
+
+func (a *accumulator) drain(dec *av.Decoder) error {
+	frames, err := av.DrainPCM(dec)
 	if err != nil {
-		return codec.PCM{}, codec.Params{}, nil, err
+		return fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
-	for i := range more {
-		if i < len(planes) {
-			planes[i] = append(planes[i], more[i]...)
-		}
+	for _, f := range frames {
+		a.add(f)
 	}
-	if len(more) > 0 {
-		n += len(more[0])
-	}
-	if n == 0 || ch == 0 {
-		return codec.PCM{}, codec.Params{}, nil, ErrCarrier
-	}
-	return codec.PCM{
-		Planes:     planes,
-		NbSamples:  n,
-		Channels:   ch,
-		SampleRate: rate,
-		Format:     codec.SampleFmtFLTP,
-	}, info.Params(), info.Extradata, nil
+	return nil
 }
 
-func drainPCM(dec *av.Decoder) ([][]float32, int, int, error) {
-	var planes [][]float32
-	var ch, rate int
-	for {
-		fr, err := dec.Receive()
-		if errors.Is(err, av.ErrAgain) || errors.Is(err, av.ErrEOF) {
-			return planes, ch, rate, nil
+func (a *accumulator) add(f codec.PCM) {
+	if a.ch == 0 && f.Channels > 0 {
+		a.ch, a.rate = f.Channels, f.SampleRate
+		a.planes = make([][]float32, a.ch)
+	}
+	for i, p := range f.Planes {
+		if i < len(a.planes) {
+			a.planes[i] = append(a.planes[i], p...)
 		}
-		if err != nil {
-			return nil, 0, 0, fmt.Errorf("%w: %v", ErrCarrier, err)
-		}
-		pcm := frameToPCM(fr)
-		if ch == 0 {
-			ch, rate = pcm.Channels, pcm.SampleRate
-			planes = make([][]float32, ch)
-		}
-		for i, p := range pcm.Planes {
-			if i < len(planes) {
-				planes[i] = append(planes[i], p...)
-			}
-		}
+	}
+	if len(f.Planes) > 0 {
+		a.n += len(f.Planes[0])
 	}
 }
 
-// frameToPCM normalises whatever sample format the decoder produced into
-// the float planes the Vorbis encoder takes.
-func frameToPCM(f av.Frame) codec.PCM {
+func (a *accumulator) pcm() codec.PCM {
 	return codec.PCM{
-		Planes:     f.FloatPlanes(),
-		NbSamples:  f.NbSamples,
-		Channels:   f.Channels,
-		SampleRate: f.SampleRate,
+		Planes:     a.planes,
+		NbSamples:  a.n,
+		Channels:   a.ch,
+		SampleRate: a.rate,
 		Format:     codec.SampleFmtFLTP,
-		PTS:        f.PTS,
 	}
 }
 
@@ -348,16 +437,9 @@ func marshalPlain(p Payload, senderPriv []byte) ([]byte, error) {
 	return wire.MarshalPayload(wp)
 }
 
-func muxPackets(p codec.Params, pkts []codec.Packet) (io.ReadCloser, error) {
+func muxPackets(info av.AudioInfo, pkts []codec.Packet) (io.ReadCloser, error) {
 	var buf seekBuf
-	m, err := av.NewMuxer(&buf, av.AudioInfo{
-		CodecID:    av.CodecIDVorbis,
-		SampleRate: p.SampleRate,
-		Channels:   p.Channels,
-		SampleFmt:  p.Format,
-		Bitrate:    p.Bitrate,
-		Extradata:  p.Extradata,
-	})
+	m, err := av.NewMuxer(&buf, info)
 	if err != nil {
 		return nil, fmt.Errorf("%w: muxer", err)
 	}

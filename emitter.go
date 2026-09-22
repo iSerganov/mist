@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/iSerganov/mist/internal/av"
 )
 
 // EmitterOption configures NewEmitter.
@@ -20,17 +22,35 @@ func WithSenderAuth(senderPrivKey []byte) EmitterOption {
 	}
 }
 
+// WithFormat selects the output target the way ffmpeg's -f does: a
+// container short name ("flac", "wav", "ogg") or the output path whose
+// extension names one ("song.flac"). Ogg Vorbis by default.
+func WithFormat(name string) EmitterOption {
+	return func(e *Emitter) { e.format = name }
+}
+
+// WithCodec overrides the encoder the container would default to, the way
+// ffmpeg's -c:a does — an m4a holds AAC unless told to hold ALAC.
+func WithCodec(name string) EmitterOption {
+	return func(e *Emitter) { e.codec = name }
+}
+
 // Emitter encrypts a payload for a recipient public key and embeds it
-// into an Ogg Vorbis carrier. Construct it once with NewEmitter and share
-// it. Methods do not mutate the Emitter.
+// into a carrier. Construct it once with NewEmitter and share it. Methods
+// do not mutate the Emitter.
 type Emitter struct {
 	pub        []byte
 	senderPriv []byte
+	format     string
+	codec      string
+	target     av.Format
 }
 
 // NewEmitter returns an Emitter for recipientPubKey.
 // The key and any option-held secrets are copied; later writes to the
-// caller's slices are not observed.
+// caller's slices are not observed. An output format this FFmpeg cannot
+// write, or a lossy one other than Vorbis, is ErrUnsupportedCodec here
+// rather than after a carrier has been decoded.
 func NewEmitter(recipientPubKey []byte, opts ...EmitterOption) (*Emitter, error) {
 	if recipientPubKey == nil {
 		return nil, ErrInvalidKey
@@ -41,12 +61,17 @@ func NewEmitter(recipientPubKey []byte, opts ...EmitterOption) (*Emitter, error)
 	for _, opt := range opts {
 		opt(e)
 	}
+	target, err := lookupFormat(e.format, e.codec)
+	if err != nil {
+		return nil, err
+	}
+	e.target = target
 	return e, nil
 }
 
 // Embed opens source (a local file path, file:// URL, or http(s):// URL)
 // as the carrier, encrypts payload for the recipient, and returns a new
-// stego Ogg stream.
+// stego stream in the Emitter's output format.
 //
 // The payload is looped across fixed-duration stego frames, each
 // re-encrypted with a fresh ephemeral X25519 key, for the full duration
