@@ -40,6 +40,12 @@ embed: build
 formats: build
 	./$(BIN) formats
 
+# make estimate INPUT=song.mp3 [OUTPUT=out.flac] [CODEC=alac]
+estimate: build
+	@test -n "$(INPUT)" || { echo "usage: make estimate INPUT=<file|url> [OUTPUT=..] [CODEC=..]"; exit 2; }
+	./$(BIN) estimate --input "$(INPUT)" \
+		$(if $(OUTPUT),--output "$(OUTPUT)") $(if $(CODEC),--out-codec "$(CODEC)")
+
 # make catch INPUT=out.ogg KEY=keys/mist.key [TIMEOUT=30s]
 catch: build
 	@test -n "$(INPUT)" || { echo "usage: make catch INPUT=<file|url> KEY=<private key> [TIMEOUT=30s]"; exit 2; }

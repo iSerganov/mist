@@ -21,6 +21,7 @@ NewCatcher(priv []byte, opts ...CatcherOption) (*Catcher, error)
 FrameCapacity() int
 Formats() []Format                       // what this FFmpeg build can write
 LookupFormat(name, codec string) (Format, error)
+EstimateCapacity(ctx, source, format, codec string) (Capacity, error)
 WithSenderAuth(senderPriv []byte) EmitterOption
 WithFormat(name string) EmitterOption    // container name or output path; ffmpeg's -f
 WithCodec(name string) EmitterOption     // encoder override; ffmpeg's -c:a
@@ -50,11 +51,12 @@ libav's own logging defaults to `AV_LOG_FATAL`: failures already reach Go via re
 ## Layout
 
 ```
-cmd/mist          cobra CLI: embed / catch / formats, colour output, signal handling
+cmd/mist          cobra CLI: embed / catch / formats / estimate, colour output, signal handling
 emitter.go        NewEmitter, Embed / EmbedReader / EmbedFile → io.ReadCloser
 embed.go          carrier decode, encoder open, mux; FrameCapacity
 lossless.go       sample-domain embed + windower (the lossless half of embed/extract)
 format.go         Format, Formats, LookupFormat: which targets are writable
+estimate.go       EstimateCapacity: real per-frame room, without embedding anything
 catcher.go        NewCatcher, Listen / ListenReader / Extract, options
 extract.go        scanner interface + residueScanner / sampleScanner, shared opener
 suite_test.go     shared test fixtures (audioSuite) for the root suites
@@ -190,7 +192,7 @@ interoperates with `crypto/ecdh` and the CLI's own hex format.
 
 Phase 1 is feature-complete end to end, with a `cmd/mist` CLI over it. All internal packages are implemented; `Emitter` embeds text and `Catcher` recovers it via `Listen` / `ListenReader` / `Extract`. Output is Ogg Vorbis or any lossless codec the installed FFmpeg can encode — verified end to end for FLAC, WAV, ALAC, WavPack, TTA, AIFF and CAF.
 
-Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic for the Vorbis path only — it ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time), and it does not describe a lossless target at all, which holds far more; `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either; `fmt_pref` prefers s16, so a 24-bit master comes back at CD depth wherever the encoder offers 16.
+Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic for the Vorbis path only — it ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time), and it does not describe a lossless target at all, which holds far more (`EstimateCapacity`, and the `mist estimate` command built on it, report the real number instead, at the cost of decoding and re-encoding the carrier); `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either; `fmt_pref` prefers s16, so a 24-bit master comes back at CD depth wherever the encoder offers 16.
 
 ## Design principles
 

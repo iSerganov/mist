@@ -45,6 +45,6 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 	root.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable coloured output")
-	root.AddCommand(newEmbedCmd(), newCatchCmd(), newFormatsCmd())
+	root.AddCommand(newEmbedCmd(), newCatchCmd(), newFormatsCmd(), newEstimateCmd())
 	return root
 }

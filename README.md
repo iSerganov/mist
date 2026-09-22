@@ -24,27 +24,30 @@ read in an afternoon. Contributions and design discussion are very welcome.
 
 ## Contents
 
-- [How it works](#how-it-works)
-- [Requirements](#requirements)
-- [Install](#install)
-- [Command line](#command-line)
-  - [embed](#embed)
-  - [catch](#catch)
-  - [formats](#formats)
-  - [Interrupting a run](#interrupting-a-run)
-- [Library](#library)
-  - [Emitter](#emitter)
-  - [Catcher](#catcher)
-  - [Options](#options)
-  - [Errors](#errors)
-- [Choosing a carrier](#choosing-a-carrier)
-  - [Audio quality](#audio-quality)
-- [Supported formats](#supported-formats)
-- [Status and limitations](#status-and-limitations)
-- [Security notes](#security-notes)
-- [Development](#development)
-- [Ethics](#ethics)
-- [Contributing](#contributing)
+- [mist](#mist)
+  - [Contents](#contents)
+  - [How it works](#how-it-works)
+  - [Requirements](#requirements)
+  - [Install](#install)
+  - [Command line](#command-line)
+    - [embed](#embed)
+    - [catch](#catch)
+    - [formats](#formats)
+    - [estimate](#estimate)
+    - [Interrupting a run](#interrupting-a-run)
+  - [Library](#library)
+    - [Emitter](#emitter)
+    - [Catcher](#catcher)
+    - [Options](#options)
+    - [Errors](#errors)
+  - [Choosing a carrier](#choosing-a-carrier)
+    - [Audio quality](#audio-quality)
+  - [Supported formats](#supported-formats)
+  - [Status and limitations](#status-and-limitations)
+  - [Security notes](#security-notes)
+  - [Development](#development)
+  - [Ethics](#ethics)
+  - [Contributing](#contributing)
 
 ---
 
@@ -116,7 +119,7 @@ go install github.com/iSerganov/mist/cmd/mist@latest
 
 ## Command line
 
-The `mist` binary has three commands. Colour is enabled for terminals and turned
+The `mist` binary has several commands. Colour is enabled for terminals and turned
 off automatically for pipes, `TERM=dumb`, and `NO_COLOR`; `--no-color` forces it
 off.
 
@@ -238,6 +241,67 @@ with `--out-codec` where a container holds more than one. `--out-codec` accepts
 either name libav knows a codec by, the encoder's or the codec's, so both `dca`
 and `dts` work.
 
+### estimate
+
+```bash
+mist estimate --input song.ogg
+```
+
+```
+  mist · estimate
+
+  carrier     song.ogg
+  target      ogg/vorbis  vorbis · lossy, bits in the residues
+
+  → decoding and probing capacity…
+
+  frames      ████████████████████████  3/3 usable  3 total
+  capacity    77 B  largest single message this carrier can hold
+
+  ✓ this carrier can be used with `mist embed`
+```
+
+| Flag | Short | Required | Description |
+|---|---|---|---|
+| `--input` | `-i` | yes | Carrier audio: path, `file://` or `http(s)://` URL |
+| `--output` | `-o` | no | Target container, or an output path whose extension names one (default `ogg`) |
+| `--out-codec` | | no | Encoder to use when the container holds more than one, e.g. `alac` for `.m4a` |
+
+`estimate` decodes the carrier and re-encodes it for the same target `embed`
+would write — `--output`/`--out-codec` pick that target the same way, and no
+`--data` or `--key` is needed, since capacity does not depend on the message or
+the recipient. It reports the real limit `embed` enforces, not the
+[`FrameCapacity()`](#choosing-a-carrier) heuristic: for Vorbis it groups the
+encoder's actual packets into stego frames and counts each one's genuinely
+eligible residues, and for a lossless target it computes each frame's sample
+capacity directly. A carrier that cannot fit the protocol envelope in any frame
+exits non-zero with the same hint `embed` would give:
+
+```bash
+mist estimate --input tiny.wav
+```
+
+```
+  mist · estimate
+
+  carrier     tiny.wav
+  target      ogg/vorbis  vorbis · lossy, bits in the residues
+
+  → decoding and probing capacity…
+
+  frames      ░░░░░░░░░░░░░░░░░░░░░░░░  0/1 usable  1 total
+  capacity    0 B  largest single message this carrier can hold
+
+  ✗ mist: carrier has no frame with room for the payload — quiet or tonal audio
+    yields too few usable residues; try a longer or richer carrier, or a
+    lossless --output format, which holds far more
+```
+
+A lossless target is cheap to check — capacity there is arithmetic over the
+sample count, so no full encode is needed — while a Vorbis target costs what
+`embed` costs, since only the encoder's real residues say how many are
+eligible.
+
 ### Interrupting a run
 
 Both commands install a signal handler for `SIGINT`, `SIGTERM` and `SIGHUP`,
@@ -280,6 +344,12 @@ containers that hold more than one encoder. An unwritable target is
 `mist.Formats()` lists what the installed FFmpeg can write, and
 `mist.LookupFormat(name, codec)` resolves one without constructing an Emitter —
 useful for deriving an output filename from its `Ext`.
+
+`mist.EstimateCapacity(ctx, source, format, codec)` decodes source the way
+`Embed` would for that target and reports a `Capacity` — the number of stego
+frames found, how many have room for the protocol envelope, and the largest
+plaintext a single `Embed` call could carry — without writing anything out or
+needing a recipient key.
 
 ### Catcher
 
@@ -356,6 +426,8 @@ carrier with more high-frequency content.
 over-estimates, because it does not account for how many residues are actually
 usable. It does not describe a lossless target at all, which holds far more.
 Treat it as a planning hint; the real limit is enforced when you call `Embed`.
+For the real number ahead of time, without producing any output, use
+`mist estimate` (or `EstimateCapacity` from Go) — see [estimate](#estimate).
 
 ### Audio quality
 
@@ -478,6 +550,7 @@ make keys                        # X25519 keypair via OpenSSL -> keys/mist.{pub,
 make embed INPUT=song.mp3 DATA="hello" OUTPUT=out.flac KEY=keys/mist.pub
 make catch INPUT=out.flac KEY=keys/mist.key TIMEOUT=30s
 make formats                     # output formats this FFmpeg build can write
+make estimate INPUT=song.mp3 OUTPUT=out.flac   # capacity check, no key needed
 make test                        # verbose: -v -race -cover, full tracebacks
 make test LOG=trace              # ...and libav logging turned all the way up
 make test-quiet                  # same run, results only
