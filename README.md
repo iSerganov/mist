@@ -76,18 +76,21 @@ of them whether or not there is a real message — short payloads are padded wit
 CSPRNG filler. Presence and absence are meant to leave the same statistical
 footprint.
 
-**Audio is divided into frames, and the message goes into one of them.** The
-carrier is split into self-contained 8-second frames, and the sealed message is
-written into the first frame with room for it. Every other frame is filled with
-CSPRNG bytes at exactly the same density, so the frame carrying the message is
-statistically indistinguishable from the ones carrying nothing — the padding is
-not decoration, it is what stops the payload's location being obvious. There is
-no sync marker either: both sides derive frame boundaries from the timestamps
+**Audio is divided into frames, and the message goes into the first one with
+room for it.** The carrier is split into self-contained 8-second frames. A
+message that fits in one frame goes there and stops; a longer one spreads
+across as many *consecutive* frames as it needs, each independently sealed
+with its own ephemeral key. Every frame not carrying a piece of the message is
+filled with CSPRNG bytes at exactly the same density, so a carrying frame and
+an empty one are statistically indistinguishable — the padding is not
+decoration, it is what stops the payload's location being obvious. There is no
+sync marker either: both sides derive frame boundaries from the timestamps
 already present in the stream.
 
-One consequence is worth knowing: because the message lives in a single frame,
-a listener who joins a live broadcast after that frame has passed recovers
-nothing, and a recording that loses that frame loses the message.
+One consequence is worth knowing: a listener who joins a live broadcast after
+the message's frame (or, for a longer message, after its first frame) has
+passed recovers nothing, and a recording that loses that frame — or any one
+frame of a longer message's span — loses the message.
 
 ## Requirements
 
@@ -203,10 +206,11 @@ mist catch --input song.stego.ogg --key song.stego.key
 | `--key` | `-k` | yes | Private key file |
 | `--timeout` | `-t` | no | Go duration; `0` (the default) reads until the stream ends |
 
-A successful scan reports one frame, since the message is embedded once. `catch`
-keeps reading to the end regardless, because the carrying frame may be anywhere
-in the file. A file ends by itself; a live stream runs until `--timeout` elapses
-or you interrupt it. The command exits non-zero when nothing was recovered.
+A successful scan reports one message, whether it rode in a single frame or
+spread across several — `FrameIdx` names the frame where it started. `catch`
+keeps reading to the end regardless, because that frame may be anywhere in the
+file. A file ends by itself; a live stream runs until `--timeout` elapses or
+you interrupt it. The command exits non-zero when nothing was recovered.
 
 Frames that carry no message and frames sealed for somebody else's key are
 indistinguishable, so both are skipped in silence. `catch` will never tell you
@@ -255,8 +259,11 @@ mist estimate --input song.ogg
 
   → decoding and probing capacity…
 
+  source      vorbis · lossy  44100 Hz · 2ch · 128 kbps · 24s
+
   frames      ████████████████████████  3/3 usable  3 total
-  capacity    77 B  largest single message this carrier can hold
+  frame cap   77 B  largest message that fits in a single frame
+  total cap   241 B  largest message spanning every usable frame
 
   ✓ this carrier can be used with `mist embed`
 ```
@@ -270,12 +277,20 @@ mist estimate --input song.ogg
 `estimate` decodes the carrier and re-encodes it for the same target `embed`
 would write — `--output`/`--out-codec` pick that target the same way, and no
 `--data` or `--key` is needed, since capacity does not depend on the message or
-the recipient. It reports the real limit `embed` enforces, not the
+the recipient. `source` is read straight from libav: the carrier's own codec,
+container, sample rate, channel count, bitrate (when the source reports one)
+and duration.
+
+It reports the real limit `embed` enforces, not the
 [`FrameCapacity()`](#choosing-a-carrier) heuristic: for Vorbis it groups the
 encoder's actual packets into stego frames and counts each one's genuinely
 eligible residues, and for a lossless target it computes each frame's sample
-capacity directly. A carrier that cannot fit the protocol envelope in any frame
-exits non-zero with the same hint `embed` would give:
+capacity directly. `frame cap` is the largest message a single, unspanned
+frame can hold — what `embed` uses when a message fits in one frame outright.
+`total cap` is the largest message `embed` could carry overall by spreading it
+across every usable frame in turn, for one that doesn't. A carrier that
+cannot fit even the protocol envelope in any frame exits non-zero with the
+same hint `embed` would give:
 
 ```bash
 mist estimate --input tiny.wav
@@ -289,8 +304,11 @@ mist estimate --input tiny.wav
 
   → decoding and probing capacity…
 
+  source      pcm_s16le · lossless  44100 Hz · 2ch · 1411 kbps · 0s
+
   frames      ░░░░░░░░░░░░░░░░░░░░░░░░  0/1 usable  1 total
-  capacity    0 B  largest single message this carrier can hold
+  frame cap   0 B  largest message that fits in a single frame
+  total cap   0 B  largest message spanning every usable frame
 
   ✗ mist: carrier has no frame with room for the payload — quiet or tonal audio
     yields too few usable residues; try a longer or richer carrier, or a
@@ -346,10 +364,13 @@ containers that hold more than one encoder. An unwritable target is
 useful for deriving an output filename from its `Ext`.
 
 `mist.EstimateCapacity(ctx, source, format, codec)` decodes source the way
-`Embed` would for that target and reports a `Capacity` — the number of stego
-frames found, how many have room for the protocol envelope, and the largest
-plaintext a single `Embed` call could carry — without writing anything out or
-needing a recipient key.
+`Embed` would for that target and reports a `Capacity`, without writing
+anything out or needing a recipient key: `Source` (the carrier's own codec,
+container, rate, channels, bitrate and duration, straight from libav),
+`Frames` and `Usable` (how many have room to contribute), `FrameCapacity`
+(the largest plaintext a single, unspanned frame could carry), and
+`TotalCapacity` (the largest plaintext `Embed` could carry overall by
+spreading it across every usable frame when it doesn't fit in one).
 
 ### Catcher
 
@@ -418,8 +439,11 @@ little over a hundred bytes — a sentence or two, not a document. Capacity is
 deliberately modest: embedding is confined to the frequencies where it cannot
 be heard, and every extra byte is extra distortion.
 
-Since the message occupies a single frame, a longer carrier does not buy more
-room; a *richer* one does. If your message does not fit, shorten it or pick a
+A message that fits in one frame only ever cares about that frame's own
+room, so for it a longer carrier buys nothing — a *richer* one does. A longer
+message that needs to spread across several frames is different: it draws on
+every usable frame in turn, so there a longer carrier directly means more
+room. Either way, if your message does not fit at all, shorten it or pick a
 carrier with more high-frequency content.
 
 `FrameCapacity()` reports a rough upper bound for the Vorbis path and

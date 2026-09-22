@@ -18,10 +18,12 @@ import (
 	"github.com/iSerganov/mist/internal/wire"
 )
 
-// FrameCapacity returns the maximum payload bytes embeddable per stego
-// frame at the library's fixed embedding density, before encryption
-// overhead. Useful for callers who need to know the maximum message size
-// supported without multi-frame spanning (Phase 2).
+// FrameCapacity returns a rough upper bound on the payload bytes
+// embeddable per stego frame at the library's fixed embedding density,
+// before encryption overhead. It is a planning heuristic for a typical
+// carrier, not the real limit Embed enforces — EstimateCapacity reports
+// that, for an actual carrier, and also accounts for Embed spanning the
+// payload across frames when it does not fit in a single one.
 func FrameCapacity() int {
 	return frame.Capacity(typicalEligible(), stego.Density, EnvelopeOverhead)
 }
@@ -43,11 +45,11 @@ func (e *Emitter) embed(ctx context.Context, r io.Reader, payload Payload) (io.R
 	if err := e.validate(ctx, payload); err != nil {
 		return nil, err
 	}
-	pcm, params, err := decodeCarrier(r)
+	pcm, info, err := decodeCarrier(r)
 	if err != nil {
 		return nil, err
 	}
-	return e.embedPCM(ctx, pcm, params, payload)
+	return e.embedPCM(ctx, pcm, info, payload)
 }
 
 // embedURL decodes carrier directly via libav's own URL handling (path,
@@ -58,11 +60,11 @@ func (e *Emitter) embedURL(ctx context.Context, source string, payload Payload) 
 	if err := e.validate(ctx, payload); err != nil {
 		return nil, err
 	}
-	pcm, params, err := decodeCarrierURL(source)
+	pcm, info, err := decodeCarrierURL(source)
 	if err != nil {
 		return nil, err
 	}
-	return e.embedPCM(ctx, pcm, params, payload)
+	return e.embedPCM(ctx, pcm, info, payload)
 }
 
 // validate checks the arguments common to every embed entry point before
@@ -85,12 +87,12 @@ func (e *Emitter) validate(ctx context.Context, payload Payload) error {
 // back bit for bit, so the payload goes into PCM before the encoder runs;
 // Vorbis does not, so it goes into the residues the encoder produced. The
 // frame layout, the density and the crypto are the same either way.
-func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, params codec.Params, payload Payload) (io.ReadCloser, error) {
+func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo, payload Payload) (io.ReadCloser, error) {
 	plain, err := marshalPlain(payload, e.senderPriv)
 	if err != nil {
 		return nil, err
 	}
-	enc, err := av.NewEncoder(e.target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(e.target, params)))
+	enc, err := av.NewEncoder(e.target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(e.target, info.Params())))
 	if err != nil {
 		return nil, fmt.Errorf("%w: encoder: %v", ErrCarrier, err)
 	}
@@ -104,7 +106,7 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, params codec.Para
 		return encodeAndMux(enc, pcm, nil)
 	}
 	return encodeAndMux(enc, pcm, func(pkts []codec.Packet) ([]codec.Packet, error) {
-		return e.embedResidues(ctx, enc.Info().Extradata, pkts, frameParams(pcm), plain)
+		return e.embedResidues(ctx, enc.Info(), pkts, frameParams(pcm), plain)
 	})
 }
 
@@ -132,78 +134,139 @@ func encodeAndMux(enc *av.Encoder, pcm codec.PCM, rewrite func([]codec.Packet) (
 
 // embedResidues is the Vorbis path: group the encoder's packets into stego
 // frames and rewrite residue LSBs in each.
-func (e *Emitter) embedResidues(ctx context.Context, extradata []byte, pkts []codec.Packet, fp frame.Params, plain []byte) ([]codec.Packet, error) {
+//
+// Grouping needs pkts' timestamps, but Ogg does not store one per packet —
+// only a granule position per page — so a demuxer reconstructs each
+// packet's timestamp from that using standard Vorbis block-size
+// accounting. At a genuine block-size transition (a loud/quiet transient
+// in the source), that reconstruction can land a packet one window short
+// or long of what the encoder itself reported, shifting it into a
+// different stego frame than Embed used here. Grouping the encoder's own
+// packets would then disagree with what Listen sees in the written file —
+// silently, since it just looks like a broken span or a missed frame.
+// canonicalPackets removes the mismatch by asking the same question
+// Listen will: it muxes pkts once (unrewritten) and demuxes them straight
+// back, so grouping runs on the exact packet stream — same order, same
+// count, same reconstructed timestamps — any reader gets. Rewrite never
+// changes a packet's size (same-Huffman-length substitution only), so
+// this canonical stream's own container layout, and the timestamps a
+// reader reconstructs from it, are unaffected by which frames end up
+// carrying real data.
+func (e *Emitter) embedResidues(ctx context.Context, info av.AudioInfo, pkts []codec.Packet, fp frame.Params, plain []byte) ([]codec.Packet, error) {
+	pkts, err := canonicalPackets(info, pkts)
+	if err != nil {
+		return nil, err
+	}
 	vc := vorbis.New()
-	if err := vc.Load(extradata); err != nil {
+	if err := vc.Load(info.Extradata); err != nil {
 		return nil, fmt.Errorf("%w: setup", err)
 	}
 	groups := frame.GroupPackets(pkts, fp)
 	if len(groups) == 0 {
 		return nil, ErrCarrier
 	}
+	rooms, err := groupRooms(ctx, vc, groups)
+	if err != nil {
+		return nil, err
+	}
+	plan := planChunks(plain, rooms)
+	if plan == nil {
+		return nil, noCapacity(plain)
+	}
 	all := make([]codec.Packet, 0, len(pkts))
-	carried := false
-	for _, g := range groups {
+	for i, g := range groups {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		out, done, err := e.embedGroup(vc, g, plain, !carried)
+		out, err := e.embedGroup(vc, g, plan[i])
 		if err != nil {
 			return nil, err
 		}
-		carried = carried || done
 		all = append(all, out...)
-	}
-	if !carried {
-		return nil, noCapacity(plain)
 	}
 	return all, nil
 }
 
-// embedGroup writes one frame and reports whether the message landed in it.
-// The message rides in the first frame with room for it; every other frame
-// is written with CSPRNG filler at the same density, so a frame carrying
-// the payload and a frame carrying nothing leave the same footprint. Only
-// a frame with no eligible residues at all — a trailing sliver of encoder
-// padding — passes through untouched.
-func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plain []byte, carry bool) ([]codec.Packet, bool, error) {
-	room, err := stego.Capacity(vc, g.Packets)
-	if errors.Is(err, stego.ErrNoResidues) {
-		return g.Packets, false, nil
-	}
+// canonicalPackets round-trips pkts through an in-memory mux/demux pass so
+// their timestamps match what any reader — Listen included — reconstructs
+// from the container, rather than what the encoder itself reported. See
+// embedResidues for why the two can differ.
+func canonicalPackets(info av.AudioInfo, pkts []codec.Packet) ([]codec.Packet, error) {
+	rc, err := muxPackets(info, pkts)
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return nil, err
 	}
-
-	// Nil bits make Apply fill the whole frame with CSPRNG filler.
-	var bits stego.Bits
-	carrying := carry && room >= EnvelopeOverhead+len(plain)
-	if carrying {
-		env, err := crypto.Seal(plain, e.pub)
+	defer func() { _ = rc.Close() }()
+	d, err := av.OpenDemuxerReader(asSeeker(rc))
+	if err != nil {
+		return nil, fmt.Errorf("%w: canonicalize: %v", ErrCarrier, err)
+	}
+	defer func() { _ = d.Close() }()
+	out := make([]codec.Packet, 0, len(pkts))
+	for {
+		pkt, err := d.NextPacket()
+		if errors.Is(err, av.ErrEOF) {
+			break
+		}
 		if err != nil {
-			return nil, false, err
+			return nil, fmt.Errorf("%w: canonicalize: %v", ErrCarrier, err)
+		}
+		out = append(out, av.ToCodecPacket(pkt))
+	}
+	return out, nil
+}
+
+// groupRooms reports each Vorbis stego frame's real capacity in bytes —
+// the same room stego.Capacity would report to Apply — without writing
+// anything, so planChunks can decide where the payload goes before any
+// frame is touched. A group with no eligible residues at all reports 0
+// rather than failing: it is left untouched either way.
+func groupRooms(ctx context.Context, vc *vorbis.Codec, groups []frame.Group) ([]int, error) {
+	rooms := make([]int, len(groups))
+	for i, g := range groups {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		room, err := stego.Capacity(vc, g.Packets)
+		if errors.Is(err, stego.ErrNoResidues) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+		}
+		rooms[i] = room
+	}
+	return rooms, nil
+}
+
+// embedGroup writes one frame. plainChunk is the framed bytes planChunks
+// assigned this frame this round, or nil to fill it with CSPRNG filler at
+// the same density — never left untouched unless it has no eligible
+// residues at all, a trailing sliver of encoder padding.
+func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plainChunk []byte) ([]codec.Packet, error) {
+	var bits stego.Bits
+	if plainChunk != nil {
+		env, err := crypto.Seal(plainChunk, e.pub)
+		if err != nil {
+			return nil, err
 		}
 		bits = env.Marshal()
 	}
 	pos, err := crypto.PositionSeed(e.pub, g.Index)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	out, err := stego.Apply(vc, pos, g.Packets, bits)
-	// A group whose eligible residues fall below the density floor for even
-	// one bit is left alone, the same as one with none at all — carrying is
-	// already false here, since room >= EnvelopeOverhead+len(plain) implies
-	// at least one slot.
 	if errors.Is(err, stego.ErrNoResidues) {
-		return g.Packets, false, nil
+		return g.Packets, nil
 	}
 	if errors.Is(err, stego.ErrCapacity) {
-		return nil, false, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
-	return out, carrying, nil
+	return out, nil
 }
 
 // Bitrate bounds for a lossy re-encode.
@@ -246,10 +309,10 @@ func frameParams(pcm codec.PCM) frame.Params {
 	}
 }
 
-func decodeCarrier(r io.Reader) (codec.PCM, codec.Params, error) {
+func decodeCarrier(r io.Reader) (codec.PCM, av.AudioInfo, error) {
 	d, err := av.OpenDemuxerReader(asSeeker(r))
 	if err != nil {
-		return codec.PCM{}, codec.Params{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
 	defer func() { _ = d.Close() }()
 	return decodeFromDemuxer(d)
@@ -259,24 +322,24 @@ func decodeCarrier(r io.Reader) (codec.PCM, codec.Params, error) {
 // path, a file:// URL, or an http(s):// URL — without tunneling it
 // through a Go io.Reader. This is the only route into a plain http(s)
 // source, since it does not arrive as an io.Reader in the first place.
-func decodeCarrierURL(source string) (codec.PCM, codec.Params, error) {
+func decodeCarrierURL(source string) (codec.PCM, av.AudioInfo, error) {
 	d, err := av.OpenDemuxer(source)
 	if err != nil {
-		return codec.PCM{}, codec.Params{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
 	defer func() { _ = d.Close() }()
 	return decodeFromDemuxer(d)
 }
 
-func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, codec.Params, error) {
+func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, av.AudioInfo, error) {
 	info := d.Info()
 	if !av.CanDecode(info) {
-		return codec.PCM{}, codec.Params{},
+		return codec.PCM{}, av.AudioInfo{},
 			fmt.Errorf("%w: this FFmpeg build cannot decode %s", ErrUnsupportedCodec, codecName(info))
 	}
 	dec, err := av.NewDecoder(info)
 	if err != nil {
-		return codec.PCM{}, codec.Params{}, fmt.Errorf("%w: decoder", ErrCarrier)
+		return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: decoder", ErrCarrier)
 	}
 	defer func() { _ = dec.Close() }()
 	var acc accumulator
@@ -286,23 +349,23 @@ func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, codec.Params, error) {
 			break
 		}
 		if err != nil {
-			return codec.PCM{}, codec.Params{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+			return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
 		if err := dec.Send(pkt); err != nil && !errors.Is(err, av.ErrAgain) {
-			return codec.PCM{}, codec.Params{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+			return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
 		if err := acc.drain(dec); err != nil {
-			return codec.PCM{}, codec.Params{}, err
+			return codec.PCM{}, av.AudioInfo{}, err
 		}
 	}
 	_ = dec.Send(av.Packet{})
 	if err := acc.drain(dec); err != nil {
-		return codec.PCM{}, codec.Params{}, err
+		return codec.PCM{}, av.AudioInfo{}, err
 	}
 	if acc.n == 0 || len(acc.planes) == 0 {
-		return codec.PCM{}, codec.Params{}, ErrCarrier
+		return codec.PCM{}, av.AudioInfo{}, ErrCarrier
 	}
-	return acc.pcm(), info.Params(), nil
+	return acc.pcm(), info, nil
 }
 
 // accumulator collects a decoder's output into one contiguous set of

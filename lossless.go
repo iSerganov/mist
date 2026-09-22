@@ -44,18 +44,22 @@ func padToWindow(pcm codec.PCM, window int) codec.PCM {
 // integer grid the chosen encoder quantizes to, so the samples this
 // leaves behind are ones it can represent exactly.
 func (e *Emitter) embedSamples(ctx context.Context, pcm codec.PCM, scale float32, plain []byte) error {
-	carried := false
-	for _, w := range sampleFrames(pcm, scale) {
+	frames := sampleFrames(pcm, scale)
+	plan := planChunks(plain, sampleRooms(frames))
+	if plan == nil {
+		return noCapacity(plain)
+	}
+	for i, w := range frames {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		var bits stego.Bits
-		if !carried && w.Capacity() >= EnvelopeOverhead+len(plain) {
-			env, err := crypto.Seal(plain, e.pub)
+		if plan[i] != nil {
+			env, err := crypto.Seal(plan[i], e.pub)
 			if err != nil {
 				return err
 			}
-			bits, carried = env.Marshal(), true
+			bits = env.Marshal()
 		}
 		pos, err := crypto.PositionSeed(e.pub, w.index)
 		if err != nil {
@@ -68,10 +72,18 @@ func (e *Emitter) embedSamples(ctx context.Context, pcm codec.PCM, scale float32
 			return fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
 	}
-	if !carried {
-		return noCapacity(plain)
-	}
 	return nil
+}
+
+// sampleRooms is each lossless stego frame's capacity in bytes — pure
+// arithmetic over the window's sample count, so no encode is needed to
+// know it, unlike the Vorbis path's real residue count.
+func sampleRooms(frames []sampleFrame) []int {
+	rooms := make([]int, len(frames))
+	for i, w := range frames {
+		rooms[i] = w.Capacity()
+	}
+	return rooms
 }
 
 // sampleFrame is one stego frame's worth of PCM, still pointing into the

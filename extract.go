@@ -63,11 +63,20 @@ func newScanner(priv []byte, info av.AudioInfo, log *slog.Logger) (scanner, erro
 // opener is the half of a scan that does not depend on where the bits
 // came from. Every failure here is a silent skip: a frame that carries no
 // payload and a frame this key cannot open must be indistinguishable.
+//
+// A payload that did not fit one frame arrives as consecutive chunks (see
+// span.go and wire's span framing), so opener also carries the assembly
+// state across calls: span, want and startIdx are empty except mid-span.
 type opener struct {
 	priv   []byte
 	pub    []byte
 	log    *slog.Logger
 	joined bool
+
+	spanning bool
+	span     []byte
+	want     int
+	startIdx int64
 }
 
 func (o *opener) open(idx int64, bits stego.Bits, err error) (Result, bool) {
@@ -82,14 +91,59 @@ func (o *opener) open(idx int64, bits stego.Bits, err error) (Result, bool) {
 	if err != nil {
 		return Result{}, false
 	}
-	p, err := wire.UnmarshalPayload(plain)
+	if o.spanning {
+		return o.resume(idx, plain)
+	}
+	return o.start(idx, plain)
+}
+
+// start handles a frame that is not a continuation of one already being
+// assembled: either a complete, unspanned payload (today's format,
+// unmodified), or the first chunk of one that needed to spread across
+// several frames.
+func (o *opener) start(idx int64, plain []byte) (Result, bool) {
+	if p, err := wire.UnmarshalPayload(plain); err == nil {
+		return Result{Payload: Payload{Type: PayloadType(p.Type), Data: p.Data}, FrameIdx: idx}, true
+	}
+	want, chunk, ok := wire.UnmarshalSpanStart(plain)
+	if !ok {
+		return Result{}, false
+	}
+	o.spanning, o.want, o.startIdx = true, int(want), idx
+	o.span = append(o.span[:0], chunk...)
+	return o.assembled()
+}
+
+// resume appends a later chunk of a payload already being assembled. A
+// frame that authenticates but does not carry a valid continuation marker
+// means the span was interrupted (a frame lost or corrupted in transit);
+// the partial assembly is discarded rather than ever handed out.
+func (o *opener) resume(idx int64, plain []byte) (Result, bool) {
+	chunk, ok := wire.UnmarshalSpanContinue(plain)
+	if !ok {
+		o.reset()
+		return Result{}, false
+	}
+	o.span = append(o.span, chunk...)
+	return o.assembled()
+}
+
+// assembled reports the reassembled payload once every chunk has arrived.
+func (o *opener) assembled() (Result, bool) {
+	if len(o.span) < o.want {
+		return Result{}, false
+	}
+	full, startIdx := o.span[:o.want], o.startIdx
+	o.reset()
+	p, err := wire.UnmarshalPayload(full)
 	if err != nil {
 		return Result{}, false
 	}
-	return Result{
-		Payload:  Payload{Type: PayloadType(p.Type), Data: p.Data},
-		FrameIdx: idx,
-	}, true
+	return Result{Payload: Payload{Type: PayloadType(p.Type), Data: p.Data}, FrameIdx: startIdx}, true
+}
+
+func (o *opener) reset() {
+	o.spanning, o.span, o.want = false, nil, 0
 }
 
 // seed derives this frame's position key, or reports that the frame
@@ -183,9 +237,10 @@ func (s *sampleScanner) frames(pcm []codec.PCM) (Result, bool) {
 	return Result{}, false
 }
 
-// read returns the first window that decrypts. Like the residue path it
-// surfaces one Result per call; a carrier with more than one carrying
-// frame is not something Embed produces.
+// read scans windows in order, returning a Result once one completes: a
+// window that alone authenticates a whole payload, or the last chunk of
+// one assembled across several — opener tracks which. Intermediate spanned
+// chunks authenticate but report no Result yet, so the loop keeps going.
 func (s *sampleScanner) read(windows []sampleFrame) (Result, bool) {
 	for _, w := range windows {
 		if w.partial {
