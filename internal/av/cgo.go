@@ -10,6 +10,9 @@ package av
 
 /*
 #cgo pkg-config: libavformat libavcodec libavutil
+// store_sample calls lrintf, and pkg-config's libav flags do not pull in libm,
+// so GNU ld drops it and the link fails with "DSO missing from command line".
+#cgo LDFLAGS: -lm
 #include "cgo.h"
 #include <stdlib.h>
 #include <string.h>

@@ -135,7 +135,7 @@ func splitPCM(p codec.PCM, fs int) []codec.PCM {
 			}
 			sl := make([]float32, fs)
 			if off < len(pl) {
-				copy(sl, pl[off:len(pl)])
+				copy(sl, pl[off:])
 			}
 			chunk[i] = sl
 		}
