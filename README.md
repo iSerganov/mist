@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="mist_logo.png" alt="mist logo" width="360">
+</p>
+
 # mist
 
 [![CI](https://github.com/iSerganov/mist/actions/workflows/ci.yml/badge.svg)](https://github.com/iSerganov/mist/actions/workflows/ci.yml)
