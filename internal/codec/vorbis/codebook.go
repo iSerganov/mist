@@ -17,6 +17,9 @@ type codebook struct {
 	// least damaging substitute for a stego flip is a lookup rather than a
 	// decode. Built once at parse time and never mutated after.
 	vecs [][]float64
+	// flips holds each used entry's flip cost, or -1 where no entry of the
+	// same code length and opposite parity exists. Built with vecs.
+	flips []float64
 }
 
 // vector returns entry's dequantized vector, or nil for a codebook with no
@@ -36,6 +39,47 @@ func (cb *codebook) buildVectors() {
 	for _, e := range cb.used {
 		cb.vecs[e] = cb.vq(e)
 	}
+}
+
+// buildFlips prices every used entry's stego flip. A flip may only move a
+// symbol onto an entry of the same code length and opposite parity
+// — anything else changes the codeword's bit length and desyncs decode of
+// everything after it — and it lands on the nearest such vector, so the
+// cost is the squared distance to that one. A codebook with no vectors
+// has nothing to measure, so each legal flip there costs one unit.
+func (cb *codebook) buildFlips() {
+	cb.flips = make([]float64, cb.entries)
+	for i := range cb.flips {
+		cb.flips[i] = -1
+	}
+	for _, e := range cb.used {
+		if cb.vecs == nil {
+			if cb.hasSibling(e) {
+				cb.flips[e] = 1
+			}
+			continue
+		}
+		if best, d := cb.closest(e, e&1^1, cb.lens[e]); best >= 0 {
+			cb.flips[e] = d
+		}
+	}
+}
+
+func (cb *codebook) hasSibling(entry int) bool {
+	for _, e := range cb.used {
+		if cb.lens[e] == cb.lens[entry] && e&1 != entry&1 {
+			return true
+		}
+	}
+	return false
+}
+
+// flipCost reports entry's flip cost and whether it can be flipped at all.
+func (cb *codebook) flipCost(entry int) (float64, bool) {
+	if entry < 0 || entry >= len(cb.flips) || cb.flips[entry] < 0 {
+		return 0, false
+	}
+	return cb.flips[entry], true
 }
 
 type hNode struct {
@@ -112,6 +156,7 @@ func unpackCodebook(b *bits) (*codebook, error) {
 	}
 	cb.lookup = int(lt)
 	if cb.lookup == 0 {
+		cb.buildFlips()
 		return cb, nil
 	}
 	if cb.lookup > 2 {
@@ -153,6 +198,7 @@ func unpackCodebook(b *bits) (*codebook, error) {
 		cb.quantvals[i] = v
 	}
 	cb.buildVectors()
+	cb.buildFlips()
 	return cb, nil
 }
 

@@ -1,10 +1,11 @@
 // Package stego embeds and extracts bit strings in quantized Vorbis residues.
 //
 // PCM encode still uses unmodified libav. After libav emits packets this
-// package reads residues from the bitstream, applies LSB matching at keyed
-// positions, and rewrites the residue section. Extraction is the inverse
-// and never looks at PCM. Constant density means unused room is CSPRNG
-// filler so presence and absence have the same footprint.
+// package reads residues from the bitstream, writes the bits through a
+// syndrome-trellis code over the eligible residues in keyed order, and
+// rewrites the residue section. Extraction is the inverse and never looks
+// at PCM. Constant density means unused room is CSPRNG filler so presence
+// and absence have the same footprint.
 package stego
 
 import (
@@ -14,16 +15,26 @@ import (
 	"github.com/iSerganov/mist/internal/codec"
 )
 
-// Density is the fraction of eligible coefficients perturbed on every
-// encode, whether or not a real payload is present. It is a protocol
+// Density is the payload rate: bits carried per eligible coefficient, on
+// every encode, whether or not a real payload is present. It is a protocol
 // constant: changing it is a breaking change for Listen.
 //
-// Every perturbed residue is audible damage, so this is kept just high
-// enough to be useful. Measured on real music, 2% inside DefaultBands
-// costs about 0.2 dB of signal-to-distortion against a plain transcode
-// while leaving roughly 130 bytes per 8-second frame. Raising it trades
-// audio quality for capacity in direct proportion: 10% cost 4 dB.
+// Every changed value is damage, so this is kept just high enough to be
+// useful: roughly 130 bytes per 8-second Vorbis frame. At this rate the
+// trellis code changes about 0.3% of the eligible values, 0.14 changes
+// per bit, where writing each bit into a value of its own changed 1%.
 const Density = 0.02
+
+// maxFlipCost bounds how far one flip may move a residue's spectral
+// vector, as a squared distance in dequantized residue units. A flip past
+// it costs wetCost, so the trellis code takes it only when no path avoids
+// it. minCost keeps an exactly free substitute from looking costless,
+// which would let the code pile flips onto it for nothing.
+const (
+	maxFlipCost = 9.0
+	wetCost     = 1e6
+	minCost     = 1e-3
+)
 
 // Bits is a packed bit string to embed or a bit string just extracted.
 type Bits []byte
@@ -174,7 +185,21 @@ type residues struct {
 func (r *residues) Len() int       { return len(r.eligible) }
 func (r *residues) At(i int) int32 { return r.views[r.eligible[i]].Value }
 
-func (r *residues) Set(i int, v int32) {
+// Cost is how far the residue's spectral vector moves when it is
+// substituted. Past maxFlipCost it jumps to wetCost, so the code routes
+// around the flip whenever it can.
+func (r *residues) Cost(i int) float32 {
+	d := r.all[r.eligible[i]].FlipCost
+	if d > maxFlipCost {
+		return wetCost
+	}
+	return float32(d) + minCost
+}
+
+// Flip only needs the parity right: the codec swaps in the entry of that
+// parity nearest the original when it rewrites the packet.
+func (r *residues) Flip(i int) {
+	v := r.views[r.eligible[i]].Value ^ 1
 	r.views[r.eligible[i]].Value = v
 	r.all[r.eligible[i]].Value = v
 }

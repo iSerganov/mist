@@ -319,7 +319,7 @@ func addVQ(b *bits, cb *codebook, dst []float64) ([]int, error) {
 	return ents, nil
 }
 
-// sanitizePrograms repairs VQ entries that Match() perturbed to an unused
+// sanitizePrograms repairs VQ entries that a stego flip moved to an unused
 // codeword, and constrains every replacement to a codeword of the same
 // bit length as orig recorded before the perturbation. Vorbis packets rely
 // on running out of bits (EOP) mid-partition to mean "rest is zero"; a
@@ -373,30 +373,38 @@ func entryValues(progs []residueProg) []int {
 // (see sanitizePrograms), this chooses the one whose dequantized vector is
 // nearest the original's, which is what keeps the result inaudible.
 func substitute(cb *codebook, was, want int) int {
-	// want may be negative: Match moves an entry by ±1 and can step below
-	// zero. Two's complement already gives the right parity there, so the
-	// bit must be read from it as-is — forcing it to zero would silently
-	// embed the wrong bit whenever entry 0 was flipped downwards.
-	bit := want & 1
+	// want may be negative: an entry moved by ±1 can step below zero. Two's
+	// complement already gives the right parity there, so the bit must be
+	// read from it as-is — forcing it to zero would silently embed the
+	// wrong bit whenever entry 0 was flipped downwards.
 	wantLen := uint8(0)
 	if was >= 0 && was < cb.entries {
 		wantLen = cb.lens[was]
 	}
-	if ref := cb.vector(was); ref != nil {
-		best, bestD := -1, math.Inf(1)
-		for _, e := range cb.used {
-			if e&1 != bit || (wantLen > 0 && cb.lens[e] != wantLen) {
-				continue
-			}
-			if d := vecDistance(ref, cb.vector(e)); d < bestD {
-				best, bestD = e, d
-			}
-		}
-		if best >= 0 {
-			return best
-		}
+	if best, _ := cb.closest(was, want&1, wantLen); best >= 0 {
+		return best
 	}
 	return nearestLSBLen(cb, want, wantLen)
+}
+
+// closest is the used entry of the given parity and code length whose
+// dequantized vector is nearest was's, and the squared distance to it;
+// -1 when was has no vector or no entry qualifies.
+func (cb *codebook) closest(was, bit int, length uint8) (int, float64) {
+	ref := cb.vector(was)
+	if ref == nil {
+		return -1, 0
+	}
+	best, bestD := -1, math.Inf(1)
+	for _, e := range cb.used {
+		if e&1 != bit || (length > 0 && cb.lens[e] != length) {
+			continue
+		}
+		if d := vecDistance(ref, cb.vector(e)); d < bestD {
+			best, bestD = e, d
+		}
+	}
+	return best, bestD
 }
 
 func vecDistance(a, b []float64) float64 {

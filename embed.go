@@ -110,9 +110,18 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo
 }
 
 func openEncoder(target av.Format, pcm codec.PCM, info av.AudioInfo) (*av.Encoder, codec.PCM, error) {
-	enc, err := av.NewEncoder(target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(target, info.Params())))
+	want := target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(target, info.Params(), pcm.Channels))
+	enc, err := av.NewEncoder(want)
+	// libvorbis refuses rates outside a window that depends on the sample
+	// rate as well as the channel count, and libav reports only EINVAL, so
+	// the only way to find the edge is to step down until it opens.
+	refused := err
+	for err != nil && want.Bitrate > floorBitrate {
+		want.Bitrate = max(want.Bitrate/4*3, floorBitrate)
+		enc, err = av.NewEncoder(want)
+	}
 	if err != nil {
-		return nil, pcm, fmt.Errorf("%w: encoder: %v", ErrCarrier, err)
+		return nil, pcm, fmt.Errorf("%w: encoder: %v", ErrCarrier, refused)
 	}
 	if target.Lossless {
 		pcm = padToWindow(pcm, enc.Window())
@@ -286,11 +295,14 @@ func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plainChunk []byte)
 	return out, nil
 }
 
-// Bitrate bounds for a lossy re-encode.
+// Bitrate bounds for a lossy re-encode, per channel: libvorbis tops out
+// at about 250 kbps a channel (500 stereo), so a mono carrier given the
+// stereo bounds is refused by the encoder.
 const (
-	minBitrate     = 192_000
-	maxBitrate     = 500_000
-	unknownBitrate = 256_000
+	minBitrate     = 96_000
+	maxBitrate     = 250_000
+	unknownBitrate = 128_000
+	floorBitrate   = 32_000
 )
 
 // targetBitrate picks the encode rate for a carrier of the given params.
@@ -301,14 +313,15 @@ const (
 // it: Mist always re-encodes, and a second pass at the source's own rate
 // compounds the loss. A lossless source reports its raw PCM rate — 1411
 // kbps for CD audio — which is no target at all, so it is capped.
-func targetBitrate(f av.Format, params codec.Params) int64 {
+func targetBitrate(f av.Format, params codec.Params, channels int) int64 {
+	n := int64(max(channels, 1))
 	switch {
 	case f.Lossless:
 		return 0
 	case params.Bitrate <= 0:
-		return unknownBitrate
+		return unknownBitrate * n
 	default:
-		return min(max(params.Bitrate*3/2, minBitrate), maxBitrate)
+		return min(max(params.Bitrate*3/2, minBitrate*n), maxBitrate*n)
 	}
 }
 

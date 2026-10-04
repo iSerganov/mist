@@ -156,6 +156,33 @@ func (s *LosslessSuite) TestOnlyLeastSignificantBitsMove() {
 	}
 }
 
+// Digital silence is the one place a plain encoder never writes a ±1, so
+// Mist must not either — including the zero padding it adds at the end.
+func (s *LosslessSuite) TestDigitalSilenceStaysSilent() {
+	s.requireFormat("flac")
+	pub, priv, err := GenerateKeyPair()
+	s.Require().NoError(err)
+	samples := make([]int16, testRate*2*20) // 8 s silence, 12 s noise
+	for i := testRate * 2 * 8; i < len(samples); i++ {
+		samples[i] = int16(i*7919%8000 - 4000)
+	}
+	out := s.stego(pub, Text("quiet please"), wavFile(testRate, 2, samples), WithFormat("flac"))
+
+	pcm, _, err := decodeCarrier(bytes.NewReader(out))
+	s.Require().NoError(err)
+	for c, p := range pcm.Planes {
+		for i := range testRate * 8 {
+			s.Require().Zero(p[i], "channel %d sample %d", c, i)
+		}
+		for i := testRate * 20; i < len(p); i++ {
+			s.Require().Zero(p[i], "padding, channel %d sample %d", c, i)
+		}
+	}
+	res := s.extract(priv, out)
+	s.Require().NotEmpty(res)
+	s.Equal("quiet please", string(res[0].Payload.Data))
+}
+
 // Embed and Listen must cut frames at the same sample offsets; a window
 // out by one scrambles every position in it.
 func (s *LosslessSuite) TestWindowerMatchesEmbedFrames() {
@@ -298,12 +325,12 @@ func (s *LosslessSuite) TestSampleGridRoundTrip() {
 	tests := []struct {
 		title string
 		value int32
-		bit   uint8
+		step  int32
 	}{
-		{"mid-scale keeps its bit", 1000, 0},
-		{"mid-scale flips", 1001, 0},
-		{"top of range cannot clip upward", 32767, 0},
-		{"bottom of range cannot clip downward", -32768, 1},
+		{"mid-scale up", 1000, 1},
+		{"mid-scale down", 1001, -1},
+		{"top of range cannot clip upward", 32767, 1},
+		{"bottom of range cannot clip downward", -32768, -1},
 		{"zero", 0, 1},
 	}
 	for _, tc := range tests {
@@ -312,9 +339,9 @@ func (s *LosslessSuite) TestSampleGridRoundTrip() {
 			sm := stego.Samples{Planes: planes, N: 1, Scale: 1 << 15}
 			s.Require().Equal(tc.value, sm.At(0))
 
-			sm.Set(0, stego.Match(sm.At(0), tc.bit))
+			sm.Set(0, sm.At(0)+tc.step)
 			got := sm.At(0)
-			s.EqualValues(tc.bit, got&1, "bit not embedded")
+			s.NotEqual(tc.value&1, got&1, "bit not flipped")
 			s.LessOrEqual(abs(int(got-tc.value)), 2, "moved too far")
 			s.GreaterOrEqual(got, int32(-32768))
 			s.LessOrEqual(got, int32(32767))

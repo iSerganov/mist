@@ -31,7 +31,20 @@ type formatReport struct {
 	Transcode      stat             `json:"transcode_sdr"`
 	Stego          stat             `json:"stego_sdr"`
 	Gap            stat             `json:"gap"`
+	Added          stat             `json:"added_sdr"`
 	PerceptualDrop *stat            `json:"perceptual_drop,omitempty"`
+	Carriers       []carrierResult  `json:"carriers,omitempty"`
+}
+
+// carrierResult is one carrier's quality numbers, so a track that behaves
+// unlike the rest shows up instead of vanishing into the mean.
+type carrierResult struct {
+	Name      string  `json:"name"`
+	Kbps      float64 `json:"kbps"`
+	Transcode num     `json:"transcode_sdr"`
+	Stego     num     `json:"stego_sdr"`
+	Gap       num     `json:"gap"`
+	Added     num     `json:"added_sdr"`
 }
 
 type skippedCarrier struct {
@@ -191,11 +204,14 @@ func (f formatReport) quality() (level, string) {
 	case float64(f.Stego.Worst) >= inaudibleSDR:
 		return pass, fmt.Sprintf("inaudible: the added error is at least %s below the music", f.Stego.Worst.format(" dB"))
 	case gap <= gapTarget:
-		return pass, fmt.Sprintf("embedding costs %s, within the %.1f dB target", f.Gap.Mean.format(" dB"), gapTarget)
+		return pass, fmt.Sprintf("Mist's own error sits %s below the music; embedding costs %s, within the %.1f dB target",
+			f.Added.Mean.format(" dB"), f.Gap.Mean.format(" dB"), gapTarget)
 	case gap <= gapBudget:
-		return watch, fmt.Sprintf("embedding costs %s (%s error), above the %.1f dB target", f.Gap.Mean.format(" dB"), extraError(f.Gap.Mean), gapTarget)
+		return watch, fmt.Sprintf("Mist's own error sits %s below the music; embedding costs %s (%s error), above the %.1f dB target",
+			f.Added.Mean.format(" dB"), f.Gap.Mean.format(" dB"), extraError(f.Gap.Mean), gapTarget)
 	}
-	return fail, fmt.Sprintf("embedding costs %s (%s error), over the %.1f dB target", f.Gap.Mean.format(" dB"), extraError(f.Gap.Mean), gapTarget)
+	return fail, fmt.Sprintf("Mist's own error sits %s below the music; embedding costs %s (%s error), over the %.1f dB target",
+		f.Added.Mean.format(" dB"), f.Gap.Mean.format(" dB"), extraError(f.Gap.Mean), gapTarget)
 }
 
 func extraError(gap num) string {
@@ -277,6 +293,8 @@ func (f formatReport) markdown(b *strings.Builder, base *formatReport) {
 		f.Gap.Mean.format(" dB"), f.Gap.Worst.format(" dB"), gapTarget, referenceGap)
 	fmt.Fprintf(b, "| Extra error energy | %s | %s | Embedding cost as error added on top of a plain re-encode |\n",
 		extraError(f.Gap.Mean), extraError(f.Gap.Worst))
+	fmt.Fprintf(b, "| Mist's error below the music | %s | %s | Stego copy against the clean one: what Mist alone adds |\n",
+		f.Added.Mean.format(" dB"), f.Added.Worst.format(" dB"))
 	if base != nil {
 		fmt.Fprintf(b, "| Embedding cost, earlier run | %s | %s | Same measure at commit being compared with |\n",
 			base.Gap.Mean.format(" dB"), base.Gap.Worst.format(" dB"))
@@ -287,6 +305,12 @@ func (f formatReport) markdown(b *strings.Builder, base *formatReport) {
 	}
 	ql, qt := f.quality()
 	fmt.Fprintf(b, "\n**Verdict:** %s %s.\n", ql.mark(), qt)
+
+	b.WriteString("\n### Per carrier\n\n| Carrier | Output kbps | Plain re-encode SDR | Mist output SDR | Embedding cost | Mist's error below the music |\n|---|---|---|---|---|---|\n")
+	for _, c := range f.Carriers {
+		fmt.Fprintf(b, "| %s | %.0f | %s | %s | %s | %s |\n", c.Name, c.Kbps,
+			c.Transcode.format(" dB"), c.Stego.format(" dB"), c.Gap.format(" dB"), c.Added.format(" dB"))
+	}
 }
 
 const legend = `
@@ -320,6 +344,12 @@ is better, and every 10 dB means ten times less error. Both copies are compared 
 after lining them up in time. The **plain re-encode** is what any re-encode costs; the **embedding cost** is how
 much lower the stego copy scores, which is Mist's own share. **Extra error energy** says the same thing as a
 percentage: +37% means 37% more error than the plain re-encode alone.
+
+The embedding cost is relative to the re-encode's own error, so the same perturbation reads as a larger cost on a
+cleaner, higher-bitrate re-encode. **Mist's error below the music** does not depend on that: it compares the
+stego copy with the clean one, so the only difference left is what Mist changed, measured against the music
+itself. The **per carrier** table lists every track with its output bitrate, so one odd track cannot hide in the
+mean.
 
 ### Thresholds
 

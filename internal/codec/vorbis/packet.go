@@ -118,37 +118,21 @@ func residuesFrom(st *packetState, rate int, books []*codebook) []codec.Residue 
 			if st.n > 0 && rate > 0 && spec >= 0 {
 				hz = spec * rate / (st.n * 2)
 			}
-			unflippable := true
+			cost, ok := 0.0, false
 			if s.book >= 0 && s.book < len(books) {
-				unflippable = !hasSameLenOppositeParity(books[s.book], s.entry)
+				cost, ok = books[s.book].flipCost(s.entry)
 			}
 			out = append(out, codec.Residue{
 				Channel:     ch,
 				Band:        hz,
 				Index:       spec,
 				Value:       int32(s.entry),
-				Unflippable: unflippable,
+				Unflippable: !ok,
+				FlipCost:    cost,
 			})
 		}
 	}
 	return out
-}
-
-// hasSameLenOppositeParity reports whether cb has a used entry other than
-// entry with the same code length and the opposite LSB. LSB matching can
-// only flip a symbol safely onto such an entry — anything else changes
-// the codeword's bit length and desyncs decode of everything after it.
-func hasSameLenOppositeParity(cb *codebook, entry int) bool {
-	if entry < 0 || entry >= cb.entries || cb.lens[entry] == 0 {
-		return false
-	}
-	length := cb.lens[entry]
-	for _, e := range cb.used {
-		if e != entry && cb.lens[e] == length && (e&1) != (entry&1) {
-			return true
-		}
-	}
-	return false
 }
 
 func applyResidues(st *packetState, res []codec.Residue) {
