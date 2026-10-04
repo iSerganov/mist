@@ -148,6 +148,21 @@ func embedPackets(c rewriter, posKey []byte, pkts []codec.Packet, bits Bits) ([]
 	return rewriteAll(c, pkts, res.all)
 }
 
+// EligibleValues returns the quantized values of every residue in pkts that
+// embedding may touch, in the order positions index them: what a warden
+// who knows the bands and codebooks would inspect.
+func EligibleValues(c rewriter, pkts []codec.Packet) ([]int32, error) {
+	res, err := collectResidues(c, pkts)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int32, res.Len())
+	for i := range out {
+		out[i] = res.At(i)
+	}
+	return out, nil
+}
+
 // residues is the carrier over one frame's quantized Vorbis residues:
 // the eligible subset of the symbols the packets decoded to.
 type residues struct {

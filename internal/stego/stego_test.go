@@ -3,6 +3,7 @@ package stego
 import (
 	"testing"
 
+	"github.com/iSerganov/mist/internal/codec"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -92,6 +93,43 @@ func (s *StegoSuite) TestEligibleFiltersBandsAndUnflippable() {
 		s.Run(tc.title, func() {
 			el := Eligible([]ResidueView{tc.view}, DefaultBands)
 			s.Equal(tc.want, len(el) == 1)
+		})
+	}
+}
+
+type fakeRewriter map[byte][]codec.Residue
+
+func (f fakeRewriter) Residues(pkt codec.Packet) ([]codec.Residue, error) {
+	return f[pkt.Data[0]], nil
+}
+
+func (f fakeRewriter) Rewrite(pkt codec.Packet, _ []codec.Residue) (codec.Packet, error) {
+	return pkt, nil
+}
+
+func (s *StegoSuite) TestEligibleValues() {
+	c := fakeRewriter{
+		0: {{Band: 9000, Value: 3}, {Band: 200, Value: 4}, {Band: 7000, Value: -5}},
+		2: {{Band: 12000, Value: 6, Unflippable: true}, {Band: 8000, Value: 7}},
+		1: {{Band: 9000, Value: 99}},
+		4: {{Band: 300, Value: 8}},
+	}
+	tests := []struct {
+		title   string
+		pkts    []codec.Packet
+		want    []int32
+		wantErr error
+	}{
+		{"keeps in-band flippable values in packet order", []codec.Packet{{Data: []byte{0}}, {Data: []byte{2}}}, []int32{3, -5, 7}, nil},
+		{"skips header and empty packets", []codec.Packet{{Data: []byte{1}}, {}, {Data: []byte{2}}}, []int32{7}, nil},
+		{"nothing eligible", []codec.Packet{{Data: []byte{4}}}, nil, ErrNoResidues},
+		{"no audio packets", []codec.Packet{{Data: []byte{1}}}, nil, ErrNoResidues},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			got, err := EligibleValues(c, tc.pkts)
+			s.Require().ErrorIs(err, tc.wantErr)
+			s.Equal(tc.want, got)
 		})
 	}
 }

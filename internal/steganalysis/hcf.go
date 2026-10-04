@@ -1,10 +1,11 @@
 package steganalysis
 
 import (
-	"math"
 	"math/bits"
 	"math/cmplx"
 	"slices"
+
+	"github.com/iSerganov/mist/internal/dsp"
 )
 
 const maxHCFBins = 1 << 20
@@ -30,7 +31,7 @@ func HCF(v []int32) float64 {
 	for _, x := range v {
 		h[int64(x)-int64(lo)]++
 	}
-	fft(h)
+	dsp.FFT(h)
 	var num, den float64
 	for k := 1; k <= n/2; k++ {
 		a := cmplx.Abs(h[k])
@@ -41,29 +42,4 @@ func HCF(v []int32) float64 {
 		return 0
 	}
 	return clamp01(1 - num/den/float64(n/2))
-}
-
-func fft(a []complex128) {
-	n := len(a)
-	for i, j := 1, 0; i < n; i++ {
-		bit := n >> 1
-		for ; j&bit != 0; bit >>= 1 {
-			j ^= bit
-		}
-		j ^= bit
-		if i < j {
-			a[i], a[j] = a[j], a[i]
-		}
-	}
-	for size := 2; size <= n; size <<= 1 {
-		w := cmplx.Rect(1, -2*math.Pi/float64(size))
-		for start := 0; start < n; start += size {
-			wk := complex(1, 0)
-			for k := range size / 2 {
-				u, t := a[start+k], wk*a[start+k+size/2]
-				a[start+k], a[start+k+size/2] = u+t, u-t
-				wk *= w
-			}
-		}
-	}
 }

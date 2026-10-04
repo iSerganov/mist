@@ -86,10 +86,20 @@ func (s *audioSuite) extract(priv, stream []byte) []Result {
 // too few usable residues for the Vorbis path, and a fixed seed keeps a
 // failure reproducible.
 func wav(rate, ch, n int) []byte {
+	samples := make([]int16, n*ch)
+	x := uint32(12345)
+	for i := range samples {
+		x = x*1664525 + 1013904223
+		samples[i] = int16(int32(x>>16) % 8000)
+	}
+	return wavFile(rate, ch, samples)
+}
+
+func wavFile(rate, ch int, samples []int16) []byte {
 	var b bytes.Buffer
 	u16 := func(v uint16) { b.Write([]byte{byte(v), byte(v >> 8)}) }
 	u32 := func(v uint32) { b.Write([]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}) }
-	size := n * ch * 2
+	size := len(samples) * 2
 	b.WriteString("RIFF")
 	u32(uint32(36 + size))
 	b.WriteString("WAVEfmt ")
@@ -102,10 +112,8 @@ func wav(rate, ch, n int) []byte {
 	u16(16)
 	b.WriteString("data")
 	u32(uint32(size))
-	x := uint32(12345)
-	for i := 0; i < n*ch; i++ {
-		x = x*1664525 + 1013904223
-		u16(uint16(int16(int32(x>>16) % 8000)))
+	for _, v := range samples {
+		u16(uint16(v))
 	}
 	return b.Bytes()
 }
