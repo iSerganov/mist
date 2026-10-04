@@ -29,6 +29,7 @@ const (
 	harnessChunk  = 1 << 16
 	harnessRounds = 1000
 	harnessSeed   = 1
+	harnessFolds  = 5
 )
 
 var defaultHarnessFormats = []string{"ogg", "flac", "wav", "caf/alac", "wv", "tta", "aiff"}
@@ -97,7 +98,7 @@ func harnessJobs(spec string) (int, error) {
 }
 
 type carrierRun struct {
-	clean, stego, minimal scores
+	clean, stego, minimal [][]float64
 	transcode, stegoSDR   float64
 	perceptual            float64
 }
@@ -129,7 +130,7 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	}
 	wg.Wait()
 
-	clean, stegoScores, minimal := scores{}, scores{}, scores{}
+	var clean, stegoFeatures, minimal [][][]float64
 	var transcode, stegoSDR, gap, drop []float64
 	for i, run := range runs {
 		if errs[i] != nil {
@@ -137,9 +138,9 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 			continue
 		}
 		fr.Measured++
-		clean.merge(run.clean)
-		stegoScores.merge(run.stego)
-		minimal.merge(run.minimal)
+		clean = append(clean, run.clean)
+		stegoFeatures = append(stegoFeatures, run.stego)
+		minimal = append(minimal, run.minimal)
 		transcode = append(transcode, run.transcode)
 		stegoSDR = append(stegoSDR, run.stegoSDR)
 		gap = append(gap, run.transcode-run.stegoSDR)
@@ -148,17 +149,14 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	if fr.Measured == 0 {
 		return fr
 	}
-	for _, d := range steganalysis.Detectors() {
-		pos, neg := stegoScores[d.Name], clean[d.Name]
-		lo, hi := steganalysis.AUCInterval(pos, neg, harnessRounds, harnessSeed)
-		fr.Detectors = append(fr.Detectors, detectorResult{
-			Name:       d.Name,
-			AUC:        steganalysis.AUC(pos, neg),
-			Lo:         lo,
-			Hi:         hi,
-			Invariance: steganalysis.AUC(pos, minimal[d.Name]),
-		})
+	for k, d := range steganalysis.Detectors() {
+		pos := column(stegoFeatures, k)
+		fr.Detectors = append(fr.Detectors,
+			detectorFrom(d.Name, pos, column(clean, k), steganalysis.AUC(pos, column(minimal, k))))
 	}
+	pos, neg := classify(stegoFeatures, clean)
+	fr.Detectors = append(fr.Detectors,
+		detectorFrom(classifierName, pos, neg, steganalysis.AUC(classify(stegoFeatures, minimal))))
 	fr.Transcode = summarize(transcode, minOf)
 	fr.Stego = summarize(stegoSDR, minOf)
 	fr.Gap = summarize(gap, maxOf)
@@ -204,9 +202,9 @@ func measureCarrier(ctx context.Context, em *Emitter, ext string, c harnessCarri
 	}
 	maxLag := info.SampleRate / 10
 	run := carrierRun{
-		clean:     scoresOf(cleanVals),
-		stego:     scoresOf(stegoVals),
-		minimal:   scoresOf(minimalVals),
+		clean:     featuresOf(cleanVals),
+		stego:     featuresOf(stegoVals),
+		minimal:   featuresOf(minimalVals),
 		transcode: quality.SDR(ref.Planes, cleanPCM, maxLag),
 		stegoSDR:  quality.SDR(ref.Planes, stegoPCM, maxLag),
 	}
@@ -274,22 +272,50 @@ func gridValues(planes [][]float32, scale float32) []int32 {
 	return out
 }
 
-type scores map[string][]float64
-
-func scoresOf(v []int32) scores {
-	sc := scores{}
-	for _, d := range steganalysis.Detectors() {
-		for off := 0; off < len(v); off += harnessChunk {
-			sc[d.Name] = append(sc[d.Name], d.Score(v[off:min(off+harnessChunk, len(v))]))
-		}
+func featuresOf(v []int32) [][]float64 {
+	var out [][]float64
+	for off := 0; off < len(v); off += harnessChunk {
+		out = append(out, steganalysis.Features(v[off:min(off+harnessChunk, len(v))]))
 	}
-	return sc
+	return out
 }
 
-func (sc scores) merge(o scores) {
-	for name, v := range o {
-		sc[name] = append(sc[name], v...)
+func column(carriers [][][]float64, k int) []float64 {
+	var out []float64
+	for _, chunks := range carriers {
+		for _, f := range chunks {
+			out = append(out, f[k])
+		}
 	}
+	return out
+}
+
+func classify(pos, neg [][][]float64) ([]float64, []float64) {
+	var x [][]float64
+	var y []bool
+	var groups []int
+	for i := range pos {
+		for _, f := range pos[i] {
+			x, y, groups = append(x, f), append(y, true), append(groups, i)
+		}
+		for _, f := range neg[i] {
+			x, y, groups = append(x, f), append(y, false), append(groups, i)
+		}
+	}
+	var ps, ns []float64
+	for i, v := range steganalysis.CrossValidate(x, y, groups, harnessFolds) {
+		if y[i] {
+			ps = append(ps, v)
+		} else {
+			ns = append(ns, v)
+		}
+	}
+	return ps, ns
+}
+
+func detectorFrom(name string, pos, neg []float64, invariance float64) detectorResult {
+	lo, hi := steganalysis.AUCInterval(pos, neg, harnessRounds, harnessSeed)
+	return detectorResult{Name: name, AUC: steganalysis.AUC(pos, neg), Lo: lo, Hi: hi, Invariance: invariance}
 }
 
 func perceptualTool() *quality.Tool {

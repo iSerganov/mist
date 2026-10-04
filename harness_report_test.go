@@ -125,6 +125,7 @@ const (
 	inaudibleSDR    = 70
 	aucDetectable   = 0.1
 	invarianceSlack = 0.05
+	classifierName  = "classifier"
 )
 
 type level int
@@ -142,6 +143,7 @@ var detectorTargets = map[string]string{
 	"spa":        "bit overwriting (not what Mist does)",
 	"rs":         "bit overwriting (not what Mist does)",
 	"hcf-com":    "±1 changes, which is what Mist does",
+	"classifier": "anything it can learn from Mist's own output",
 }
 
 func (d detectorResult) verdict() (level, string) {
@@ -300,7 +302,13 @@ change, lossless formats on the decoded samples.
 
 Chi-square, SPA and RS look for bits being overwritten, which Mist never does, so they are expected to sit at
 chance; a rise means the embedder has drifted. HCF-COM looks for ±1 changes, which is exactly what Mist does,
-so it is the detector that matters.
+so it is the classical detector that matters.
+
+The **classifier** is the adversary of record. It is a logistic regression trained on this run's own clean and
+stego chunks, using every detector's score, the share of values at each of -3…3, and how each step between
+adjacent values follows the one before it. It is cross-validated by carrier: every carrier is scored by a model
+trained without it, so it cannot win by memorising a track. Its message-size check trains a second model to
+tell a 64-byte message from a 1-byte one.
 
 **Message size** compares a 64-byte message with a 1-byte one. Mist changes the same amount of audio whatever
 the message, so this should read 0.5: anything else means the message length shows.
