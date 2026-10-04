@@ -1,11 +1,14 @@
 package steganalysis
 
 import (
+	"math/bits"
 	"math/cmplx"
 	"slices"
 
 	"github.com/iSerganov/mist/internal/dsp"
 )
+
+const maxHCFBins = 1 << 20
 
 // HCF is Harmsen-Pearlman histogram characteristic function analysis. ±1
 // embedding low-pass filters the value histogram, which pulls the centre of
@@ -16,7 +19,11 @@ func HCF(v []int32) float64 {
 		return 0
 	}
 	lo, hi := slices.Min(v), slices.Max(v)
-	n := dsp.NextPow2(int(int64(hi) - int64(lo) + 1))
+	span := uint64(int64(hi) - int64(lo))
+	if span >= maxHCFBins {
+		return 0
+	}
+	n := 1 << bits.Len64(span)
 	if n < 2 {
 		return 0
 	}

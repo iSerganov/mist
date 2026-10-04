@@ -1,6 +1,7 @@
 package steganalysis
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -73,4 +74,16 @@ func (s *AUCSuite) TestAUCIntervalIsDeterministicPerSeed() {
 	lo2, hi2 := AUCInterval(pos, neg, 200, 42)
 	s.Equal(lo1, lo2)
 	s.Equal(hi1, hi2)
+}
+
+func (s *AUCSuite) TestAUCIntervalWithoutRoundsIsThePointEstimate() {
+	pos := []float64{0.3, 0.6, 0.45}
+	neg := []float64{0.1, 0.4, 0.5}
+	for _, rounds := range []int{0, -3} {
+		s.Run(fmt.Sprintf("%d rounds", rounds), func() {
+			lo, hi := AUCInterval(pos, neg, rounds, 7)
+			s.Equal(AUC(pos, neg), lo)
+			s.Equal(AUC(pos, neg), hi)
+		})
+	}
 }

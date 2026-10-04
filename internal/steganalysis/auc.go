@@ -47,6 +47,10 @@ func AUC(pos, neg []float64) float64 {
 // AUCInterval is a percentile bootstrap 95% confidence interval for AUC,
 // resampling each population rounds times from a generator seeded by seed.
 func AUCInterval(pos, neg []float64, rounds int, seed uint64) (lo, hi float64) {
+	if rounds < 1 {
+		auc := AUC(pos, neg)
+		return auc, auc
+	}
 	rng := rand.New(rand.NewPCG(seed, seed))
 	bp, bn := make([]float64, len(pos)), make([]float64, len(neg))
 	aucs := make([]float64, rounds)
