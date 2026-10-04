@@ -61,6 +61,7 @@ estimate.go       EstimateCapacity: real per-frame and total room, without embed
 catcher.go        NewCatcher, Listen / ListenReader / Extract, options
 extract.go        scanner interface + residueScanner / sampleScanner, shared opener
 suite_test.go     shared test fixtures (audioSuite) for the root suites
+harness_*_test.go `make harness` (build tag harness): corpus, measurement, report
 example/          Godoc examples: keys, Emitter, Catcher
 mist.go-level     payload, keys, protocol constants, errors
 internal/crypto   X25519 ECDH, HKDF, ChaCha20-Poly1305, optional Ed25519
@@ -72,6 +73,10 @@ internal/codec    Codec / Encoder / Decoder / Packet / Residue interfaces
 internal/codec/vorbis  residue parse/rewrite; stops before iMDCT
 internal/av       cgo ↔ libavformat/libavcodec/libavutil (no stego knowledge);
                   pcm.go is the shared PCM↔packet plumbing both domains encode with
+internal/steganalysis  the warden: chi-square, SPA, RS, HCF-COM, features,
+                  cross-validated logistic classifier, AUC; README.md explains each
+internal/quality  lag-aligned SDR and segmental SNR, ViSQOL/PEAQ wrappers
+internal/dsp      FFT shared by steganalysis and quality
 ```
 
 Root must not import C. Only `internal/av` may use cgo. Crypto and framing must not import `av` or `vorbis`.
@@ -183,7 +188,7 @@ orders of magnitude more room and only fails on a carrier that is too short.
 
 ## Make targets
 
-`build` (to `bin/mist`), `embed`, `catch`, `formats`, `keys`, `test`, `test-quiet`, `lint`, `clean`.
+`build` (to `bin/mist`), `embed`, `catch`, `formats`, `keys`, `test`, `test-quiet`, `harness`, `lint`, `clean`.
 `test` is the loud one: `-v -race -count=1 -cover`, `GOTRACEBACK=all`, and
 `MIST_AV_LOG=$(LOG)` so libav talks too; `test-quiet` is the same run without
 the per-test output. 
@@ -191,12 +196,17 @@ the per-test output.
 `keys` mints an X25519 pair with OpenSSL and writes the raw 32 bytes as hex —
 OpenSSL emits PKCS#8/SPKI DER, whose last 32 bytes are the key — so its output
 interoperates with `crypto/ecdh` and the CLI's own hex format.
+`harness` takes `CORPUS=`, `FORMATS=` (a list, or `all`), `JOBS=`, `BASELINE=` and
+`HARNESS_OUT=`, and runs `go test -tags harness`. It is never part of `make test`
+or CI: it needs a corpus and minutes, and its numbers are read, not asserted.
+The analysis packages must not import `av`; the harness, in the root package, does
+the decoding and hands them `[]int32` values and `[][]float32` planes.
 
 ## Status
 
-Phase 1 is feature-complete end to end, with a `cmd/mist` CLI over it. All internal packages are implemented; `Emitter` embeds text and `Catcher` recovers it via `Listen` / `ListenReader` / `Extract`. Output is Ogg Vorbis or any lossless codec the installed FFmpeg can encode — verified end to end for FLAC, WAV, ALAC, WavPack, TTA, AIFF and CAF.
+Phase 1 is feature-complete end to end, with a `cmd/mist` CLI over it. All internal packages are implemented; `Emitter` embeds text and `Catcher` recovers it via `Listen` / `ListenReader` / `Extract`. Output is Ogg Vorbis or any lossless codec the installed FFmpeg can encode — verified end to end for FLAC, WAV, ALAC, WavPack, TTA, AIFF and CAF. `make harness` measures detectability and quality per output format; on real music FLAC is at chance on every detector, Ogg Vorbis shows a faint classifier signal and costs about 1.4 dB of SDR beyond a plain re-encode on dense material, and digital silence in a lossless output is the classifier's clearest tell.
 
-Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic for the Vorbis path only — it ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time), and it does not describe a lossless target at all, which holds far more (`EstimateCapacity`, and the `mist estimate` command built on it, report the real number instead, at the cost of decoding and re-encoding the carrier); `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either; `fmt_pref` prefers s16, so a 24-bit master comes back at CD depth wherever the encoder offers 16.
+Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic for the Vorbis path only — it ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time), and it does not describe a lossless target at all, which holds far more (`EstimateCapacity`, and the `mist estimate` command built on it, report the real number instead, at the cost of decoding and re-encoding the carrier); `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either; `fmt_pref` prefers s16, so a 24-bit master comes back at CD depth wherever the encoder offers 16; Ogg Vorbis output from a mono carrier with a high source bitrate (a mono WAV, not a mono MP3) fails to open the encoder, most likely because `targetBitrate` caps at 500 kbps, above what libvorbis accepts for mono.
 
 ## Design principles
 

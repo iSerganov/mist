@@ -547,6 +547,12 @@ Known gaps, all recorded in [CLAUDE.md](CLAUDE.md):
 - A scan goroutine parked in a blocking libav read outlives its context until the
   read returns. `Listen`'s channel still closes immediately on cancellation, so
   callers are unaffected.
+- Ogg Vorbis output from a mono carrier with a high source bitrate, such as a mono
+  WAV, fails to open the encoder. A mono MP3 works. The likely cause is the 500 kbps
+  cap in `targetBitrate`, above what libvorbis accepts for mono.
+- On dense music, Ogg Vorbis embedding costs more than the 0.3 dB target: 1.4 dB of
+  SDR beyond a plain re-encode on 13 metal tracks, against 0.18 dB on the rock
+  track the design was tuned on.
 
 ## Security notes
 
@@ -566,9 +572,12 @@ Explicitly **not** goals in Phase 1: surviving a digital-to-analog-to-digital
 round trip, surviving re-encoding by a different encoder, embedding into
 pre-existing files produced elsewhere, and deniability under coercion
 (undetectability and deniability are different guarantees). "Undetectable" also
-remains a design target rather than a proven property: a benchmark suite running
-real steganalysis detectors against Mist's output does not exist yet, and
-building one is an open task.
+remains a design target rather than a proven property. `make harness` (see
+[Development](#development)) measures it: four classical detectors and a trained
+classifier try to tell Mist's output from a plain re-encode of the same carrier.
+On 13 metal tracks, FLAC output sits at chance on all of them, and Ogg Vorbis
+shows a faint classifier signal (AUC 0.525). Digital silence in a lossless
+output picks up ±1 dither like everything else, and the classifier sees it.
 
 ## Development
 
@@ -583,7 +592,18 @@ make test                        # verbose: -v -race -cover, full tracebacks
 make test LOG=trace              # ...and libav logging turned all the way up
 make test-quiet                  # same run, results only
 make lint                        # golangci-lint run --timeout=5m
+make harness CORPUS=~/music      # detectability and quality report -> harness-out/
 ```
+
+`make harness` re-encodes every file in `CORPUS` (or a built-in synthetic set
+when it is empty) twice per output format, once plainly and once with a hidden
+message. Then it reports how well four classical detectors and a
+cross-validated classifier tell the two apart, and how much embedding costs in
+SDR. `FORMATS=ogg,flac` or `FORMATS=all` picks the targets (default: Ogg Vorbis
+and the verified lossless set), `JOBS=` sets how many carriers run at once, and
+`BASELINE=` points at an earlier `report.json` to show what changed. It writes
+`report.md`, ready to paste into a pull request, and `report.json`. It is
+build-tagged, so `make test` and CI never run it.
 
 `make test` is deliberately loud: every test and subtest is named, `t.Log`
 output is shown, coverage is reported per package, `GOTRACEBACK=all` dumps

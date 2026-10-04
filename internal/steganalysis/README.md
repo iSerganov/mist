@@ -21,6 +21,7 @@ stream, returns `0`.
 | [`SPA`](#sample-pair-analysis--dumitrescu-wu--wang) | LSB replacement, any rate | estimated embedding rate p | smooth, correlated signals |
 | [`RS`](#rs-analysis--fridrich-goljan--du) | LSB replacement, any rate | estimated embedding rate p | smooth, correlated signals |
 | [`HCF`](#hcf-centre-of-mass--harmsen--pearlman) | ±1 embedding (LSB matching) | 1 − normalised HCF centre of mass | peaked histograms |
+| [`CrossValidate`](#logistic-classifier--the-adversary-of-record) | anything learnable from Mist's own output | out-of-fold probability of stego | whatever the training data holds |
 
 **Why the first three matter to Mist even though it does not use LSB replacement.**
 Mist embeds by LSB *matching* (±1). On lossless outputs that is literal ±1 on
@@ -175,6 +176,43 @@ the known improvement if this stays weak.
 > Hiding.* Proc. SPIE 5020, 2003.
 > A. D. Ker. *Steganalysis of LSB Matching in Grayscale Images.* IEEE Signal
 > Processing Letters 12(6), 2005.
+
+---
+
+## Logistic classifier — the adversary of record
+
+**Idea.** A fixed detector tests one hypothesis about what embedding changes. A
+classifier trained on Mist's own clean and stego output learns whatever does
+change, including traces nobody thought to test for. The roadmap treats it as
+the adversary of record, so its AUC is the one the exit criterion is judged by.
+
+**Features.** `Features` turns a chunk into one vector:
+
+- every classical detector's score, in `Detectors` order;
+- the share of values at each of −3…3, because ±1 embedding flattens a peaked
+  histogram;
+- first-order SPAM transitions. Each difference between adjacent values is
+  truncated to ±3, giving 7 bins, and the features are the 7 × 7 probabilities
+  of one bin given the bin before it. ±1 noise blurs how one step follows the
+  next. (Pevný, Bas and Fridrich.)
+
+**Model.** L2-regularised logistic regression on z-scored features, trained by
+full-batch gradient descent for a fixed number of steps. Training is
+deterministic.
+
+**Validation.** `CrossValidate` splits samples into folds **by group**; the
+harness uses the carrier as the group. Every carrier is scored by a model trained
+without it, so the classifier cannot win by recognising a track it has already
+seen. The out-of-fold scores then go through `AUC` and `AUCInterval` like any
+detector's.
+
+**Limits.** A linear model on 60 hand-built features is a modest adversary. It
+matches HCF on synthetic ±1 embedding and beats it at higher rates, but a deep
+model on richer features would be stronger. With few carriers, its AUC is noisier
+than the classical detectors'.
+
+> T. Pevný, P. Bas, J. Fridrich. *Steganalysis by Subtractive Pixel Adjacency
+> Matrix.* IEEE Trans. Information Forensics and Security 5(2), 2010.
 
 ---
 
