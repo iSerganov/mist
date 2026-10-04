@@ -114,9 +114,10 @@ func openEncoder(target av.Format, pcm codec.PCM, info av.AudioInfo) (*av.Encode
 	enc, err := av.NewEncoder(want)
 	// libvorbis refuses rates outside a window that depends on the sample
 	// rate as well as the channel count, and libav reports only EINVAL, so
-	// the only way to find the edge is to step down until it opens.
+	// the only way to find the edge is to step down until it opens. Any
+	// other failure would fail at every rate.
 	refused := err
-	for err != nil && want.Bitrate > floorBitrate {
+	for errors.Is(err, av.ErrInvalid) && want.Bitrate > floorBitrate {
 		want.Bitrate = max(want.Bitrate/4*3, floorBitrate)
 		enc, err = av.NewEncoder(want)
 	}

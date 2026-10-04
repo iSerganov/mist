@@ -197,6 +197,29 @@ func (s *AVSuite) TestEncodeDecodePCM() {
 	s.Greater(frameEnergy(frames[0]), 1.0)
 }
 
+func (s *AVSuite) TestEncoderOpenErrorsSayWhetherTheSettingsWereRefused() {
+	s.requireLibav()
+	tests := []struct {
+		title       string
+		info        AudioInfo
+		wantInvalid bool
+	}{
+		{"vorbis refuses a rate above its mono ceiling", AudioInfo{
+			CodecID: CodecIDVorbis, SampleRate: 44100, Channels: 1,
+			SampleFmt: codec.SampleFmtFLTP, Bitrate: 500_000,
+		}, true},
+		{"no encoder for the codec at all", AudioInfo{SampleRate: 44100, Channels: 2}, false},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			enc, err := NewEncoder(tc.info)
+			s.Require().Nil(enc)
+			s.Require().ErrorIs(err, ErrOpen)
+			s.Equal(tc.wantInvalid, errors.Is(err, ErrInvalid))
+		})
+	}
+}
+
 func (s *AVSuite) TestCustomIO() {
 	s.requireLibav()
 	raw, info := s.encodeOgg()

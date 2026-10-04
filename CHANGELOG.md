@@ -5,6 +5,49 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0]
+
+### Changed
+
+- **Breaking: the embedding protocol has changed, and files embedded by
+  0.1.x or 0.2.x can no longer be read.** `catch` on such a file reports
+  that nothing was found, just as it would for a file with no message,
+  because Mist has no in-band version marker to tell the two apart.
+  Re-embed any message that still needs to be read. The changes behind
+  this:
+  - Payload bits are carried by a syndrome-trellis code over the eligible
+    values instead of one bit per keyed position with LSB matching. The
+    rate stays at 2%, so capacity is unchanged, but about 0.14 values
+    change per bit instead of 0.5.
+  - Positions are ordered by a ChaCha20 keystream instead of
+    HMAC-SHA256 counters.
+  - Lossless output leaves digital silence and the end padding untouched,
+    so those samples are no longer part of the carrier.
+- Ogg Vorbis embedding now prices each change by how far it moves the
+  residue's spectral vector and avoids the costly ones. On 13 dense music
+  tracks its cost beyond a plain re-encode drops from 1.4 dB of SDR to
+  under 0.02 dB.
+- In lossless output the direction of each ±1 change now follows the
+  frame's own sample histogram, so the histogram no longer widens with
+  every change.
+- Lossless capacity, as `EstimateCapacity` and `mist estimate` report it,
+  no longer counts silent stretches of the carrier.
+
+### Added
+
+- `make harness`: a local report on detectability and audio quality per
+  output format, run on a music corpus or a built-in synthetic set. It
+  measures four classical detectors (chi-square, SPA, RS, HCF-COM) and a
+  cross-validated classifier, plus SDR against a plain re-encode, per
+  carrier and on average.
+
+### Fixed
+
+- Ogg Vorbis output from a mono carrier with a high source bitrate, such
+  as a mono WAV, or from a 22 kHz mono carrier, no longer fails to open
+  the encoder. Bitrate bounds now scale with the channel count, and the
+  rate steps down until libvorbis accepts it.
+
 ## [0.2.0] - 2026-09-21
 
 ### Added

@@ -927,8 +927,9 @@ static enum AVSampleFormat pick_sample_fmt(const AVCodec *codec, AVCodecContext 
 	return have[0] != AV_SAMPLE_FMT_NONE ? have[0] : AV_SAMPLE_FMT_FLTP;
 }
 
-mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errbuf, int errlen)
+mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errbuf, int errlen, int *invalid)
 {
+	*invalid = 0;
 	if (info == NULL) {
 		set_err(errbuf, errlen, "nil info");
 		return NULL;
@@ -960,6 +961,7 @@ mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errb
 	int err = avcodec_open2(e->ctx, codec, NULL);
 	if (err < 0) {
 		set_averr(errbuf, errlen, err, "open encoder");
+		*invalid = err == AVERROR(EINVAL);
 		avcodec_free_context(&e->ctx);
 		av_free(e);
 		return NULL;

@@ -148,7 +148,8 @@ int              mist_av_decoder_send(mist_av_decoder *dec, const mist_av_packet
 int              mist_av_decoder_receive(mist_av_decoder *dec, mist_av_frame *frame);
 void             mist_av_decoder_close(mist_av_decoder *dec);
 
-mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errbuf, int errlen);
+/* On failure *invalid is set when the codec refused its settings (EINVAL). */
+mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errbuf, int errlen, int *invalid);
 int              mist_av_encoder_info(mist_av_encoder *enc, mist_av_audio_info *info);
 int              mist_av_encoder_send_flt(mist_av_encoder *enc, float **planes, int nplanes, int nb_samples, int64_t pts);
 int              mist_av_encoder_flush(mist_av_encoder *enc);

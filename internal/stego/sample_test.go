@@ -218,8 +218,9 @@ func (s *SampleSuite) TestStepDirection() {
 
 // Random ±1 moves samples off a peak faster than they come back, which
 // widens the histogram: on average every change adds exactly 1 to Σv².
-// Steering by the histogram should leave Σv² where it was, within the
-// ±0.1 a run this size wanders by.
+// Steering by the histogram should leave Σv² where it was: a run this
+// size wanders by up to ±0.15 per change across seeds, so 0.35 still
+// sits far below the 1 that random ±1 adds.
 func (s *SampleSuite) TestKeepsTheHistogramFromWidening() {
 	var widened, changes int
 	for trial := range 8 {

@@ -96,6 +96,44 @@ func (s *STCSuite) TestRoutesAroundExpensiveValues() {
 	s.Equal(msg, code.syndrome(applyFlips(cover, flips), m))
 }
 
+// Row 0 of the syndrome is the parity of block 0 alone, so a message bit
+// that disagrees with it forces a flip there. With block 0 all wet, every
+// path carries wetCost; the cheap flips after it must still be chosen as
+// carefully as when block 0 costs one unit.
+func (s *STCSuite) TestAWetFlipDoesNotBlurTheCostsAfterIt() {
+	rng := rand.New(rand.NewPCG(5, 6))
+	const m, w = 400, 50
+	code := newSTC([]byte("position key"), w)
+	cover := randomBits(rng, m*w)
+	msg := randomBits(rng, m)
+	var parity uint8
+	for _, b := range cover[:w] {
+		parity ^= b
+	}
+	msg[0] = parity ^ 1
+	cost := make([]float32, len(cover))
+	for j := range cost {
+		cost[j] = minCost + rng.Float32()*0.01
+	}
+	tail := func(block0 float32) float64 {
+		c := append([]float32(nil), cost...)
+		for j := range w {
+			c[j] = block0
+		}
+		flips, err := code.embed(cover, c, msg)
+		s.Require().NoError(err)
+		s.Require().Equal(msg, code.syndrome(applyFlips(cover, flips), m))
+		var sum float64
+		for _, j := range flips {
+			if j >= w {
+				sum += float64(c[j])
+			}
+		}
+		return sum
+	}
+	s.InDelta(tail(1), tail(wetCost), 1e-6)
+}
+
 func (s *STCSuite) TestMatrixDependsOnTheKey() {
 	s.Equal(newSTC([]byte("a"), 50), newSTC([]byte("a"), 50))
 	s.NotEqual(newSTC([]byte("a"), 50), newSTC([]byte("b"), 50))

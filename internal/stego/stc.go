@@ -70,9 +70,11 @@ func (c stcCode) embed(cover []uint8, cost []float32, msg []uint8) ([]int, error
 	if len(cover) != m*w || len(cost) != len(cover) {
 		return nil, errNoSolution
 	}
-	inf := float32(math.Inf(1))
-	cur := make([]float32, stcStates)
-	nxt := make([]float32, stcStates)
+	// Path costs sum a whole frame. In float32 one wetCost on a path leaves
+	// a resolution of 0.06, which swallows every residue cost after it.
+	inf := math.Inf(1)
+	cur := make([]float64, stcStates)
+	nxt := make([]float64, stcStates)
 	for s := range cur {
 		cur[s] = inf
 	}
@@ -89,9 +91,9 @@ func (c stcCode) embed(cover []uint8, cost []float32, msg []uint8) ([]int, error
 			// zero and one are the costs of stego bit 0 and 1. A tie goes to
 			// whichever leaves the cover bit alone: breaking it towards one
 			// fixed bit would flip odd values more often than even ones.
-			zero, one, preferOne := cost[j], float32(0), true
+			zero, one, preferOne := float64(cost[j]), 0.0, true
 			if cover[j]&1 == 0 {
-				zero, one, preferOne = 0, cost[j], false
+				zero, one, preferOne = 0, float64(cost[j]), false
 			}
 			p := path[j*words : (j+1)*words]
 			for s := range stcStates {
@@ -121,7 +123,7 @@ func (c stcCode) embed(cover []uint8, cost []float32, msg []uint8) ([]int, error
 			best = s
 		}
 	}
-	if math.IsInf(float64(cur[best]), 1) {
+	if math.IsInf(cur[best], 1) {
 		return nil, errNoSolution
 	}
 
