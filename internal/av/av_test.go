@@ -220,6 +220,111 @@ func (s *AVSuite) TestEncoderOpenErrorsSayWhetherTheSettingsWereRefused() {
 	}
 }
 
+// Each want is what `ffmpeg -i <source> -c:a <codec>` writes, read back
+// with ffprobe: the encoder's format and depth follow the source's, so a
+// 24-bit or float source is not cut down to 16 bits.
+func (s *AVSuite) TestEncoderPicksTheFormatFFmpegWould() {
+	s.requireLibav()
+	tests := []struct {
+		title     string
+		container string
+		codec     string
+		srcFmt    codec.SampleFormat
+		srcBits   int
+		wantFmt   codec.SampleFormat
+		wantBits  int
+	}{
+		{"flac from 16-bit stays 16-bit", "flac", "", codec.SampleFmtS16, 16, codec.SampleFmtS16, 16},
+		{"flac from 24-bit keeps 24 bits", "flac", "", codec.SampleFmtS32, 24, codec.SampleFmtS32, 24},
+		{"flac from float goes to 24 bits", "flac", "", codec.SampleFmtFLTP, 0, codec.SampleFmtS32, 24},
+		{"wav from 24-bit is 16-bit pcm_s16le", "wav", "", codec.SampleFmtS32, 24, codec.SampleFmtS16, 16},
+		{"alac from 16-bit stays 16-bit", "caf", "alac", codec.SampleFmtS16, 16, codec.SampleFmtS16P, 16},
+		{"alac from float goes to 24 bits", "caf", "alac", codec.SampleFmtFLTP, 0, codec.SampleFmtS32P, 24},
+		{"wavpack from 16-bit stays 16-bit", "wv", "", codec.SampleFmtS16, 16, codec.SampleFmtS16P, 16},
+		{"wavpack from float stays float", "wv", "", codec.SampleFmtFLTP, 0, codec.SampleFmtFLTP, 32},
+		{"tta from float goes to 24 bits", "tta", "", codec.SampleFmtFLTP, 0, codec.SampleFmtS32, 24},
+		{"vorbis takes float whatever the source", "ogg", "", codec.SampleFmtS16, 16, codec.SampleFmtFLTP, 16},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			f, err := FindFormat(tc.container, tc.codec)
+			if err != nil {
+				s.T().Skipf("this FFmpeg cannot write %s: %v", tc.container, err)
+			}
+			enc, err := NewEncoder(f.Info(44100, 2, AudioInfo{SampleFmt: tc.srcFmt, Bits: tc.srcBits}))
+			s.Require().NoError(err)
+			defer func() { _ = enc.Close() }()
+
+			s.Equal(tc.wantFmt, enc.Info().SampleFmt)
+			s.Equal(tc.wantBits, enc.Info().Bits)
+		})
+	}
+}
+
+// Snap has to land every sample, however far off the grid, on exactly
+// what the lossless encoder stores and the decoder hands back, or the
+// sample domain's LSBs do not survive the round trip.
+func (s *AVSuite) TestSnapPredictsWhatTheEncoderStores() {
+	s.requireLibav()
+	tests := []struct {
+		title     string
+		container string
+		codec     string
+		srcFmt    codec.SampleFormat
+		srcBits   int
+	}{
+		{"flac at 16 bits", "flac", "", codec.SampleFmtS16, 16},
+		{"flac at 24 bits, where the encoder floors the low byte away", "flac", "", codec.SampleFmtFLTP, 0},
+		{"wav at 16 bits", "wav", "", codec.SampleFmtS16, 16},
+		{"alac at 24 bits", "caf", "alac", codec.SampleFmtS32, 24},
+	}
+	const n = 10_000
+	planes := make([][]float32, 2)
+	for c := range planes {
+		planes[c] = make([]float32, n)
+		for i := range planes[c] {
+			planes[c][i] = float32(0.9*math.Sin(float64(i*(c+1))/7) + 1e-6*float64(i%13))
+		}
+		planes[c][0], planes[c][1] = 1, -1
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			f, err := FindFormat(tc.container, tc.codec)
+			if err != nil {
+				s.T().Skipf("this FFmpeg cannot write %s: %v", tc.container, err)
+			}
+			enc, err := NewEncoder(f.Info(44100, 2, AudioInfo{SampleFmt: tc.srcFmt, Bits: tc.srcBits}))
+			s.Require().NoError(err)
+			defer func() { _ = enc.Close() }()
+
+			pcm := codec.PCM{Planes: planes, NbSamples: n, Channels: 2, SampleRate: 44100}
+			pkts, err := enc.Encode(pcm)
+			s.Require().NoError(err)
+			tail, err := enc.Flush()
+			s.Require().NoError(err)
+
+			snapped := [][]float32{append([]float32(nil), planes[0]...), append([]float32(nil), planes[1]...)}
+			s.Require().NoError(enc.Snap(snapped))
+
+			dec, err := NewDecoder(enc.Info())
+			s.Require().NoError(err)
+			defer func() { _ = dec.Close() }()
+			got := make([][]float32, 2)
+			for _, pkt := range append(pkts, tail...) {
+				out, err := dec.Decode(pkt)
+				s.Require().NoError(err)
+				for _, p := range out {
+					for c := range got {
+						got[c] = append(got[c], p.Planes[c]...)
+					}
+				}
+			}
+			s.Require().Len(got[0], n)
+			s.Equal(snapped, got)
+		})
+	}
+}
+
 func (s *AVSuite) TestCustomIO() {
 	s.requireLibav()
 	raw, info := s.encodeOgg()

@@ -110,7 +110,7 @@ frame of a longer message's span — loses the message.
 brew install ffmpeg pkg-config
 
 # Debian / Ubuntu
-sudo apt-get install pkg-config libavformat-dev libavcodec-dev libavutil-dev libvorbis-dev
+sudo apt-get install pkg-config libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libvorbis-dev
 ```
 
 Building with `CGO_ENABLED=0` still type-checks against a pure-Go stub, which
@@ -463,12 +463,17 @@ For the real number ahead of time, without producing any output, use
 ### Audio quality
 
 Mist always decodes and re-encodes, so some loss is unavoidable for a lossy
-*output* — but the embedding itself should be inaudible. For Vorbis, the encode
-bitrate is derived from the carrier's own rate with headroom above it, rather
-than fixed, and the payload is written only above 6 kHz at a low density.
+*output* — but the embedding itself should be inaudible. For Vorbis, Mist keeps
+the carrier's quality: it encodes in VBR at the `-q:a` level whose nominal rate is
+nearest the source's bitrate scaled by how efficient its codec is (MP3 ×0.75, AAC
+×1, Opus ×1.3, Vorbis ×1), and at q8 for a lossless source. A 192 kbps MP3
+becomes q5 (160 kbps nominal). The payload is written only above 6 kHz at a low
+density. Lossless output keeps the carrier's depth as `ffmpeg` would: a 24-bit or
+float source is written at 24 bits wherever the codec allows it.
 
 Measured on a 128 kbps MP3, against a plain FFmpeg transcode of the same
-decoded audio (signal-to-distortion, higher is better):
+decoded audio (signal-to-distortion, higher is better), under the earlier rate
+rule (source ×1.5 ABR); the table has not been re-measured since:
 
 | | SDR |
 |---|---|
@@ -543,8 +548,9 @@ Known gaps, all recorded in [CLAUDE.md](CLAUDE.md):
 - `FrameCapacity()` over-estimates and describes the Vorbis path only, as above.
 - `Embed` over `http(s)` buffers a finite file rather than streaming a live source,
   and the lossless path buffers the whole carrier before encoding.
-- Lossless embedding quantizes to 16 bits wherever the encoder offers that depth,
-  so a 24-bit master comes back at CD depth.
+- Output from an MP3 carrier keeps the MP3's encoder delay and padding, which
+  ffmpeg trims, so it starts 1105 samples later and runs 2304 samples longer
+  than a plain encode.
 - A listener that joins mid-frame cannot align to that frame; it says so once and
   resumes cleanly from the next one.
 - A scan goroutine parked in a blocking libav read outlives its context until the
@@ -572,9 +578,12 @@ pre-existing files produced elsewhere, and deniability under coercion
 remains a design target rather than a proven property. `make harness` (see
 [Development](#development)) measures it: four classical detectors and a trained
 classifier try to tell Mist's output from a plain `ffmpeg` encode of the same
-carrier. On 13 metal tracks they currently can: Mist's output still differs from
-ffmpeg's in sample format (FLAC) and in bitrate and length (Ogg Vorbis), and the
-detectors pick that up for those two formats. WAV output sits at chance on every
+carrier. On 13 metal tracks they could, before lossless output took ffmpeg's sample
+format and Vorbis output its VBR mode: Mist's output differed from ffmpeg's in
+sample format (FLAC) and in bitrate and length (Ogg Vorbis), and the detectors
+picked that up for those two formats. That run predates both changes. Against an
+ffmpeg encode at its default q3, Vorbis output still differs in quality level
+whenever the carrier maps to another one. WAV output sits at chance on every
 detector but a faint per-file HCF-COM signal. Against Mist's own re-encode, where
 only the embedded changes differ, all three formats sit at or near chance. That is a
 warden without the original: one who holds the carrier Mist started from can

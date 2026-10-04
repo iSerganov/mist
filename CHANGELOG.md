@@ -32,6 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every change.
 - Lossless capacity, as `EstimateCapacity` and `mist estimate` report it,
   no longer counts silent stretches of the carrier.
+- Lossless output keeps the carrier's depth the way `ffmpeg` does, instead
+  of always writing 16 bits: a 24-bit or float source is written at 24 bits
+  wherever the codec allows it (FLAC, ALAC, TTA, WavPack), and a 16-bit
+  source stays 16-bit. Samples are converted by libswresample, as `ffmpeg`
+  converts them, so apart from the embedded ±1 changes the output matches
+  a plain `ffmpeg` encode sample for sample. Building now needs
+  libswresample (`libswresample-dev` on Debian/Ubuntu).
+- Ogg Vorbis output is encoded in VBR at the quality level that matches the
+  carrier's quality, instead of an ABR target at 1.5 times the source rate:
+  the source rate is scaled by codec efficiency (MP3 ×0.75, AAC ×1,
+  Opus ×1.3) and rounded to the nearest `-q:a` level, and a lossless source
+  is written at q8. The stream header then reads like an ordinary
+  `ffmpeg -q:a N` encode. Vorbis capacity drops with the rate: a 128 kbps
+  MP3 carrier holds about a third of what it did.
 
 ### Added
 
@@ -61,8 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   padding, so it gave Mist away without any statistics.
 - Ogg Vorbis output from a mono carrier with a high source bitrate, such
   as a mono WAV, or from a 22 kHz mono carrier, no longer fails to open
-  the encoder. Bitrate bounds now scale with the channel count, and the
-  rate steps down until libvorbis accepts it.
+  the encoder.
 
 ## [0.2.0] - 2026-09-21
 

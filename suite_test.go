@@ -95,6 +95,18 @@ func wav(rate, ch, n int) []byte {
 	return wavFile(rate, ch, samples)
 }
 
+// wav24 is wav at 24 bits, for the paths that must keep a deep carrier deep.
+func wav24(rate, ch, n int) []byte {
+	data := make([]byte, 0, n*ch*3)
+	x := uint32(12345)
+	for range n * ch {
+		x = x*1664525 + 1013904223
+		v := int32(x>>8)%2_000_000 - 1_000_000
+		data = append(data, byte(v), byte(v>>8), byte(v>>16))
+	}
+	return wavBytes(rate, ch, 24, data)
+}
+
 func wavFile(rate, ch int, samples []int16) []byte {
 	data := make([]byte, 0, len(samples)*2)
 	for _, v := range samples {

@@ -346,6 +346,40 @@ func (s *EmitterSuite) TestFillerFramesAreStillPerturbed() {
 
 func (s *EmitterSuite) makeCarrier() []byte { return s.carrier(FrameDuration) }
 
+// Vorbis keeps the carrier's quality: the source's rate, scaled by how
+// much better Vorbis does per bit, picks the nearest -q:a level, and a
+// lossless or rateless source gets q8. Each want is libvorbis's nominal
+// rate for that level at 44.1 kHz stereo.
+func (s *EmitterSuite) TestVorbisQualityFollowsTheCarrier() {
+	s.requireLibav()
+	ogg, err := av.FindFormat("ogg", "")
+	s.Require().NoError(err)
+	flac, err := av.FindFormat("flac", "")
+	s.Require().NoError(err)
+
+	tests := []struct {
+		title string
+		src   av.AudioInfo
+		want  int32
+	}{
+		{"192 kbps mp3 is worth 144 kbps, a tie that goes up to q5", av.AudioInfo{CodecName: "mp3", Bitrate: 192_000}, 160_000},
+		{"128 kbps aac stays at q4", av.AudioInfo{CodecName: "aac", Bitrate: 128_000}, 128_000},
+		{"96 kbps opus is worth 125 kbps, q4", av.AudioInfo{CodecName: "opus", Bitrate: 96_000}, 128_000},
+		{"112 kbps vorbis stays at q3", av.AudioInfo{CodecName: "vorbis", Bitrate: 112_000}, 112_000},
+		{"flac goes to q8", av.AudioInfo{CodecName: "flac", NativeCodecID: flac.CodecID, Bitrate: 900_000}, 256_000},
+		{"a source with no rate goes to q8", av.AudioInfo{CodecName: "mp3"}, 256_000},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			enc, err := openVorbis(ogg.Info(testRate, 2, tc.src), tc.src)
+			s.Require().NoError(err)
+			defer func() { _ = enc.Close() }()
+
+			s.Equal(tc.want, nominalRate(enc))
+		})
+	}
+}
+
 func (s *EmitterSuite) TestEmbedVorbisFromRawPCMWhateverTheShape() {
 	s.requireLibav()
 	pub, priv, err := GenerateKeyPair()
@@ -355,8 +389,8 @@ func (s *EmitterSuite) TestEmbedVorbisFromRawPCMWhateverTheShape() {
 		title    string
 		rate, ch int
 	}{
-		{"mono 44.1 kHz WAV, whose raw bitrate is far above the mono ceiling", 44100, 1},
-		{"mono 22.05 kHz WAV, where libvorbis refuses even 200 kbps", 22050, 1},
+		{"mono 44.1 kHz WAV", 44100, 1},
+		{"mono 22.05 kHz WAV", 22050, 1},
 		{"stereo 22.05 kHz WAV", 22050, 2},
 	}
 	for _, tc := range tests {

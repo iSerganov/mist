@@ -1,4 +1,5 @@
-// Package av is the cgo boundary to libavformat, libavcodec, and libavutil.
+// Package av is the cgo boundary to libavformat, libavcodec, libavutil and
+// libswresample.
 //
 // This package knows nothing about steganography. It demuxes Ogg, muxes
 // Vorbis packets, decodes to PCM, and encodes from PCM. Residue access
@@ -20,7 +21,9 @@ import (
 // NativeCodecID is libav's own AVCodecID for the stream, carried verbatim
 // so any format the installed FFmpeg can decode is usable; CodecID stays
 // Mist-local and is CodecIDNone for everything else. CodecName is libav's
-// display name, for error messages.
+// display name, for error messages. Bits is bits_per_raw_sample, 0 when
+// the stream does not say. VBR asks an encoder for constant Quality on its
+// own scale (libvorbis -1..10), as ffmpeg's -q:a does, instead of Bitrate.
 type AudioInfo struct {
 	CodecID       int
 	NativeCodecID int
@@ -29,7 +32,10 @@ type AudioInfo struct {
 	SampleRate    int
 	Channels      int
 	SampleFmt     codec.SampleFormat
+	Bits          int
 	Bitrate       int64
+	VBR           bool
+	Quality       int
 	DurationUs    int64
 	Extradata     []byte
 	FrameSize     int
@@ -47,14 +53,17 @@ type Format struct {
 	Lossless  bool
 }
 
-// Info returns the encoder parameters for writing f.
-func (f Format) Info(rate, channels int, bitrate int64) AudioInfo {
+// Info returns the encoder parameters for writing f from src. The
+// encoder takes src's sample format and depth as its starting point, the
+// way the ffmpeg command line does, and settles on what it can write.
+func (f Format) Info(rate, channels int, src AudioInfo) AudioInfo {
 	return AudioInfo{
 		NativeCodecID: f.CodecID,
 		Container:     f.Container,
 		SampleRate:    rate,
 		Channels:      channels,
-		Bitrate:       bitrate,
+		SampleFmt:     src.SampleFmt,
+		Bits:          src.Bits,
 	}
 }
 

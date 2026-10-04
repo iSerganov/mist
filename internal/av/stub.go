@@ -46,4 +46,6 @@ func avEncSend(*Encoder, Frame) error { return errUnimplemented }
 
 func avEncReceive(*Encoder) (Packet, error) { return Packet{}, errUnimplemented }
 
+func avEncConvert(*Encoder, [][]float32, int) ([][]int32, error) { return nil, errUnimplemented }
+
 func avEncClose(*Encoder) error { return nil }

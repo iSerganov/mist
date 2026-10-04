@@ -39,12 +39,13 @@ var layouts = map[codec.SampleFormat]layout{
 }
 
 // SampleScale is the integer grid a sample format quantizes to, as a
-// multiplier on the float planes this package reports. It is the inverse
-// of the conversion store_sample performs in cgo.c, so round(v*scale) of a
-// decoded sample returns exactly the integer the encoder wrote.
+// multiplier on the float planes this package reports. libswresample
+// writes a float already on this grid to exactly that integer, so
+// round(v*scale) of a decoded sample returns what the encoder was given.
 //
 // Deeper formats are capped at 24 bits: float32 carries 24 mantissa bits,
-// and a grid finer than that would not survive the float pipeline intact.
+// a grid finer than that would not survive the float pipeline intact, and
+// every lossless encoder stores an s32 sample in at most 24 bits anyway.
 func SampleScale(f codec.SampleFormat) float32 {
 	switch f {
 	case codec.SampleFmtU8, codec.SampleFmtU8P:
@@ -53,6 +54,34 @@ func SampleScale(f codec.SampleFormat) float32 {
 		return 1 << 15
 	default:
 		return 1 << 23
+	}
+}
+
+// snapChunk bounds how much audio one Snap call sends across cgo.
+const snapChunk = 1 << 16
+
+// gridShift is how far the integer libswresample produces for f sits
+// above SampleScale's grid, and false for a format with no integer grid.
+// An s32 sample keeps its top 24 bits, as every 24-bit encoder keeps
+// them: they shift the rest away, flooring, not rounding.
+func gridShift(f codec.SampleFormat) (uint, bool) {
+	switch f {
+	case codec.SampleFmtU8, codec.SampleFmtU8P, codec.SampleFmtS16, codec.SampleFmtS16P:
+		return 0, true
+	case codec.SampleFmtS32, codec.SampleFmtS32P:
+		return 8, true
+	default:
+		return 0, false
+	}
+}
+
+func snapTo(planes [][]float32, ints [][]int32, f codec.SampleFormat) {
+	shift, _ := gridShift(f)
+	scale := SampleScale(f)
+	for c, p := range planes {
+		for i := range p {
+			p[i] = float32(ints[c][i]>>shift) / scale
+		}
 	}
 }
 

@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 /*
- * C ABI for libavformat / libavcodec / libavutil.
+ * C ABI for libavformat / libavcodec / libavutil / libswresample.
  * Codec IDs are Mist-local; this layer maps them to AV_CODEC_ID_*.
  * Sample formats match AVSampleFormat numerically.
  * Custom IO opaque values are integer handles owned by Go, never Go pointers.
@@ -57,6 +57,9 @@ typedef struct mist_av_io      mist_av_io;
  * the installed FFmpeg can decode is usable as a carrier; codec_name is
  * its display name, for error messages. Both are 0 / empty when unknown.
  * container is the muxer short name to write, empty meaning "ogg".
+ * bits is bits_per_raw_sample, 0 when the stream does not say.
+ * vbr asks the encoder for constant quality on its own scale (libvorbis
+ * -1..10), as ffmpeg's -q:a does, instead of bitrate.
  */
 typedef struct mist_av_audio_info {
 	int      codec_id;
@@ -66,7 +69,10 @@ typedef struct mist_av_audio_info {
 	int      sample_rate;
 	int      channels;
 	int      sample_fmt;
+	int      bits;
 	int64_t  bitrate;
+	int      vbr;
+	int      quality;
 	int64_t  duration_us;
 	uint8_t *extradata;
 	int      extradata_size;
@@ -152,6 +158,12 @@ void             mist_av_decoder_close(mist_av_decoder *dec);
 mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errbuf, int errlen, int *invalid);
 int              mist_av_encoder_info(mist_av_encoder *enc, mist_av_audio_info *info);
 int              mist_av_encoder_send_flt(mist_av_encoder *enc, float **planes, int nplanes, int nb_samples, int64_t pts);
+/*
+ * Converts float planes to the encoder's integer format exactly as send_flt
+ * will, and widens each sample to int32 in out (one plane per channel)
+ * without sending anything. u8 comes back centred on zero.
+ */
+int              mist_av_encoder_convert(mist_av_encoder *enc, float **planes, int nplanes, int nb_samples, int32_t **out);
 int              mist_av_encoder_flush(mist_av_encoder *enc);
 int              mist_av_encoder_receive(mist_av_encoder *enc, mist_av_packet *pkt);
 void             mist_av_encoder_close(mist_av_encoder *enc);

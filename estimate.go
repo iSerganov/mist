@@ -94,6 +94,9 @@ func estimatePCM(ctx context.Context, target av.Format, pcm codec.PCM, info av.A
 
 	var rooms []int
 	if target.Lossless {
+		if err := enc.Snap(pcm.Planes); err != nil {
+			return Capacity{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+		}
 		rooms = sampleRooms(sampleFrames(pcm, av.SampleScale(enc.Info().SampleFmt)))
 	} else if rooms, err = residueRooms(ctx, enc, pcm); err != nil {
 		return Capacity{}, err

@@ -173,7 +173,7 @@ func (s *SpanSuite) TestEmbedExtractSpansAcrossVorbisFrames() {
 	pub, priv, err := GenerateKeyPair()
 	s.Require().NoError(err)
 
-	msg := string(bytes.Repeat([]byte("the eagle lands at dawn, "), 80)) // ~2080 bytes
+	msg := string(bytes.Repeat([]byte("the eagle lands at dawn, "), 24)) // 600 bytes, three frames or more
 	out := s.stego(pub, Text(msg), s.pcmCarrier(4*FrameDuration))
 	res := s.extract(priv, out)
 
