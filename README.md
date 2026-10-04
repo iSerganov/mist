@@ -576,8 +576,8 @@ round trip, surviving re-encoding by a different encoder, embedding into
 pre-existing files produced elsewhere, and deniability under coercion
 (undetectability and deniability are different guarantees). "Undetectable" also
 remains a design target rather than a proven property. `make harness` (see
-[Development](#development)) measures it: four classical detectors and a trained
-classifier try to tell Mist's output from a plain `ffmpeg` encode of the same
+[Development](#development)) measures it: four classical detectors and two trained
+classifiers try to tell Mist's output from a plain `ffmpeg` encode of the same
 carrier. On 13 metal tracks they could, before lossless output took ffmpeg's sample
 format and Vorbis output its VBR mode: Mist's output differed from ffmpeg's in
 sample format (FLAC) and in bitrate and length (Ogg Vorbis), and the detectors
@@ -611,7 +611,8 @@ at its own defaults, which is the clean file a warden would compare against;
 with Mist's own encoder and nothing embedded; and with a hidden message. It
 first checks that Mist's output matches the ffmpeg copy on length, trailing
 digital zeros, sample format and nominal bitrate. Then it reports how well four
-classical detectors and a cross-validated classifier tell the stego copy from
+classical detectors and two cross-validated classifiers — one on general
+features, one on second-difference Markov features — tell the stego copy from
 each clean one, and how much embedding costs in SDR. It needs `ffmpeg` on
 `PATH`. `FORMATS=ogg,flac` or `FORMATS=all` picks the targets (default: Ogg Vorbis
 and the verified lossless set), `JOBS=` sets how many carriers run at once, and

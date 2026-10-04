@@ -102,7 +102,7 @@ func harnessJobs(spec string) (int, error) {
 }
 
 type carrierRun struct {
-	clean, own, stego, minimal [][]float64
+	clean, own, stego, minimal []chunk
 	transcode, stegoSDR        float64
 	added                      float64
 	kbps                       float64
@@ -137,7 +137,7 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	}
 	wg.Wait()
 
-	var clean, own, stegoFeatures, minimal [][][]float64
+	var clean, own, stegoFeatures, minimal [][]chunk
 	var transcode, stegoSDR, gap, added, drop []float64
 	for i, run := range runs {
 		if errs[i] != nil {
@@ -320,10 +320,18 @@ func gridValues(planes [][]float32, scale float32) []int32 {
 	return out
 }
 
-func featuresOf(v []int32) [][]float64 {
-	var out [][]float64
+// chunk is what the wardens see of one stretch of a file: the general
+// classifier's features, led by every detector's score, and the
+// second-difference Markov features the markov classifier trains on alone.
+type chunk struct {
+	features, markov []float64
+}
+
+func featuresOf(v []int32) []chunk {
+	var out []chunk
 	for off := 0; off < len(v); off += harnessChunk {
-		out = append(out, steganalysis.Features(v[off:min(off+harnessChunk, len(v))]))
+		c := v[off:min(off+harnessChunk, len(v))]
+		out = append(out, chunk{features: steganalysis.Features(c), markov: steganalysis.Markov(c)})
 	}
 	return out
 }
@@ -361,26 +369,26 @@ func (s scored) perFile() scored {
 	return out
 }
 
-func column(carriers [][][]float64, k int) scored {
+func column(carriers [][]chunk, k int) scored {
 	var out scored
 	for i, chunks := range carriers {
-		for _, f := range chunks {
-			out.add(f[k], i)
+		for _, c := range chunks {
+			out.add(c.features[k], i)
 		}
 	}
 	return out
 }
 
-func classify(pos, neg [][][]float64) (scored, scored) {
+func classify(pos, neg [][]chunk, pick func(chunk) []float64) (scored, scored) {
 	var x [][]float64
 	var y []bool
 	var groups []int
 	for i := range pos {
-		for _, f := range pos[i] {
-			x, y, groups = append(x, f), append(y, true), append(groups, i)
+		for _, c := range pos[i] {
+			x, y, groups = append(x, pick(c)), append(y, true), append(groups, i)
 		}
-		for _, f := range neg[i] {
-			x, y, groups = append(x, f), append(y, false), append(groups, i)
+		for _, c := range neg[i] {
+			x, y, groups = append(x, pick(c)), append(y, false), append(groups, i)
 		}
 	}
 	var ps, ns scored
@@ -394,15 +402,24 @@ func classify(pos, neg [][][]float64) (scored, scored) {
 	return ps, ns
 }
 
-func detectors(pos, neg, minimal [][][]float64) []detectorResult {
+func detectors(pos, neg, minimal [][]chunk) []detectorResult {
 	var out []detectorResult
 	for k, d := range steganalysis.Detectors() {
 		p := column(pos, k)
 		out = append(out, detectorFrom(d.Name, p, column(neg, k), steganalysis.AUC(p.vals, column(minimal, k).vals)))
 	}
-	ps, ns := classify(pos, neg)
-	ms, mn := classify(pos, minimal)
-	return append(out, detectorFrom(classifierName, ps, ns, steganalysis.AUC(ms.vals, mn.vals)))
+	for _, cl := range []struct {
+		name string
+		pick func(chunk) []float64
+	}{
+		{classifierName, func(c chunk) []float64 { return c.features }},
+		{markovName, func(c chunk) []float64 { return c.markov }},
+	} {
+		ps, ns := classify(pos, neg, cl.pick)
+		ms, mn := classify(pos, minimal, cl.pick)
+		out = append(out, detectorFrom(cl.name, ps, ns, steganalysis.AUC(ms.vals, mn.vals)))
+	}
+	return out
 }
 
 func detectorFrom(name string, pos, neg scored, invariance float64) detectorResult {

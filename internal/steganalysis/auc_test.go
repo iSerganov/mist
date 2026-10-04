@@ -91,6 +91,70 @@ func (s *AUCSuite) TestAUCIntervalWidensWhenScoresShareAGroup() {
 	s.Greater(chi-clo, 2*(uhi-ulo))
 }
 
+// A stego copy scored just above its own clean copy is what the harness
+// sees for every carrier. Redrawing a carrier must not count that paired
+// comparison more often than the data does, or the interval leaves the
+// estimate behind; the old bootstrap missed it in 199 of 200 trials.
+func (s *AUCSuite) TestAUCIntervalBracketsEstimateForPairedCarriers() {
+	tests := []struct {
+		title     string
+		carriers  int
+		chunks    int
+		shift     float64
+		maxMisses int
+	}{
+		{"one score per carrier, stego a hair above", 13, 1, 0.01, 10},
+		{"one score per carrier, stego a hair below", 13, 1, -0.01, 10},
+		{"many chunks per carrier", 13, 20, 0.01, 10},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			rng := newRand(5)
+			misses := 0
+			for trial := range 200 {
+				var pos, neg []float64
+				var groups []int
+				for c := range tc.carriers {
+					b := rng.NormFloat64()
+					for range tc.chunks {
+						v := b + 0.1*rng.NormFloat64()
+						pos, neg, groups = append(pos, v+tc.shift), append(neg, v), append(groups, c)
+					}
+				}
+				lo, hi := AUCInterval(pos, neg, groups, groups, 500, uint64(trial))
+				if auc := AUC(pos, neg); auc < lo || auc > hi {
+					misses++
+				}
+			}
+			s.LessOrEqual(misses, tc.maxMisses)
+		})
+	}
+}
+
+func (s *AUCSuite) TestClusterPairsSumToAUC() {
+	tests := []struct {
+		title    string
+		pos, neg []float64
+		pg, ng   []int
+	}{
+		{"paired groups", []float64{0.3, 0.6, 0.45, 0.9}, []float64{0.1, 0.65, 0.45, 0.2}, []int{0, 0, 1, 2}, []int{0, 1, 1, 2}},
+		{"ties across groups", []float64{1, 1, 2}, []float64{1, 2, 2}, []int{0, 1, 1}, []int{1, 0, 2}},
+		{"groups on one side only", []float64{0.2, 0.8}, []float64{0.5}, []int{0, 1}, []int{2}},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			_, wins, pairs := clusterPairs(tc.pos, tc.neg, tc.pg, tc.ng)
+			var w, p float64
+			for c := range wins {
+				for d := range wins[c] {
+					w, p = w+wins[c][d], p+pairs[c][d]
+				}
+			}
+			s.InDelta(AUC(tc.pos, tc.neg), w/p, 1e-12)
+		})
+	}
+}
+
 func (s *AUCSuite) TestAUCIntervalIsDeterministicPerSeed() {
 	pos := []float64{0.3, 0.6, 0.45, 0.95, 0.7}
 	neg := []float64{0.1, 0.4, 0.35, 0.8, 0.65}

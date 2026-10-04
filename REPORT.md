@@ -8,9 +8,9 @@ Every carrier is encoded three times: by the ffmpeg command line at its own defa
 
 | Format | Carriers | Looks like ffmpeg? | Hidden from detectors? | Audio quality |
 |---|---|---|---|---|
-| ogg/vorbis | 13 / 13 | ❌ differs on 13 of 13 carriers: nominal bitrate, length | ❌ hcf-com detects it (AUC 1.000) | ✅ Mist's own error sits 54.02 dB below the music; embedding costs 0.01 dB, within the 0.3 dB target |
-| flac | 13 / 13 | ✅ matches ffmpeg on all 13 carriers | ✅ chance on all 5 detectors | ✅ inaudible: the added error is at least 99.90 dB below the music |
-| wav/pcm_s16le | 13 / 13 | ✅ matches ffmpeg on all 13 carriers | ✅ chance on all 5 detectors | ✅ inaudible: the added error is at least 79.56 dB below the music |
+| ogg/vorbis | 13 / 13 | ❌ differs on 13 of 13 carriers: nominal bitrate, length | ❌ hcf-com detects it (AUC 1.000) | ✅ Mist's own error sits 54.01 dB below the music; embedding costs 0.01 dB, within the 0.3 dB target |
+| flac | 13 / 13 | ✅ matches ffmpeg on all 13 carriers | ⚠️ faint signal from chi-square (AUC 0.500) | ✅ inaudible: the added error is at least 99.89 dB below the music |
+| wav/pcm_s16le | 13 / 13 | ✅ matches ffmpeg on all 13 carriers | ⚠️ faint signal from chi-square (AUC 0.500) | ✅ inaudible: the added error is at least 79.57 dB below the music |
 
 ## ogg/vorbis
 
@@ -43,10 +43,11 @@ Stego copy against the clean ffmpeg copy.
 | Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
 |---|---|---|---|---|---|---|
 | chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.501 (0.500–0.502) | 0.538 (0.500–0.615) | 0.003 (0.000–0.027) | ✅ chance | ✅ hidden (0.500) |
-| rs | bit overwriting (not what Mist does) | 0.501 (0.500–0.502) | 0.538 (0.500–0.615) | 0.003 (0.000–0.027) | ✅ chance | ✅ hidden (0.500) |
-| hcf-com | ±1 changes, which is what Mist does | 1.000 (1.000–1.000) | 1.000 (1.000–1.000) | 0.500 (0.500–0.500) | ❌ detectable | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.501 (0.500–0.502) | 0.538 (0.500–0.611) | 0.003 (0.000–0.025) | ✅ chance | ✅ hidden (0.500) |
+| rs | bit overwriting (not what Mist does) | 0.501 (0.500–0.502) | 0.538 (0.500–0.611) | 0.003 (0.000–0.025) | ✅ chance | ✅ hidden (0.499) |
+| hcf-com | ±1 changes, which is what Mist does | 1.000 (1.000–1.000) | 1.000 (1.000–1.000) | 0.500 (0.500–0.500) | ❌ detectable | ✅ hidden (0.501) |
 | classifier | anything it can learn from Mist's own output | 1.000 (1.000–1.000) | 1.000 (1.000–1.000) | 0.500 (0.500–0.500) | ❌ detectable | ✅ hidden (0.500) |
+| markov | how the waveform's curvature changes from sample to sample | 1.000 (1.000–1.000) | 1.000 (1.000–1.000) | 0.500 (0.500–0.500) | ❌ detectable | ✅ hidden (0.500) |
 
 **Verdict:** ❌ hcf-com detects it (AUC 1.000).
 
@@ -57,10 +58,11 @@ Stego copy against Mist's own re-encode, so only the embedded changes differ.
 | Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
 |---|---|---|---|---|---|---|
 | chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.503 (0.500–0.527) | 0.000 (0.000–0.001) | ✅ chance | ✅ hidden (0.500) |
-| rs | bit overwriting (not what Mist does) | 0.499 (0.498–0.500) | 0.467 (0.385–0.527) | 0.002 (0.000–0.027) | ✅ chance | ✅ hidden (0.500) |
-| hcf-com | ±1 changes, which is what Mist does | 0.508 (0.506–0.510) | 0.533 (0.491–0.615) | 0.002 (0.000–0.027) | ⚠️ faint signal | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.492 (0.487–0.495) | 0.456 (0.367–0.479) | 0.004 (0.001–0.035) | ⚠️ faint signal | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.497 (0.491–0.500) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
+| rs | bit overwriting (not what Mist does) | 0.499 (0.498–0.500) | 0.462 (0.394–0.500) | 0.003 (0.000–0.023) | ✅ chance | ✅ hidden (0.499) |
+| hcf-com | ±1 changes, which is what Mist does | 0.508 (0.505–0.510) | 0.544 (0.537–0.576) | 0.004 (0.003–0.012) | ⚠️ faint signal | ✅ hidden (0.501) |
+| classifier | anything it can learn from Mist's own output | 0.491 (0.488–0.496) | 0.444 (0.401–0.463) | 0.006 (0.003–0.019) | ⚠️ faint signal | ✅ hidden (0.500) |
+| markov | how the waveform's curvature changes from sample to sample | 0.484 (0.478–0.492) | 0.432 (0.355–0.462) | 0.009 (0.003–0.042) | ⚠️ faint signal | ✅ hidden (0.500) |
 
 ### How much does it cost in sound?
 
@@ -70,27 +72,27 @@ Stego copy against Mist's own re-encode, so only the embedded changes differ.
 | Mist output SDR | 28.29 dB | 26.00 dB | The same, with the message embedded |
 | Embedding cost | 0.01 dB | 0.02 dB | Mist's own share; target ≤ 0.3 dB, design-doc reference 0.18 dB |
 | Extra error energy | +0% | +1% | Embedding cost as error added on top of a plain re-encode |
-| Mist's error below the music | 54.02 dB | 48.74 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
+| Mist's error below the music | 54.01 dB | 48.78 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
 
-**Verdict:** ✅ Mist's own error sits 54.02 dB below the music; embedding costs 0.01 dB, within the 0.3 dB target.
+**Verdict:** ✅ Mist's own error sits 54.01 dB below the music; embedding costs 0.01 dB, within the 0.3 dB target.
 
 ### Per carrier
 
 | Carrier | Output kbps | Plain re-encode SDR | Mist output SDR | Embedding cost | Mist's error below the music |
 |---|---|---|---|---|---|
-| 02 - Ride the Lightning.mp3 | 226 | 28.08 dB | 28.07 dB | 0.01 dB | 53.94 dB |
-| 03 - Disposable Heroes.mp3 | 225 | 28.75 dB | 28.74 dB | 0.01 dB | 54.98 dB |
-| 04 - No Remorse.mp3 | 218 | 29.32 dB | 29.31 dB | 0.01 dB | 57.24 dB |
-| 06 - For Whom the Bell Tolls.mp3 | 226 | 28.37 dB | 28.37 dB | 0.01 dB | 57.10 dB |
-| 07 - The Four Horsemen.mp3 | 220 | 28.71 dB | 28.71 dB | 0.01 dB | 56.59 dB |
-| 08 - Fade to Black.mp3 | 224 | 29.52 dB | 29.51 dB | 0.01 dB | 55.52 dB |
-| 09 - Seek & Destroy.mp3 | 226 | 28.88 dB | 28.87 dB | 0.01 dB | 55.27 dB |
-| 10 - Whiplash.mp3 | 220 | 29.27 dB | 29.27 dB | 0.01 dB | 57.03 dB |
-| 11 - Fight Fire with Fire.mp3 | 189 | 27.91 dB | 27.89 dB | 0.02 dB | 52.04 dB |
-| 14 - Motorbreath.mp3 | 192 | 29.20 dB | 29.18 dB | 0.02 dB | 53.48 dB |
-| Pillars_of_the_Sky.wav | 262 | 26.02 dB | 26.00 dB | 0.02 dB | 48.74 dB |
-| Starlight_Ascent.wav | 282 | 26.09 dB | 26.07 dB | 0.02 dB | 49.67 dB |
-| Stellar_Ascent.wav | 261 | 27.80 dB | 27.78 dB | 0.02 dB | 50.63 dB |
+| 02 - Ride the Lightning.mp3 | 226 | 28.08 dB | 28.07 dB | 0.01 dB | 54.11 dB |
+| 03 - Disposable Heroes.mp3 | 225 | 28.75 dB | 28.74 dB | 0.01 dB | 54.91 dB |
+| 04 - No Remorse.mp3 | 218 | 29.32 dB | 29.31 dB | 0.01 dB | 57.04 dB |
+| 06 - For Whom the Bell Tolls.mp3 | 226 | 28.37 dB | 28.36 dB | 0.01 dB | 57.16 dB |
+| 07 - The Four Horsemen.mp3 | 220 | 28.71 dB | 28.70 dB | 0.01 dB | 56.47 dB |
+| 08 - Fade to Black.mp3 | 224 | 29.52 dB | 29.51 dB | 0.01 dB | 55.42 dB |
+| 09 - Seek & Destroy.mp3 | 226 | 28.88 dB | 28.87 dB | 0.01 dB | 55.17 dB |
+| 10 - Whiplash.mp3 | 220 | 29.27 dB | 29.27 dB | 0.01 dB | 56.92 dB |
+| 11 - Fight Fire with Fire.mp3 | 189 | 27.91 dB | 27.89 dB | 0.01 dB | 52.17 dB |
+| 14 - Motorbreath.mp3 | 192 | 29.20 dB | 29.18 dB | 0.01 dB | 53.87 dB |
+| Pillars_of_the_Sky.wav | 262 | 26.02 dB | 26.00 dB | 0.02 dB | 48.78 dB |
+| Starlight_Ascent.wav | 282 | 26.09 dB | 26.07 dB | 0.02 dB | 49.49 dB |
+| Stellar_Ascent.wav | 261 | 27.80 dB | 27.78 dB | 0.02 dB | 50.65 dB |
 
 ## flac
 
@@ -122,13 +124,14 @@ Stego copy against the clean ffmpeg copy.
 
 | Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
 |---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.503 (0.447–0.574) | 0.000 (0.000–0.011) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.499 (0.498–0.500) | 0.473 (0.379–0.533) | 0.001 (0.000–0.029) | ✅ chance | ✅ hidden (0.501) |
-| rs | bit overwriting (not what Mist does) | 0.499 (0.497–0.501) | 0.500 (0.411–0.574) | 0.000 (0.000–0.016) | ✅ chance | ✅ hidden (0.499) |
-| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.494 (0.441–0.521) | 0.000 (0.000–0.007) | ✅ chance | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.500 (0.499–0.501) | 0.497 (0.432–0.562) | 0.000 (0.000–0.009) | ✅ chance | ✅ hidden (0.501) |
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.506 (0.487–0.524) | 0.000 (0.000–0.001) | ⚠️ faint signal | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.498 (0.497–0.499) | 0.432 (0.350–0.490) | 0.009 (0.000–0.045) | ⚠️ faint signal | ✅ hidden (0.497) |
+| rs | bit overwriting (not what Mist does) | 0.502 (0.500–0.503) | 0.550 (0.509–0.613) | 0.005 (0.000–0.026) | ⚠️ faint signal | ✅ hidden (0.501) |
+| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.494 (0.482–0.506) | 0.000 (0.000–0.001) | ⚠️ faint signal | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.503 (0.501–0.504) | 0.527 (0.509–0.540) | 0.001 (0.000–0.003) | ⚠️ faint signal | ✅ hidden (0.503) |
+| markov | how the waveform's curvature changes from sample to sample | 0.500 (0.500–0.501) | 0.509 (0.485–0.528) | 0.000 (0.000–0.002) | ✅ chance | ✅ hidden (0.500) |
 
-**Verdict:** ✅ chance on all 5 detectors.
+**Verdict:** ⚠️ faint signal from chi-square (AUC 0.500).
 
 ### The embedding alone
 
@@ -136,41 +139,42 @@ Stego copy against Mist's own re-encode, so only the embedded changes differ.
 
 | Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
 |---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.503 (0.447–0.574) | 0.000 (0.000–0.011) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.499 (0.498–0.500) | 0.473 (0.379–0.533) | 0.001 (0.000–0.029) | ✅ chance | ✅ hidden (0.501) |
-| rs | bit overwriting (not what Mist does) | 0.499 (0.497–0.501) | 0.500 (0.411–0.574) | 0.000 (0.000–0.016) | ✅ chance | ✅ hidden (0.499) |
-| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.494 (0.441–0.521) | 0.000 (0.000–0.007) | ✅ chance | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.500 (0.499–0.501) | 0.497 (0.432–0.562) | 0.000 (0.000–0.009) | ✅ chance | ✅ hidden (0.501) |
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.506 (0.487–0.524) | 0.000 (0.000–0.001) | ⚠️ faint signal | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.498 (0.497–0.499) | 0.432 (0.350–0.490) | 0.009 (0.000–0.045) | ⚠️ faint signal | ✅ hidden (0.497) |
+| rs | bit overwriting (not what Mist does) | 0.502 (0.500–0.503) | 0.550 (0.509–0.613) | 0.005 (0.000–0.026) | ⚠️ faint signal | ✅ hidden (0.501) |
+| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.494 (0.482–0.506) | 0.000 (0.000–0.001) | ⚠️ faint signal | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.503 (0.501–0.504) | 0.527 (0.509–0.540) | 0.001 (0.000–0.003) | ⚠️ faint signal | ✅ hidden (0.503) |
+| markov | how the waveform's curvature changes from sample to sample | 0.500 (0.500–0.501) | 0.509 (0.485–0.528) | 0.000 (0.000–0.002) | ✅ chance | ✅ hidden (0.500) |
 
 ### How much does it cost in sound?
 
 | Measure | Mean | Worst | What it means |
 |---|---|---|---|
 | Plain re-encode SDR | ∞ | 128.38 dB | Loss of Mist's own re-encode, with nothing embedded |
-| Mist output SDR | 122.89 dB | 99.90 dB | The same, with the message embedded |
+| Mist output SDR | 122.89 dB | 99.89 dB | The same, with the message embedded |
 | Embedding cost | ∞ | ∞ | Mist's own share; target ≤ 0.3 dB, design-doc reference 0.18 dB |
 | Extra error energy | — | — | Embedding cost as error added on top of a plain re-encode |
-| Mist's error below the music | 138.45 dB | 99.90 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
+| Mist's error below the music | 138.46 dB | 99.89 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
 
-**Verdict:** ✅ inaudible: the added error is at least 99.90 dB below the music.
+**Verdict:** ✅ inaudible: the added error is at least 99.89 dB below the music.
 
 ### Per carrier
 
 | Carrier | Output kbps | Plain re-encode SDR | Mist output SDR | Embedding cost | Mist's error below the music |
 |---|---|---|---|---|---|
 | 02 - Ride the Lightning.mp3 | 1578 | 128.57 dB | 128.53 dB | 0.04 dB | 148.80 dB |
-| 03 - Disposable Heroes.mp3 | 1573 | 128.92 dB | 128.88 dB | 0.04 dB | 149.13 dB |
-| 04 - No Remorse.mp3 | 1551 | 129.97 dB | 129.93 dB | 0.04 dB | 150.10 dB |
+| 03 - Disposable Heroes.mp3 | 1573 | 128.92 dB | 128.88 dB | 0.04 dB | 149.14 dB |
+| 04 - No Remorse.mp3 | 1551 | 129.97 dB | 129.93 dB | 0.04 dB | 150.11 dB |
 | 06 - For Whom the Bell Tolls.mp3 | 1545 | 128.38 dB | 128.34 dB | 0.04 dB | 148.63 dB |
-| 07 - The Four Horsemen.mp3 | 1551 | 128.88 dB | 128.84 dB | 0.04 dB | 149.10 dB |
+| 07 - The Four Horsemen.mp3 | 1551 | 128.88 dB | 128.84 dB | 0.04 dB | 149.11 dB |
 | 08 - Fade to Black.mp3 | 1573 | 129.99 dB | 129.95 dB | 0.04 dB | 150.14 dB |
-| 09 - Seek & Destroy.mp3 | 1596 | 129.94 dB | 129.90 dB | 0.04 dB | 150.08 dB |
-| 10 - Whiplash.mp3 | 1544 | 130.61 dB | 130.57 dB | 0.04 dB | 150.72 dB |
-| 11 - Fight Fire with Fire.mp3 | 1531 | 128.87 dB | 128.83 dB | 0.04 dB | 149.11 dB |
+| 09 - Seek & Destroy.mp3 | 1596 | 129.94 dB | 129.90 dB | 0.04 dB | 150.07 dB |
+| 10 - Whiplash.mp3 | 1544 | 130.61 dB | 130.57 dB | 0.04 dB | 150.73 dB |
+| 11 - Fight Fire with Fire.mp3 | 1531 | 128.87 dB | 128.83 dB | 0.04 dB | 149.12 dB |
 | 14 - Motorbreath.mp3 | 1449 | 129.02 dB | 128.98 dB | 0.04 dB | 149.27 dB |
-| Pillars_of_the_Sky.wav | 968 | ∞ | 99.90 dB | ∞ | 99.90 dB |
-| Starlight_Ascent.wav | 1046 | ∞ | 102.09 dB | ∞ | 102.09 dB |
-| Stellar_Ascent.wav | 978 | ∞ | 102.80 dB | ∞ | 102.80 dB |
+| Pillars_of_the_Sky.wav | 968 | ∞ | 99.89 dB | ∞ | 99.89 dB |
+| Starlight_Ascent.wav | 1046 | ∞ | 102.10 dB | ∞ | 102.10 dB |
+| Stellar_Ascent.wav | 978 | ∞ | 102.82 dB | ∞ | 102.82 dB |
 
 ## wav/pcm_s16le
 
@@ -202,13 +206,14 @@ Stego copy against the clean ffmpeg copy.
 
 | Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
 |---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.501 (0.500–0.501) | 0.488 (0.420–0.524) | 0.000 (0.000–0.013) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.500 (0.499–0.502) | 0.521 (0.438–0.609) | 0.001 (0.000–0.024) | ✅ chance | ✅ hidden (0.499) |
-| rs | bit overwriting (not what Mist does) | 0.500 (0.498–0.503) | 0.556 (0.462–0.692) | 0.006 (0.000–0.074) | ✅ chance | ✅ hidden (0.501) |
-| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.499–0.500) | 0.485 (0.408–0.544) | 0.000 (0.000–0.017) | ✅ chance | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.500 (0.499–0.501) | 0.503 (0.444–0.574) | 0.000 (0.000–0.011) | ✅ chance | ✅ hidden (0.500) |
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.499–0.500) | 0.512 (0.497–0.527) | 0.000 (0.000–0.001) | ⚠️ faint signal | ✅ hidden (0.499) |
+| spa | bit overwriting (not what Mist does) | 0.499 (0.497–0.501) | 0.497 (0.435–0.554) | 0.000 (0.000–0.008) | ✅ chance | ✅ hidden (0.498) |
+| rs | bit overwriting (not what Mist does) | 0.500 (0.499–0.502) | 0.538 (0.465–0.627) | 0.003 (0.000–0.032) | ✅ chance | ✅ hidden (0.500) |
+| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.509 (0.490–0.528) | 0.000 (0.000–0.002) | ✅ chance | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.500 (0.499–0.501) | 0.509 (0.484–0.541) | 0.000 (0.000–0.003) | ✅ chance | ✅ hidden (0.501) |
+| markov | how the waveform's curvature changes from sample to sample | 0.500 (0.499–0.500) | 0.509 (0.491–0.528) | 0.000 (0.000–0.002) | ✅ chance | ✅ hidden (0.499) |
 
-**Verdict:** ✅ chance on all 5 detectors.
+**Verdict:** ⚠️ faint signal from chi-square (AUC 0.500).
 
 ### The embedding alone
 
@@ -216,23 +221,24 @@ Stego copy against Mist's own re-encode, so only the embedded changes differ.
 
 | Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
 |---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.501 (0.500–0.501) | 0.488 (0.420–0.524) | 0.000 (0.000–0.013) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.500 (0.499–0.502) | 0.521 (0.438–0.609) | 0.001 (0.000–0.024) | ✅ chance | ✅ hidden (0.499) |
-| rs | bit overwriting (not what Mist does) | 0.500 (0.498–0.503) | 0.556 (0.462–0.692) | 0.006 (0.000–0.074) | ✅ chance | ✅ hidden (0.501) |
-| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.499–0.500) | 0.485 (0.408–0.544) | 0.000 (0.000–0.017) | ✅ chance | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.500 (0.499–0.501) | 0.503 (0.444–0.574) | 0.000 (0.000–0.011) | ✅ chance | ✅ hidden (0.500) |
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.499–0.500) | 0.512 (0.497–0.527) | 0.000 (0.000–0.001) | ⚠️ faint signal | ✅ hidden (0.499) |
+| spa | bit overwriting (not what Mist does) | 0.499 (0.497–0.501) | 0.497 (0.435–0.554) | 0.000 (0.000–0.008) | ✅ chance | ✅ hidden (0.498) |
+| rs | bit overwriting (not what Mist does) | 0.500 (0.499–0.502) | 0.538 (0.465–0.627) | 0.003 (0.000–0.032) | ✅ chance | ✅ hidden (0.500) |
+| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.509 (0.490–0.528) | 0.000 (0.000–0.002) | ✅ chance | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.500 (0.499–0.501) | 0.509 (0.484–0.541) | 0.000 (0.000–0.003) | ✅ chance | ✅ hidden (0.501) |
+| markov | how the waveform's curvature changes from sample to sample | 0.500 (0.499–0.500) | 0.509 (0.491–0.528) | 0.000 (0.000–0.002) | ✅ chance | ✅ hidden (0.499) |
 
 ### How much does it cost in sound?
 
 | Measure | Mean | Worst | What it means |
 |---|---|---|---|
 | Plain re-encode SDR | ∞ | 79.60 dB | Loss of Mist's own re-encode, with nothing embedded |
-| Mist output SDR | 85.33 dB | 79.56 dB | The same, with the message embedded |
+| Mist output SDR | 85.33 dB | 79.57 dB | The same, with the message embedded |
 | Embedding cost | ∞ | ∞ | Mist's own share; target ≤ 0.3 dB, design-doc reference 0.18 dB |
 | Extra error energy | — | — | Embedding cost as error added on top of a plain re-encode |
-| Mist's error below the music | 101.40 dB | 99.91 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
+| Mist's error below the music | 101.41 dB | 99.90 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
 
-**Verdict:** ✅ inaudible: the added error is at least 79.56 dB below the music.
+**Verdict:** ✅ inaudible: the added error is at least 79.57 dB below the music.
 
 ### Per carrier
 
@@ -240,17 +246,17 @@ Stego copy against Mist's own re-encode, so only the embedded changes differ.
 |---|---|---|---|---|---|
 | 02 - Ride the Lightning.mp3 | 1411 | 79.77 dB | 79.74 dB | 0.04 dB | 100.64 dB |
 | 03 - Disposable Heroes.mp3 | 1411 | 80.11 dB | 80.07 dB | 0.04 dB | 100.97 dB |
-| 04 - No Remorse.mp3 | 1411 | 81.09 dB | 81.05 dB | 0.04 dB | 101.94 dB |
-| 06 - For Whom the Bell Tolls.mp3 | 1411 | 79.60 dB | 79.56 dB | 0.04 dB | 100.45 dB |
+| 04 - No Remorse.mp3 | 1411 | 81.09 dB | 81.05 dB | 0.04 dB | 101.95 dB |
+| 06 - For Whom the Bell Tolls.mp3 | 1411 | 79.60 dB | 79.57 dB | 0.04 dB | 100.47 dB |
 | 07 - The Four Horsemen.mp3 | 1411 | 80.08 dB | 80.05 dB | 0.04 dB | 100.94 dB |
-| 08 - Fade to Black.mp3 | 1411 | 81.12 dB | 81.08 dB | 0.04 dB | 101.97 dB |
+| 08 - Fade to Black.mp3 | 1411 | 81.12 dB | 81.08 dB | 0.04 dB | 101.98 dB |
 | 09 - Seek & Destroy.mp3 | 1411 | 81.05 dB | 81.02 dB | 0.04 dB | 101.91 dB |
-| 10 - Whiplash.mp3 | 1411 | 81.70 dB | 81.66 dB | 0.04 dB | 102.55 dB |
+| 10 - Whiplash.mp3 | 1411 | 81.70 dB | 81.66 dB | 0.04 dB | 102.56 dB |
 | 11 - Fight Fire with Fire.mp3 | 1411 | 80.09 dB | 80.05 dB | 0.04 dB | 100.95 dB |
-| 14 - Motorbreath.mp3 | 1411 | 80.24 dB | 80.20 dB | 0.04 dB | 101.11 dB |
-| Pillars_of_the_Sky.wav | 1536 | ∞ | 99.91 dB | ∞ | 99.91 dB |
+| 14 - Motorbreath.mp3 | 1411 | 80.24 dB | 80.20 dB | 0.04 dB | 101.12 dB |
+| Pillars_of_the_Sky.wav | 1536 | ∞ | 99.90 dB | ∞ | 99.90 dB |
 | Starlight_Ascent.wav | 1536 | ∞ | 102.09 dB | ∞ | 102.09 dB |
-| Stellar_Ascent.wav | 1536 | ∞ | 102.81 dB | ∞ | 102.81 dB |
+| Stellar_Ascent.wav | 1536 | ∞ | 102.82 dB | ∞ | 102.82 dB |
 
 ## How to read this report
 
@@ -292,6 +298,12 @@ stego chunks, using every detector's score, the share of values at each of -3…
 adjacent values follows the one before it. It is cross-validated by carrier: every carrier is scored by a model
 trained without it, so it cannot win by memorising a track. Its message-size check trains a second model to
 tell a 64-byte message from a 1-byte one.
+
+**Markov** is the same kind of model, trained the same way, on one richer feature set only: how the second
+difference between samples, the waveform's curvature, changes from one sample to the next, with each value
+clipped to -3…3. That curvature is near zero wherever the audio is smooth, so ±1 changes stand out in it more
+than in the values or their steps. These are the rich-model features of audio steganalysis; a detector that
+learns its own features, a CNN trained on exported chunks, is the next step beyond them and is not run here.
 
 **Message size** compares a 64-byte message with a 1-byte one. Mist changes the same amount of audio whatever
 the message, so this should read 0.5: anything else means the message length shows.

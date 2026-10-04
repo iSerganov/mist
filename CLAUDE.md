@@ -74,7 +74,8 @@ internal/codec/vorbis  residue parse/rewrite; stops before iMDCT
 internal/av       cgo ↔ libavformat/libavcodec/libavutil/libswresample (no stego knowledge);
                   pcm.go is the shared PCM↔packet plumbing both domains encode with
 internal/steganalysis  the warden: chi-square, SPA, RS, HCF-COM, features,
-                  cross-validated logistic classifier, AUC; README.md explains each
+                  second-difference Markov features, cross-validated logistic
+                  classifier, AUC; README.md explains each
 internal/quality  lag-aligned SDR and segmental SNR, ViSQOL/PEAQ wrappers
 internal/dsp      FFT shared by steganalysis and quality
 ```

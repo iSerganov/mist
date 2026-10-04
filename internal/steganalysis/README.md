@@ -22,6 +22,7 @@ stream, returns `0`.
 | [`RS`](#rs-analysis--fridrich-goljan--du) | LSB replacement, any rate | estimated embedding rate p | smooth, correlated signals |
 | [`HCF`](#hcf-centre-of-mass--harmsen--pearlman) | ±1 embedding (LSB matching) | 1 − normalised HCF centre of mass | peaked histograms |
 | [`CrossValidate`](#logistic-classifier--the-adversary-of-record) | anything learnable from Mist's own output | out-of-fold probability of stego | whatever the training data holds |
+| [`Markov`](#second-difference-markov-features--liu-sung--qiao) + `CrossValidate` | ±1 embedding in smooth audio | out-of-fold probability of stego | smooth, correlated signals |
 
 **Why the first three matter to Mist even though it does not use LSB replacement.**
 Mist embeds by LSB *matching* (±1). On lossless outputs that is literal ±1 on
@@ -216,6 +217,34 @@ than the classical detectors'.
 
 ---
 
+## Second-difference Markov features — Liu, Sung & Qiao
+
+**Idea.** The second difference `v[i+2] − 2v[i+1] + v[i]` is the waveform's
+curvature. Audio is smooth at the sampling rate, so the curvature sits near zero
+and changes slowly from sample to sample. A +1 change to one sample moves three
+consecutive second differences by +1, −2, +1 (a −1 change by the opposite),
+which breaks that slow drift more visibly than it disturbs the values or their
+first differences.
+
+**Features.** `Markov` truncates each second difference to ±3, giving 7 bins,
+and returns the 7 × 7 probabilities of one bin given the bin before it, row by
+row: 49 values. A row that never occurs stays zero. It reuses the transition
+code behind `Features`' first-order SPAM features, one difference further down.
+
+**Use.** The harness trains a second cross-validated logistic model, **markov**,
+on these 49 features alone, next to the general classifier, so a report shows
+whether the richer model sees anything the first-order features miss.
+
+**Limits.** Still hand-built features and a linear model. A detector that learns
+its own features — a CNN on raw chunks, the current state of the art — would be
+stronger. It is deliberately not part of this package; it would run outside the
+tree, on chunks the harness exports.
+
+> Q. Liu, A. H. Sung, M. Qiao. *Derivative-Based Audio Steganalysis.* ACM Trans.
+> Multimedia Computing, Communications and Applications 7(3), 2011.
+
+---
+
 ## AUC and its interval
 
 **AUC** is the probability that a randomly chosen stego score exceeds a randomly
@@ -232,13 +261,26 @@ is **AUC ≈ 0.5 for every detector**.
 
 **`AUCInterval`** is a percentile cluster bootstrap. Every score carries a group,
 and the harness uses the carrier as the group. Each round redraws whole groups
-with replacement, taking every positive and negative score of each, recomputes
-the AUC, and reports the 2.5th and 97.5th percentiles. Chunks of one track are
-correlated, and clean and stego chunks of one track are paired, so resampling
-chunks one by one would make the interval far too narrow: its width would follow
-the number of chunks rather than the number of tracks. It is deterministic for a
-given seed, so reports can be compared run to run. With fewer than one round it
-returns the AUC itself as both bounds.
+with replacement, recomputes the AUC from them, and the interval is the 2.5th
+and 97.5th percentiles. Chunks of one track are correlated, and clean and stego
+chunks of one track are paired, so resampling chunks one by one would make the
+interval far too narrow: its width would follow the number of chunks rather than
+the number of tracks.
+
+The AUC is a sum over pairs of groups: group c's positives against group d's
+negatives. The pairs with c = d compare a track's stego copy with its own clean
+copy, which is a different kind of comparison from one across tracks, and in the
+data they make up a fraction 1/n of the n² pairs. A round therefore weights a
+group drawn k times by k against itself, never pairs one draw of a group with a
+second draw of the same group, and weights two different groups drawn k and k′
+times by k·k′·n/(n−1), so on average a round mixes the two kinds as the data
+does. Pooling the drawn scores and taking their AUC instead counts a group drawn
+twice against itself four times: with stego always a hair above its own clean
+copy, the whole interval drifted above the estimate it was meant to bracket. The
+per-pair counts are computed once, so a round costs n² multiplications rather
+than a sort of every score. It is deterministic for a given seed, so reports
+can be compared run to run. With fewer than one round it returns the AUC itself
+as both bounds.
 
 **From AUC to ε.** Cachin calls a scheme ε-secure when the relative entropy
 D(P_C ‖ P_S) between clean and stego files is at most ε. Any detector's

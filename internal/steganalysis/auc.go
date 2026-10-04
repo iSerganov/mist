@@ -2,7 +2,6 @@ package steganalysis
 
 import (
 	"cmp"
-	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -48,42 +47,97 @@ func AUC(pos, neg []float64) float64 {
 // AUCInterval is a percentile bootstrap 95% confidence interval for AUC.
 // Scores come in groups that are not independent, such as the chunks of
 // one carrier scored stego and clean, so each of rounds draws picks whole
-// groups with replacement and takes every positive and negative score of
-// each. posGroup and negGroup give each score's group; seed fixes the draws.
+// groups with replacement. posGroup and negGroup give each score's group;
+// seed fixes the draws.
+//
+// A round compares every drawn group's positives with the negatives of
+// the same draw and of every other drawn group, never of a second draw
+// of the same group: that pair would be a within-group comparison passing
+// for a between-group one. Between-group pairs are scaled by n/(n−1) for
+// n groups, so on average a round weights the two kinds as the data does.
+// Without that, a group drawn twice counts its own paired comparison four
+// times over, and the interval drifts off the estimate towards it.
 func AUCInterval(pos, neg []float64, posGroup, negGroup []int, rounds int, seed uint64) (lo, hi float64) {
 	if rounds < 1 {
 		auc := AUC(pos, neg)
 		return auc, auc
 	}
-	type cluster struct{ pos, neg []float64 }
-	byID := map[int]*cluster{}
-	member := func(id int) *cluster {
-		if byID[id] == nil {
-			byID[id] = &cluster{}
-		}
-		return byID[id]
+	ids, wins, pairs := clusterPairs(pos, neg, posGroup, negGroup)
+	n := len(ids)
+	between := 1.0
+	if n > 1 {
+		between = float64(n) / float64(n-1)
 	}
-	for i, v := range pos {
-		c := member(posGroup[i])
-		c.pos = append(c.pos, v)
-	}
-	for i, v := range neg {
-		c := member(negGroup[i])
-		c.neg = append(c.neg, v)
-	}
-	ids := slices.Sorted(maps.Keys(byID))
 	rng := rand.New(rand.NewPCG(seed, seed))
+	draws := make([]float64, n)
 	aucs := make([]float64, rounds)
-	var bp, bn []float64
 	for r := range aucs {
-		bp, bn = bp[:0], bn[:0]
-		for range ids {
-			c := byID[ids[rng.IntN(len(ids))]]
-			bp, bn = append(bp, c.pos...), append(bn, c.neg...)
+		clear(draws)
+		for range n {
+			draws[rng.IntN(n)]++
 		}
-		aucs[r] = AUC(bp, bn)
+		var w, p float64
+		for c, kc := range draws {
+			for d, kd := range draws {
+				k := kc * kd * between
+				if c == d {
+					k = kc
+				}
+				w += k * wins[c][d]
+				p += k * pairs[c][d]
+			}
+		}
+		aucs[r] = 0.5
+		if p > 0 {
+			aucs[r] = w / p
+		}
 	}
 	slices.Sort(aucs)
 	last := float64(rounds - 1)
 	return aucs[int(0.025*last)], aucs[int(math.Ceil(0.975*last))]
+}
+
+// clusterPairs counts, for every pair of groups c and d, how many of c's
+// positives outscore d's negatives (ties counting half) out of how many
+// such pairs there are. Summed over all c and d they give AUC exactly.
+func clusterPairs(pos, neg []float64, posGroup, negGroup []int) (ids []int, wins, pairs [][]float64) {
+	at := map[int]int{}
+	index := func(id int) int {
+		if _, ok := at[id]; !ok {
+			at[id] = len(ids)
+			ids = append(ids, id)
+		}
+		return at[id]
+	}
+	for _, g := range posGroup {
+		index(g)
+	}
+	for _, g := range negGroup {
+		index(g)
+	}
+	byPos, byNeg := make([][]float64, len(ids)), make([][]float64, len(ids))
+	for i, v := range pos {
+		c := at[posGroup[i]]
+		byPos[c] = append(byPos[c], v)
+	}
+	for i, v := range neg {
+		d := at[negGroup[i]]
+		byNeg[d] = append(byNeg[d], v)
+	}
+	for _, ns := range byNeg {
+		slices.Sort(ns)
+	}
+	wins, pairs = make([][]float64, len(ids)), make([][]float64, len(ids))
+	for c, ps := range byPos {
+		wins[c], pairs[c] = make([]float64, len(ids)), make([]float64, len(ids))
+		for d, ns := range byNeg {
+			for _, v := range ps {
+				below, _ := slices.BinarySearch(ns, v)
+				upTo, _ := slices.BinarySearch(ns, math.Nextafter(v, math.Inf(1)))
+				wins[c][d] += float64(below) + float64(upTo-below)/2
+			}
+			pairs[c][d] = float64(len(ps) * len(ns))
+		}
+	}
+	return ids, wins, pairs
 }

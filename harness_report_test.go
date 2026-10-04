@@ -163,6 +163,7 @@ const (
 	aucDetectable   = 0.1
 	invarianceSlack = 0.05
 	classifierName  = "classifier"
+	markovName      = "markov"
 )
 
 type level int
@@ -181,6 +182,7 @@ var detectorTargets = map[string]string{
 	"rs":         "bit overwriting (not what Mist does)",
 	"hcf-com":    "±1 changes, which is what Mist does",
 	"classifier": "anything it can learn from Mist's own output",
+	"markov":     "how the waveform's curvature changes from sample to sample",
 }
 
 func (f formatReport) fingerprint() (level, string) {
@@ -436,6 +438,12 @@ stego chunks, using every detector's score, the share of values at each of -3…
 adjacent values follows the one before it. It is cross-validated by carrier: every carrier is scored by a model
 trained without it, so it cannot win by memorising a track. Its message-size check trains a second model to
 tell a 64-byte message from a 1-byte one.
+
+**Markov** is the same kind of model, trained the same way, on one richer feature set only: how the second
+difference between samples, the waveform's curvature, changes from one sample to the next, with each value
+clipped to -3…3. That curvature is near zero wherever the audio is smooth, so ±1 changes stand out in it more
+than in the values or their steps. These are the rich-model features of audio steganalysis; a detector that
+learns its own features, a CNN trained on exported chunks, is the next step beyond them and is not run here.
 
 **Message size** compares a 64-byte message with a 1-byte one. Mist changes the same amount of audio whatever
 the message, so this should read 0.5: anything else means the message length shows.

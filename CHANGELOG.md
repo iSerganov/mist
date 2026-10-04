@@ -66,9 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   intervals are bootstrapped by carrier instead of by chunk, so they reflect
   how many tracks were measured. Each detector also reports the lower bound
   on Cachin's ε that its file-level AUC proves.
+- A second classifier in the harness, **markov**, trained on how the second
+  difference between samples changes from one sample to the next, the
+  rich-model features of audio steganalysis. ±1 changes stand out more in
+  smooth audio's curvature than in the values the first classifier sees.
+  `steganalysis.Markov` computes the features.
 
 ### Fixed
 
+- The harness's 95% intervals now contain the AUC they are built around.
+  The carrier bootstrap counted a carrier drawn twice against its own clean
+  copy four times over, so on paired data the whole interval drifted off
+  the estimate, and the ε bounds with it.
 - Output is now exactly as long as the carrier. Mist used to zero-pad the
   carrier to a whole number of encoder blocks, so every lossless output
   ended in up to one block of digital zeros. A plain encode leaves no such

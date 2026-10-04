@@ -40,7 +40,7 @@ func (s *ClassifierSuite) TestTransitions() {
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
-			got := transitions(tc.v)
+			got := transitions(diff(tc.v))
 			for i, p := range got {
 				s.InDelta(tc.want[i], p, 1e-12, "cell %d", i)
 			}
