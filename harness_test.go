@@ -100,6 +100,8 @@ func harnessJobs(spec string) (int, error) {
 type carrierRun struct {
 	clean, stego, minimal [][]float64
 	transcode, stegoSDR   float64
+	added                 float64
+	kbps                  float64
 	perceptual            float64
 }
 
@@ -131,7 +133,7 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	wg.Wait()
 
 	var clean, stegoFeatures, minimal [][][]float64
-	var transcode, stegoSDR, gap, drop []float64
+	var transcode, stegoSDR, gap, added, drop []float64
 	for i, run := range runs {
 		if errs[i] != nil {
 			fr.Skipped = append(fr.Skipped, skippedCarrier{Name: carriers[i].name, Reason: errs[i].Error()})
@@ -144,7 +146,12 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 		transcode = append(transcode, run.transcode)
 		stegoSDR = append(stegoSDR, run.stegoSDR)
 		gap = append(gap, run.transcode-run.stegoSDR)
+		added = append(added, run.added)
 		drop = append(drop, run.perceptual)
+		fr.Carriers = append(fr.Carriers, carrierResult{
+			Name: carriers[i].name, Kbps: run.kbps, Transcode: num(run.transcode),
+			Stego: num(run.stegoSDR), Gap: num(run.transcode - run.stegoSDR), Added: num(run.added),
+		})
 	}
 	if fr.Measured == 0 {
 		return fr
@@ -160,6 +167,7 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	fr.Transcode = summarize(transcode, minOf)
 	fr.Stego = summarize(stegoSDR, minOf)
 	fr.Gap = summarize(gap, maxOf)
+	fr.Added = summarize(added, minOf)
 	if tool != nil {
 		s := summarize(drop, maxOf)
 		fr.PerceptualDrop = &s
@@ -207,6 +215,8 @@ func measureCarrier(ctx context.Context, em *Emitter, ext string, c harnessCarri
 		minimal:   featuresOf(minimalVals),
 		transcode: quality.SDR(ref.Planes, cleanPCM, maxLag),
 		stegoSDR:  quality.SDR(ref.Planes, stegoPCM, maxLag),
+		added:     quality.SDR(cleanPCM, stegoPCM, maxLag),
+		kbps:      float64(len(stegoOut)) * 8 / 1000 / (float64(ref.NbSamples) / float64(info.SampleRate)),
 	}
 	if tool != nil {
 		run.perceptual, err = perceptualDrop(ctx, *tool, c.name, ext, data, clean, stegoOut)

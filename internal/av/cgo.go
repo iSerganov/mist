@@ -188,8 +188,12 @@ func avNewEncoder(info AudioInfo) (*Encoder, error) {
 		return nil, fmt.Errorf("%w: out of memory", ErrOpen)
 	}
 	defer C.free(unsafe.Pointer(errbuf))
-	ptr := C.mist_av_encoder_open(&cinfo, errbuf, errBufLen)
+	var invalid C.int
+	ptr := C.mist_av_encoder_open(&cinfo, errbuf, errBufLen, &invalid)
 	if ptr == nil {
+		if invalid != 0 {
+			return nil, fmt.Errorf("%w: %w: %s", ErrOpen, ErrInvalid, C.GoString(errbuf))
+		}
 		return nil, fmt.Errorf("%w: %s", ErrOpen, C.GoString(errbuf))
 	}
 	e := &Encoder{handle: unsafe.Pointer(ptr), info: info}

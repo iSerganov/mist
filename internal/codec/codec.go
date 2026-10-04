@@ -89,6 +89,10 @@ type Residue struct {
 	// every symbol decoded after it. Embedding must skip these symbols
 	// rather than risk that drift.
 	Unflippable bool
+	// FlipCost is the squared distance between this symbol's dequantized
+	// vector and that of the entry a flip would substitute for it: how
+	// much spectrum one embedded change moves. Zero when Unflippable.
+	FlipCost float64
 }
 
 // Codec converts between PCM and a compressed bitstream and, when the

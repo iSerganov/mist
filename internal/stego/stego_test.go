@@ -20,18 +20,6 @@ func (s *StegoSuite) TestLSB() {
 	s.Equal(uint8(1), LSB(3))
 }
 
-func (s *StegoSuite) TestMatchLeavesMatchingBit() {
-	s.Equal(int32(4), Match(4, 0))
-	s.Equal(int32(5), Match(5, 1))
-}
-
-func (s *StegoSuite) TestMatchFlipsByOne() {
-	got := Match(4, 1)
-	s.Equal(uint8(1), LSB(got))
-	d := got - 4
-	s.True(d == 1 || d == -1)
-}
-
 func (s *StegoSuite) TestSelectorDeterministic() {
 	a := NewSelector([]byte("key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 100)
 	b := NewSelector([]byte("key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 100)
@@ -132,4 +120,39 @@ func (s *StegoSuite) TestEligibleValues() {
 			s.Equal(tc.want, got)
 		})
 	}
+}
+
+// A residue whose substitute moves its vector further than maxFlipCost is
+// priced so the code avoids it; everything else is priced by distance,
+// never at zero.
+func (s *StegoSuite) TestResidueCostIsBoundedBymaxFlipCost() {
+	tests := []struct {
+		title    string
+		flipCost float64
+		want     float32
+	}{
+		{"identical substitute still costs something", 0, minCost},
+		{"one quantizer step", 1, 1 + minCost},
+		{"at the bound", maxFlipCost, maxFlipCost + minCost},
+		{"past the bound", maxFlipCost + 1, wetCost},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			c := fakeRewriter{0: {{Band: 9000, FlipCost: tc.flipCost}}}
+			res, err := collectResidues(c, []codec.Packet{{Data: []byte{0}}})
+			s.Require().NoError(err)
+			s.InDelta(tc.want, res.Cost(0), 1e-6)
+		})
+	}
+}
+
+func (s *StegoSuite) TestResidueFlipChangesOnlyTheParity() {
+	c := fakeRewriter{0: {{Band: 9000, Value: 6}, {Band: 9000, Value: -3}}}
+	res, err := collectResidues(c, []codec.Packet{{Data: []byte{0}}})
+	s.Require().NoError(err)
+	res.Flip(0)
+	res.Flip(1)
+	s.Equal(int32(7), res.At(0))
+	s.Equal(int32(-4), res.At(1))
+	s.Equal(int32(7), res.all[0].Value)
 }

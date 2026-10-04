@@ -345,3 +345,27 @@ func (s *EmitterSuite) TestFillerFramesAreStillPerturbed() {
 }
 
 func (s *EmitterSuite) makeCarrier() []byte { return s.carrier(FrameDuration) }
+
+func (s *EmitterSuite) TestEmbedVorbisFromRawPCMWhateverTheShape() {
+	s.requireLibav()
+	pub, priv, err := GenerateKeyPair()
+	s.Require().NoError(err)
+
+	tests := []struct {
+		title    string
+		rate, ch int
+	}{
+		{"mono 44.1 kHz WAV, whose raw bitrate is far above the mono ceiling", 44100, 1},
+		{"mono 22.05 kHz WAV, where libvorbis refuses even 200 kbps", 22050, 1},
+		{"stereo 22.05 kHz WAV", 22050, 2},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			carrier := wav(tc.rate, tc.ch, tc.rate*20)
+			raw := s.stego(pub, Text("hello mist"), carrier)
+			got := s.extract(priv, raw)
+			s.Require().NotEmpty(got)
+			s.Equal("hello mist", string(got[0].Payload.Data))
+		})
+	}
+}

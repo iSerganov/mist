@@ -4,11 +4,52 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+
+	"golang.org/x/crypto/chacha20"
 )
 
-// Selector picks which eligible coefficients are touched, scattered across
-// the carrier by a keyed PRNG. The seed is the HKDF position subkey, never
-// the AEAD key itself. Embed and Listen must see the same sequence.
+// keyStream is a deterministic stream of uint64s keyed by the position
+// subkey. label separates the streams drawn from one key, so the
+// permutation and the trellis code's matrix never share output.
+type keyStream struct {
+	c   *chacha20.Cipher
+	buf [1024]byte
+	off int
+}
+
+func newKeyStream(key []byte, label string) *keyStream {
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(label))
+	// A 32-byte key and a 12-byte nonce are always valid, so this cannot fail.
+	c, _ := chacha20.NewUnauthenticatedCipher(mac.Sum(nil), make([]byte, chacha20.NonceSize))
+	k := &keyStream{c: c}
+	k.off = len(k.buf)
+	return k
+}
+
+func (k *keyStream) next() uint64 {
+	if k.off == len(k.buf) {
+		clear(k.buf[:])
+		k.c.XORKeyStream(k.buf[:], k.buf[:])
+		k.off = 0
+	}
+	v := binary.LittleEndian.Uint64(k.buf[k.off:])
+	k.off += 8
+	return v
+}
+
+// below returns a value in [0, n).
+func (k *keyStream) below(n int) int {
+	if n <= 1 {
+		return 0
+	}
+	return int(k.next() % uint64(n))
+}
+
+// Selector orders the eligible coefficients by a keyed shuffle, so a
+// position's place in the code is scattered across the carrier. The seed
+// is the HKDF position subkey, never the AEAD key itself. Embed and Listen
+// must see the same order.
 type Selector struct {
 	key       []byte
 	nEligible int
@@ -22,8 +63,8 @@ func NewSelector(positionKey []byte, nEligible int) *Selector {
 	}
 }
 
-// Pick returns n distinct eligible indexes in [0, nEligible).
-// Deterministic Fisher–Yates using HMAC-SHA256(key, counter).
+// Pick returns the first n indexes of a keyed permutation of
+// [0, nEligible): n distinct values.
 func (s *Selector) Pick(n int) []int {
 	if s == nil || s.nEligible <= 0 || n <= 0 {
 		return nil
@@ -35,31 +76,17 @@ func (s *Selector) Pick(n int) []int {
 	for i := range idx {
 		idx[i] = i
 	}
-	var ctr uint64
+	ks := newKeyStream(s.key, "mist-perm-v2")
 	for i := 0; i < n; i++ {
-		j := i + s.bounded(ctr, s.nEligible-i)
-		ctr++
+		j := i + ks.below(s.nEligible-i)
 		idx[i], idx[j] = idx[j], idx[i]
 	}
 	return idx[:n]
 }
 
-func (s *Selector) bounded(ctr uint64, n int) int {
-	if n <= 1 {
-		return 0
-	}
-	mac := hmac.New(sha256.New, s.key)
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], ctr)
-	_, _ = mac.Write(buf[:])
-	sum := mac.Sum(nil)
-	v := binary.BigEndian.Uint64(sum[:8])
-	return int(v % uint64(n))
-}
-
 // Eligible returns the coefficient indexes that sit in embeddable
 // high-frequency bands for the given residue layout. Residues the codec
-// marked Unflippable are excluded — LSB matching them would need a
+// marked Unflippable are excluded — flipping them would need a
 // differently-sized codeword and desync the bitstream.
 func Eligible(residues []ResidueView, bands BandSet) []int {
 	var out []int

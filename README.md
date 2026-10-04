@@ -74,11 +74,14 @@ For a lossless format there is no bitstream surgery at all: a lossless encoder
 returns its input samples bit for bit, so the bits go straight into the PCM
 before encoding and are read back out of the decoded samples.
 
-Everything else is identical either way. Which values get touched is chosen by
-a keyed PRNG, never sequentially, and every encode perturbs the same fraction
-of them whether or not there is a real message — short payloads are padded with
+Everything else is identical either way. The values that carry bits are taken
+in a keyed order, never sequentially, and a syndrome-trellis code chooses which
+of them to change: about one value for every seven bits, preferring the changes
+that disturb the audio least. Every encode carries the same number of bits per
+value whether or not there is a real message — short payloads are padded with
 CSPRNG filler. Presence and absence are meant to leave the same statistical
-footprint.
+footprint. A lossless output also leaves digital silence alone, exactly as a
+plain encoder does.
 
 **Audio is divided into frames, and the message goes into the first one with
 room for it.** The carrier is split into self-contained 8-second frames. A
@@ -511,7 +514,7 @@ the same protocol:
 | extraction | Huffman-decode, stop before the iMDCT | decode; the samples are unchanged |
 | room in an 8-second frame | ~130 bytes | ~1.7 kB at 44.1 kHz stereo |
 | SDR against the carrier | ~26 dB | ~85 dB |
-| carrier must be | broadband; tonal audio may not fit | long enough, and nothing else |
+| carrier must be | broadband; tonal audio may not fit | long enough; silence carries nothing |
 | file size | small | large |
 
 Frame layout, keyed positions, density, filler and crypto are identical in both.
@@ -547,12 +550,6 @@ Known gaps, all recorded in [CLAUDE.md](CLAUDE.md):
 - A scan goroutine parked in a blocking libav read outlives its context until the
   read returns. `Listen`'s channel still closes immediately on cancellation, so
   callers are unaffected.
-- Ogg Vorbis output from a mono carrier with a high source bitrate, such as a mono
-  WAV, fails to open the encoder. A mono MP3 works. The likely cause is the 500 kbps
-  cap in `targetBitrate`, above what libvorbis accepts for mono.
-- On dense music, Ogg Vorbis embedding costs more than the 0.3 dB target: 1.4 dB of
-  SDR beyond a plain re-encode on 13 metal tracks, against 0.18 dB on the rock
-  track the design was tuned on.
 
 ## Security notes
 
@@ -575,9 +572,10 @@ pre-existing files produced elsewhere, and deniability under coercion
 remains a design target rather than a proven property. `make harness` (see
 [Development](#development)) measures it: four classical detectors and a trained
 classifier try to tell Mist's output from a plain re-encode of the same carrier.
-On 13 metal tracks, FLAC output sits at chance on all of them, and Ogg Vorbis
-shows a faint classifier signal (AUC 0.525). Digital silence in a lossless
-output picks up ±1 dither like everything else, and the classifier sees it.
+On 13 metal tracks, FLAC, WAV and Ogg Vorbis output all sit at chance on every
+one of them, and a lossless output leaves digital silence untouched. That is a
+warden without the original: one who holds the carrier Mist started from can
+re-encode it and compare, and will find the changes.
 
 ## Development
 
