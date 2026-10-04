@@ -29,10 +29,11 @@ func (s *LosslessSuite) requireFormat(name string) {
 }
 
 // Every lossless codec embeds in PCM samples, so one carrier has to come
-// back out of all of them unchanged. Both carriers matter: the long one
-// puts the message in a whole frame, the short one in the trailing
-// partial frame, where the encoder's own padding is what would break the
-// two sides' agreement about where a sample sits.
+// back out of all of them unchanged, and exactly as long as it went in:
+// padding the tail is a trace an ordinary encode does not leave. Both
+// carriers matter: the long one puts the message in a whole frame, the
+// short one in the trailing partial frame, where any padding would break
+// the two sides' agreement about where a sample sits.
 func (s *LosslessSuite) TestRoundTripPerFormat() {
 	tests := []struct {
 		title  string
@@ -62,7 +63,12 @@ func (s *LosslessSuite) TestRoundTripPerFormat() {
 					out := s.stego(pub, Text("meet me at the pier"), carrier,
 						WithFormat(tc.format), WithCodec(tc.codec))
 					res := s.extract(priv, out)
+					src, _, err := decodeCarrier(bytes.NewReader(carrier))
+					s.Require().NoError(err)
+					got, _, err := decodeCarrier(bytes.NewReader(out))
+					s.Require().NoError(err)
 
+					s.Equal(src.NbSamples, got.NbSamples)
 					s.Require().NotEmpty(res)
 					s.Equal("meet me at the pier", string(res[0].Payload.Data))
 					s.Equal(PayloadText, res[0].Payload.Type)

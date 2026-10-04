@@ -259,7 +259,7 @@ func mistTwin(target av.Format, data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	enc, pcm, err := openEncoder(target, pcm, info)
+	enc, err := openEncoder(target, pcm, info)
 	if err != nil {
 		return nil, err
 	}

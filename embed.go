@@ -92,7 +92,7 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo
 	if err != nil {
 		return nil, err
 	}
-	enc, pcm, err := openEncoder(e.target, pcm, info)
+	enc, err := openEncoder(e.target, pcm, info)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo
 	})
 }
 
-func openEncoder(target av.Format, pcm codec.PCM, info av.AudioInfo) (*av.Encoder, codec.PCM, error) {
+func openEncoder(target av.Format, pcm codec.PCM, info av.AudioInfo) (*av.Encoder, error) {
 	want := target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(target, info.Params(), pcm.Channels))
 	enc, err := av.NewEncoder(want)
 	// libvorbis refuses rates outside a window that depends on the sample
@@ -122,12 +122,9 @@ func openEncoder(target av.Format, pcm codec.PCM, info av.AudioInfo) (*av.Encode
 		enc, err = av.NewEncoder(want)
 	}
 	if err != nil {
-		return nil, pcm, fmt.Errorf("%w: encoder: %v", ErrCarrier, refused)
+		return nil, fmt.Errorf("%w: encoder: %v", ErrCarrier, refused)
 	}
-	if target.Lossless {
-		pcm = padToWindow(pcm, enc.Window())
-	}
-	return enc, pcm, nil
+	return enc, nil
 }
 
 // encodeAndMux runs the carrier through the encoder and writes the result.

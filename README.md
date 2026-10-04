@@ -573,10 +573,10 @@ remains a design target rather than a proven property. `make harness` (see
 [Development](#development)) measures it: four classical detectors and a trained
 classifier try to tell Mist's output from a plain `ffmpeg` encode of the same
 carrier. On 13 metal tracks they currently can: Mist's output still differs from
-ffmpeg's in length, trailing zeros, sample format (FLAC) and bitrate (Ogg
-Vorbis), and the detectors pick that up for Ogg Vorbis and FLAC. WAV output sits
-at chance. Against Mist's own re-encode, where only the embedded changes differ,
-all three formats sit at chance. That is a
+ffmpeg's in sample format (FLAC) and in bitrate and length (Ogg Vorbis), and the
+detectors pick that up for those two formats. WAV output sits at chance on every
+detector but a faint per-file HCF-COM signal. Against Mist's own re-encode, where
+only the embedded changes differ, all three formats sit at or near chance. That is a
 warden without the original: one who holds the carrier Mist started from can
 re-encode it and compare, and will find the changes.
 

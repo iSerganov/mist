@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Output is now exactly as long as the carrier. Mist used to zero-pad the
+  carrier to a whole number of encoder blocks, so every lossless output
+  ended in up to one block of digital zeros. A plain encode leaves no such
+  padding, so it gave Mist away without any statistics.
 - Ogg Vorbis output from a mono carrier with a high source bitrate, such
   as a mono WAV, or from a 22 kHz mono carrier, no longer fails to open
   the encoder. Bitrate bounds now scale with the channel count, and the

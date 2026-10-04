@@ -21,25 +21,6 @@ import (
 // The cost is the same one the Vorbis path pays: a listener that joins
 // after the carrying frame recovers nothing.
 
-// padToWindow extends pcm to a whole number of encoder sends. The encoder
-// zero-pads its final send anyway and a lossless decoder hands that
-// padding straight back, so Listen would see a longer last frame than
-// Embed wrote into and read every position in it from the wrong place.
-// Padding up front is what makes the two agree about the tail.
-func padToWindow(pcm codec.PCM, window int) codec.PCM {
-	if window <= 0 || pcm.NbSamples <= 0 || pcm.NbSamples%window == 0 {
-		return pcm
-	}
-	n := (pcm.NbSamples/window + 1) * window
-	for i, p := range pcm.Planes {
-		if n > len(p) {
-			pcm.Planes[i] = append(p, make([]float32, n-len(p))...)
-		}
-	}
-	pcm.NbSamples = n
-	return pcm
-}
-
 // embedSamples writes the sealed payload into pcm in place. scale is the
 // integer grid the chosen encoder quantizes to, so the samples this
 // leaves behind are ones it can represent exactly.

@@ -86,7 +86,7 @@ func decodeSource(source string) (codec.PCM, av.AudioInfo, error) {
 }
 
 func estimatePCM(ctx context.Context, target av.Format, pcm codec.PCM, info av.AudioInfo) (Capacity, error) {
-	enc, pcm, err := openEncoder(target, pcm, info)
+	enc, err := openEncoder(target, pcm, info)
 	if err != nil {
 		return Capacity{}, err
 	}
