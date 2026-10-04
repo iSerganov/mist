@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -45,6 +46,9 @@ func TestHarnessSuite(t *testing.T) {
 func (s *HarnessSuite) TestMeasure() {
 	if !av.Available() {
 		s.T().Skip("libav not available")
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		s.T().Skip("ffmpeg CLI not on PATH: the harness compares Mist against its output")
 	}
 	corpus := os.Getenv("MIST_CORPUS")
 	carriers, err := loadCarriers(corpus)
@@ -98,11 +102,12 @@ func harnessJobs(spec string) (int, error) {
 }
 
 type carrierRun struct {
-	clean, stego, minimal [][]float64
-	transcode, stegoSDR   float64
-	added                 float64
-	kbps                  float64
-	perceptual            float64
+	clean, own, stego, minimal [][]float64
+	transcode, stegoSDR        float64
+	added                      float64
+	kbps                       float64
+	perceptual                 float64
+	trace                      carrierTrace
 }
 
 func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, pub []byte, tool *quality.Tool, jobs int) formatReport {
@@ -127,12 +132,12 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			runs[i], errs[i] = measureCarrier(ctx, em, f.Ext, c, tool)
+			runs[i], errs[i] = measureCarrier(ctx, em, codecName, f.Ext, c, tool)
 		})
 	}
 	wg.Wait()
 
-	var clean, stegoFeatures, minimal [][][]float64
+	var clean, own, stegoFeatures, minimal [][][]float64
 	var transcode, stegoSDR, gap, added, drop []float64
 	for i, run := range runs {
 		if errs[i] != nil {
@@ -141,6 +146,7 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 		}
 		fr.Measured++
 		clean = append(clean, run.clean)
+		own = append(own, run.own)
 		stegoFeatures = append(stegoFeatures, run.stego)
 		minimal = append(minimal, run.minimal)
 		transcode = append(transcode, run.transcode)
@@ -148,6 +154,7 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 		gap = append(gap, run.transcode-run.stegoSDR)
 		added = append(added, run.added)
 		drop = append(drop, run.perceptual)
+		fr.Traces = append(fr.Traces, run.trace)
 		fr.Carriers = append(fr.Carriers, carrierResult{
 			Name: carriers[i].name, Kbps: run.kbps, Transcode: num(run.transcode),
 			Stego: num(run.stegoSDR), Gap: num(run.transcode - run.stegoSDR), Added: num(run.added),
@@ -156,14 +163,8 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	if fr.Measured == 0 {
 		return fr
 	}
-	for k, d := range steganalysis.Detectors() {
-		pos := column(stegoFeatures, k)
-		fr.Detectors = append(fr.Detectors,
-			detectorFrom(d.Name, pos, column(clean, k), steganalysis.AUC(pos, column(minimal, k))))
-	}
-	pos, neg := classify(stegoFeatures, clean)
-	fr.Detectors = append(fr.Detectors,
-		detectorFrom(classifierName, pos, neg, steganalysis.AUC(classify(stegoFeatures, minimal))))
+	fr.Detectors = detectors(stegoFeatures, clean, minimal)
+	fr.Embedding = detectors(stegoFeatures, own, minimal)
 	fr.Transcode = summarize(transcode, minOf)
 	fr.Stego = summarize(stegoSDR, minOf)
 	fr.Gap = summarize(gap, maxOf)
@@ -175,7 +176,7 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	return fr
 }
 
-func measureCarrier(ctx context.Context, em *Emitter, ext string, c harnessCarrier, tool *quality.Tool) (carrierRun, error) {
+func measureCarrier(ctx context.Context, em *Emitter, codecName, ext string, c harnessCarrier, tool *quality.Tool) (carrierRun, error) {
 	data, err := c.load()
 	if err != nil {
 		return carrierRun{}, err
@@ -184,7 +185,11 @@ func measureCarrier(ctx context.Context, em *Emitter, ext string, c harnessCarri
 	if err != nil {
 		return carrierRun{}, err
 	}
-	clean, err := cleanTwin(em.target, data)
+	twin, err := ffmpegTwin(ctx, em.target.Container, codecName, c.name, data)
+	if err != nil {
+		return carrierRun{}, err
+	}
+	own, err := mistTwin(em.target, data)
 	if err != nil {
 		return carrierRun{}, err
 	}
@@ -196,35 +201,60 @@ func measureCarrier(ctx context.Context, em *Emitter, ext string, c harnessCarri
 	if err != nil {
 		return carrierRun{}, err
 	}
-	cleanPCM, cleanVals, err := inspect(clean)
-	if err != nil {
-		return carrierRun{}, err
+	var outs [4]decoded
+	for i, b := range [][]byte{twin, own, stegoOut, minimalOut} {
+		if outs[i], err = inspect(b); err != nil {
+			return carrierRun{}, err
+		}
 	}
-	stegoPCM, stegoVals, err := inspect(stegoOut)
-	if err != nil {
-		return carrierRun{}, err
-	}
-	_, minimalVals, err := inspect(minimalOut)
-	if err != nil {
-		return carrierRun{}, err
-	}
+	cleanOut, ownOut, stegoDec, minimalDec := outs[0], outs[1], outs[2], outs[3]
 	maxLag := info.SampleRate / 10
 	run := carrierRun{
-		clean:     featuresOf(cleanVals),
-		stego:     featuresOf(stegoVals),
-		minimal:   featuresOf(minimalVals),
-		transcode: quality.SDR(ref.Planes, cleanPCM, maxLag),
-		stegoSDR:  quality.SDR(ref.Planes, stegoPCM, maxLag),
-		added:     quality.SDR(cleanPCM, stegoPCM, maxLag),
-		kbps:      float64(len(stegoOut)) * 8 / 1000 / (float64(ref.NbSamples) / float64(info.SampleRate)),
+		clean:     featuresOf(cleanOut.vals),
+		own:       featuresOf(ownOut.vals),
+		stego:     featuresOf(stegoDec.vals),
+		minimal:   featuresOf(minimalDec.vals),
+		transcode: quality.SDR(ref.Planes, ownOut.planes, maxLag),
+		stegoSDR:  quality.SDR(ref.Planes, stegoDec.planes, maxLag),
+		added:     quality.SDR(ownOut.planes, stegoDec.planes, maxLag),
+		kbps:      stegoDec.trace.Kbps,
+		trace:     carrierTrace{Name: c.name, Source: ref.NbSamples, FFmpeg: cleanOut.trace, Mist: stegoDec.trace},
 	}
 	if tool != nil {
-		run.perceptual, err = perceptualDrop(ctx, *tool, c.name, ext, data, clean, stegoOut)
+		run.perceptual, err = perceptualDrop(ctx, *tool, c.name, ext, data, own, stegoOut)
 	}
 	return run, err
 }
 
-func cleanTwin(target av.Format, data []byte) ([]byte, error) {
+// ffmpegTwin encodes the carrier with the ffmpeg CLI at its own defaults,
+// which is the clean file a warden without the original compares Mist's
+// output against. Only the first audio stream is kept, so cover art in
+// an MP3 does not turn into a video stream in the twin.
+func ffmpegTwin(ctx context.Context, container, codecName, name string, data []byte) ([]byte, error) {
+	dir, err := os.MkdirTemp("", "mist-twin-*")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	in, out := filepath.Join(dir, "carrier"+filepath.Ext(name)), filepath.Join(dir, "twin")
+	if err := os.WriteFile(in, data, 0o600); err != nil {
+		return nil, err
+	}
+	args := []string{"-nostdin", "-loglevel", "error", "-i", in, "-map", "0:a:0"}
+	if codecName != "" {
+		args = append(args, "-c:a", codecName)
+	}
+	args = append(args, "-f", container, out)
+	if msg, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ffmpeg: %v: %s", err, bytes.TrimSpace(msg))
+	}
+	return os.ReadFile(out)
+}
+
+// mistTwin is the carrier through Mist's own encoder with nothing
+// embedded, so comparing it with the stego copy isolates the embedding
+// from everything else Mist's pipeline does differently from ffmpeg.
+func mistTwin(target av.Format, data []byte) ([]byte, error) {
 	pcm, info, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -251,24 +281,32 @@ func embedBytes(ctx context.Context, em *Emitter, data []byte, p Payload) ([]byt
 	return io.ReadAll(rc)
 }
 
-func inspect(out []byte) ([][]float32, []int32, error) {
+type decoded struct {
+	planes [][]float32
+	vals   []int32
+	trace  outputTrace
+}
+
+func inspect(out []byte) (decoded, error) {
 	pcm, info, err := decodeCarrier(bytes.NewReader(out))
 	if err != nil {
-		return nil, nil, err
+		return decoded{}, err
 	}
+	d := decoded{planes: pcm.Planes, trace: traceOf(out, pcm, info)}
 	if av.Lossless(info.NativeCodecID) {
-		return pcm.Planes, gridValues(pcm.Planes, av.SampleScale(info.SampleFmt)), nil
+		d.vals = gridValues(pcm.Planes, av.SampleScale(info.SampleFmt))
+		return d, nil
 	}
 	_, pkts, err := readPackets(bytes.NewReader(out))
 	if err != nil {
-		return nil, nil, err
+		return decoded{}, err
 	}
 	vc := vorbis.New()
 	if err := vc.Load(info.Extradata); err != nil {
-		return nil, nil, err
+		return decoded{}, err
 	}
-	vals, err := stego.EligibleValues(vc, pkts)
-	return pcm.Planes, vals, err
+	d.vals, err = stego.EligibleValues(vc, pkts)
+	return d, err
 }
 
 func gridValues(planes [][]float32, scale float32) []int32 {
@@ -321,6 +359,16 @@ func classify(pos, neg [][][]float64) ([]float64, []float64) {
 		}
 	}
 	return ps, ns
+}
+
+func detectors(pos, neg, minimal [][][]float64) []detectorResult {
+	var out []detectorResult
+	for k, d := range steganalysis.Detectors() {
+		p := column(pos, k)
+		out = append(out, detectorFrom(d.Name, p, column(neg, k), steganalysis.AUC(p, column(minimal, k))))
+	}
+	ps, ns := classify(pos, neg)
+	return append(out, detectorFrom(classifierName, ps, ns, steganalysis.AUC(classify(pos, minimal))))
 }
 
 func detectorFrom(name string, pos, neg []float64, invariance float64) detectorResult {

@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measures four classical detectors (chi-square, SPA, RS, HCF-COM) and a
   cross-validated classifier, plus SDR against a plain re-encode, per
   carrier and on average.
+- The harness compares Mist's output with the same carrier encoded by the
+  `ffmpeg` command line at its own defaults, which is the clean file a
+  warden would actually have. A new table sets the two side by side on
+  length, trailing digital zeros, sample format and nominal bitrate, where
+  any difference gives Mist away without statistics. The detectors run
+  against that ffmpeg copy, and again against Mist's own re-encode to
+  isolate the embedding. The harness now needs `ffmpeg` on `PATH`, and the
+  synthetic corpus gains a 24-bit carrier.
 
 ### Fixed
 

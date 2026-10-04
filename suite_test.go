@@ -96,25 +96,32 @@ func wav(rate, ch, n int) []byte {
 }
 
 func wavFile(rate, ch int, samples []int16) []byte {
+	data := make([]byte, 0, len(samples)*2)
+	for _, v := range samples {
+		data = append(data, byte(v), byte(v>>8))
+	}
+	return wavBytes(rate, ch, 16, data)
+}
+
+// wavBytes wraps little-endian PCM of the given bit depth in a WAV header.
+func wavBytes(rate, ch, bits int, data []byte) []byte {
 	var b bytes.Buffer
 	u16 := func(v uint16) { b.Write([]byte{byte(v), byte(v >> 8)}) }
 	u32 := func(v uint32) { b.Write([]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}) }
-	size := len(samples) * 2
+	width := bits / 8
 	b.WriteString("RIFF")
-	u32(uint32(36 + size))
+	u32(uint32(36 + len(data)))
 	b.WriteString("WAVEfmt ")
 	u32(16)
 	u16(1)
 	u16(uint16(ch))
 	u32(uint32(rate))
-	u32(uint32(rate * ch * 2))
-	u16(uint16(ch * 2))
-	u16(16)
+	u32(uint32(rate * ch * width))
+	u16(uint16(ch * width))
+	u16(uint16(bits))
 	b.WriteString("data")
-	u32(uint32(size))
-	for _, v := range samples {
-		u16(uint16(v))
-	}
+	u32(uint32(len(data)))
+	b.Write(data)
 	return b.Bytes()
 }
 

@@ -43,25 +43,32 @@ func syntheticCarriers() []harnessCarrier {
 	noise := wav(44100, 2, 44100*harnessSeconds)
 	return []harnessCarrier{
 		{name: "white-noise-44k-stereo.wav", load: func() ([]byte, error) { return noise, nil }},
-		synth("shaped-noise-48k-stereo.wav", 48000, 2, shapedNoise),
-		synth("tones-noise-44k-mono.wav", 44100, 1, tonesNoise),
-		synth("chirp-noise-48k-stereo.wav", 48000, 2, chirpNoise),
-		synth("bursts-silence-44k-stereo.wav", 44100, 2, burstsSilence),
+		synth("shaped-noise-48k-stereo.wav", 48000, 2, 16, shapedNoise),
+		synth("shaped-noise-48k-stereo-24bit.wav", 48000, 2, 24, shapedNoise),
+		synth("tones-noise-44k-mono.wav", 44100, 1, 16, tonesNoise),
+		synth("chirp-noise-48k-stereo.wav", 48000, 2, 16, chirpNoise),
+		synth("bursts-silence-44k-stereo.wav", 44100, 2, 16, burstsSilence),
 	}
 }
 
-func synth(name string, rate, ch int, newSignal func() signal) harnessCarrier {
+func synth(name string, rate, ch, bits int, newSignal func() signal) harnessCarrier {
 	n := rate * harnessSeconds
-	samples := make([]int16, n*ch)
+	width := bits / 8
+	full := float64(int64(1)<<(bits-1) - 1)
+	pcm := make([]byte, n*ch*width)
 	rng := rand.New(rand.NewPCG(uint64(rate), uint64(ch)))
 	for c := range ch {
 		sig := newSignal()
 		for i := range n {
 			v := math.Max(-1, math.Min(1, sig(float64(i)/float64(rate), rng)))
-			samples[i*ch+c] = int16(math.Round(v * math.MaxInt16))
+			q := int32(math.Round(v * full))
+			off := (i*ch + c) * width
+			for k := range width {
+				pcm[off+k] = byte(q >> (8 * k))
+			}
 		}
 	}
-	data := wavFile(rate, ch, samples)
+	data := wavBytes(rate, ch, bits, pcm)
 	return harnessCarrier{name: name, load: func() ([]byte, error) { return data, nil }}
 }
 

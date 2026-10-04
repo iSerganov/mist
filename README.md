@@ -571,9 +571,12 @@ pre-existing files produced elsewhere, and deniability under coercion
 (undetectability and deniability are different guarantees). "Undetectable" also
 remains a design target rather than a proven property. `make harness` (see
 [Development](#development)) measures it: four classical detectors and a trained
-classifier try to tell Mist's output from a plain re-encode of the same carrier.
-On 13 metal tracks, FLAC, WAV and Ogg Vorbis output all sit at chance on every
-one of them, and a lossless output leaves digital silence untouched. That is a
+classifier try to tell Mist's output from a plain `ffmpeg` encode of the same
+carrier. On 13 metal tracks they currently can: Mist's output still differs from
+ffmpeg's in length, trailing zeros, sample format (FLAC) and bitrate (Ogg
+Vorbis), and the detectors pick that up for Ogg Vorbis and FLAC. WAV output sits
+at chance. Against Mist's own re-encode, where only the embedded changes differ,
+all three formats sit at chance. That is a
 warden without the original: one who holds the carrier Mist started from can
 re-encode it and compare, and will find the changes.
 
@@ -594,10 +597,14 @@ make harness CORPUS=~/music      # detectability and quality report -> harness-o
 ```
 
 `make harness` re-encodes every file in `CORPUS` (or a built-in synthetic set
-when it is empty) twice per output format, once plainly and once with a hidden
-message. Then it reports how well four classical detectors and a
-cross-validated classifier tell the two apart, and how much embedding costs in
-SDR. `FORMATS=ogg,flac` or `FORMATS=all` picks the targets (default: Ogg Vorbis
+when it is empty) per output format three ways: with the `ffmpeg` command line
+at its own defaults, which is the clean file a warden would compare against;
+with Mist's own encoder and nothing embedded; and with a hidden message. It
+first checks that Mist's output matches the ffmpeg copy on length, trailing
+digital zeros, sample format and nominal bitrate. Then it reports how well four
+classical detectors and a cross-validated classifier tell the stego copy from
+each clean one, and how much embedding costs in SDR. It needs `ffmpeg` on
+`PATH`. `FORMATS=ogg,flac` or `FORMATS=all` picks the targets (default: Ogg Vorbis
 and the verified lossless set), `JOBS=` sets how many carriers run at once, and
 `BASELINE=` points at an earlier `report.json` to show what changed. It writes
 `report.md`, ready to paste into a pull request, and `report.json`. It is
