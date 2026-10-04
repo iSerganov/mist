@@ -92,14 +92,13 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo
 	if err != nil {
 		return nil, err
 	}
-	enc, err := av.NewEncoder(e.target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(e.target, info.Params())))
+	enc, pcm, err := openEncoder(e.target, pcm, info)
 	if err != nil {
-		return nil, fmt.Errorf("%w: encoder: %v", ErrCarrier, err)
+		return nil, err
 	}
 	defer func() { _ = enc.Close() }()
 
 	if e.target.Lossless {
-		pcm = padToWindow(pcm, enc.Window())
 		if err := e.embedSamples(ctx, pcm, av.SampleScale(enc.Info().SampleFmt), plain); err != nil {
 			return nil, err
 		}
@@ -108,6 +107,17 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo
 	return encodeAndMux(enc, pcm, func(pkts []codec.Packet) ([]codec.Packet, error) {
 		return e.embedResidues(ctx, enc.Info(), pkts, frameParams(pcm), plain)
 	})
+}
+
+func openEncoder(target av.Format, pcm codec.PCM, info av.AudioInfo) (*av.Encoder, codec.PCM, error) {
+	enc, err := av.NewEncoder(target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(target, info.Params())))
+	if err != nil {
+		return nil, pcm, fmt.Errorf("%w: encoder: %v", ErrCarrier, err)
+	}
+	if target.Lossless {
+		pcm = padToWindow(pcm, enc.Window())
+	}
+	return enc, pcm, nil
 }
 
 // encodeAndMux runs the carrier through the encoder and writes the result.
@@ -197,23 +207,30 @@ func canonicalPackets(info av.AudioInfo, pkts []codec.Packet) ([]codec.Packet, e
 		return nil, err
 	}
 	defer func() { _ = rc.Close() }()
-	d, err := av.OpenDemuxerReader(asSeeker(rc))
+	_, out, err := readPackets(rc)
 	if err != nil {
 		return nil, fmt.Errorf("%w: canonicalize: %v", ErrCarrier, err)
 	}
+	return out, nil
+}
+
+func readPackets(r io.Reader) (av.AudioInfo, []codec.Packet, error) {
+	d, err := av.OpenDemuxerReader(asSeeker(r))
+	if err != nil {
+		return av.AudioInfo{}, nil, err
+	}
 	defer func() { _ = d.Close() }()
-	out := make([]codec.Packet, 0, len(pkts))
+	var out []codec.Packet
 	for {
 		pkt, err := d.NextPacket()
 		if errors.Is(err, av.ErrEOF) {
-			break
+			return d.Info(), out, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%w: canonicalize: %v", ErrCarrier, err)
+			return av.AudioInfo{}, nil, err
 		}
 		out = append(out, av.ToCodecPacket(pkt))
 	}
-	return out, nil
 }
 
 // groupRooms reports each Vorbis stego frame's real capacity in bytes —

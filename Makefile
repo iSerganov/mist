@@ -7,6 +7,10 @@ OUTPUT  ?=
 CODEC   ?=
 KEY     ?=
 TIMEOUT ?= 0
+CORPUS  ?=
+FORMATS ?=
+BASELINE ?=
+HARNESS_OUT ?= harness-out
 
 # libav's own verbosity during a test run, on top of Go's -v:
 # quiet | error | warning | info | verbose | debug | trace
@@ -19,6 +23,13 @@ test:
 # Same coverage, without the per-test firehose.
 test-quiet:
 	go test -race -count=1 ./...
+
+# make harness [CORPUS=dir] [FORMATS=ogg,flac|all] [BASELINE=harness-out/report.json]
+# Detectability and quality report for local runs; writes $(HARNESS_OUT)/report.{md,json}.
+harness:
+	MIST_CORPUS="$(CORPUS)" MIST_HARNESS_FORMATS="$(FORMATS)" \
+		MIST_HARNESS_BASELINE="$(BASELINE)" MIST_HARNESS_OUT="$(HARNESS_OUT)" \
+		go test -tags harness -run TestHarnessSuite -count=1 -timeout 0 -v .
 
 lint:
 	golangci-lint run --timeout=5m
@@ -71,4 +82,4 @@ keys:
 clean:
 	rm -rf bin
 
-.PHONY: test test-quiet lint build embed catch formats keys clean
+.PHONY: test test-quiet harness lint build embed catch formats keys clean

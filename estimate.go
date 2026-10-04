@@ -86,15 +86,14 @@ func decodeSource(source string) (codec.PCM, av.AudioInfo, error) {
 }
 
 func estimatePCM(ctx context.Context, target av.Format, pcm codec.PCM, info av.AudioInfo) (Capacity, error) {
-	enc, err := av.NewEncoder(target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(target, info.Params())))
+	enc, pcm, err := openEncoder(target, pcm, info)
 	if err != nil {
-		return Capacity{}, fmt.Errorf("%w: encoder: %v", ErrCarrier, err)
+		return Capacity{}, err
 	}
 	defer func() { _ = enc.Close() }()
 
 	var rooms []int
 	if target.Lossless {
-		pcm = padToWindow(pcm, enc.Window())
 		rooms = sampleRooms(sampleFrames(pcm, av.SampleScale(enc.Info().SampleFmt)))
 	} else if rooms, err = residueRooms(ctx, enc, pcm); err != nil {
 		return Capacity{}, err
