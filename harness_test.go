@@ -328,17 +328,50 @@ func featuresOf(v []int32) [][]float64 {
 	return out
 }
 
-func column(carriers [][][]float64, k int) []float64 {
-	var out []float64
-	for _, chunks := range carriers {
+// scored is a population of detector scores and the carrier each came
+// from, which the interval needs: chunks of one carrier are not independent.
+type scored struct {
+	vals   []float64
+	groups []int
+}
+
+func (s *scored) add(v float64, g int) {
+	s.vals, s.groups = append(s.vals, v), append(s.groups, g)
+}
+
+// perFile averages each carrier's chunk scores into one score for the file.
+func (s scored) perFile() scored {
+	var out scored
+	at := map[int]int{}
+	var n []float64
+	for i, v := range s.vals {
+		j, ok := at[s.groups[i]]
+		if !ok {
+			j = len(out.vals)
+			at[s.groups[i]] = j
+			out.add(0, s.groups[i])
+			n = append(n, 0)
+		}
+		out.vals[j] += v
+		n[j]++
+	}
+	for j := range out.vals {
+		out.vals[j] /= n[j]
+	}
+	return out
+}
+
+func column(carriers [][][]float64, k int) scored {
+	var out scored
+	for i, chunks := range carriers {
 		for _, f := range chunks {
-			out = append(out, f[k])
+			out.add(f[k], i)
 		}
 	}
 	return out
 }
 
-func classify(pos, neg [][][]float64) ([]float64, []float64) {
+func classify(pos, neg [][][]float64) (scored, scored) {
 	var x [][]float64
 	var y []bool
 	var groups []int
@@ -350,12 +383,12 @@ func classify(pos, neg [][][]float64) ([]float64, []float64) {
 			x, y, groups = append(x, f), append(y, false), append(groups, i)
 		}
 	}
-	var ps, ns []float64
+	var ps, ns scored
 	for i, v := range steganalysis.CrossValidate(x, y, groups, harnessFolds) {
 		if y[i] {
-			ps = append(ps, v)
+			ps.add(v, groups[i])
 		} else {
-			ns = append(ns, v)
+			ns.add(v, groups[i])
 		}
 	}
 	return ps, ns
@@ -365,15 +398,22 @@ func detectors(pos, neg, minimal [][][]float64) []detectorResult {
 	var out []detectorResult
 	for k, d := range steganalysis.Detectors() {
 		p := column(pos, k)
-		out = append(out, detectorFrom(d.Name, p, column(neg, k), steganalysis.AUC(p, column(minimal, k))))
+		out = append(out, detectorFrom(d.Name, p, column(neg, k), steganalysis.AUC(p.vals, column(minimal, k).vals)))
 	}
 	ps, ns := classify(pos, neg)
-	return append(out, detectorFrom(classifierName, ps, ns, steganalysis.AUC(classify(pos, minimal))))
+	ms, mn := classify(pos, minimal)
+	return append(out, detectorFrom(classifierName, ps, ns, steganalysis.AUC(ms.vals, mn.vals)))
 }
 
-func detectorFrom(name string, pos, neg []float64, invariance float64) detectorResult {
-	lo, hi := steganalysis.AUCInterval(pos, neg, harnessRounds, harnessSeed)
-	return detectorResult{Name: name, AUC: steganalysis.AUC(pos, neg), Lo: lo, Hi: hi, Invariance: invariance}
+func detectorFrom(name string, pos, neg scored, invariance float64) detectorResult {
+	lo, hi := steganalysis.AUCInterval(pos.vals, neg.vals, pos.groups, neg.groups, harnessRounds, harnessSeed)
+	fp, fn := pos.perFile(), neg.perFile()
+	flo, fhi := steganalysis.AUCInterval(fp.vals, fn.vals, fp.groups, fn.groups, harnessRounds, harnessSeed)
+	return detectorResult{
+		Name: name, AUC: steganalysis.AUC(pos.vals, neg.vals), Lo: lo, Hi: hi,
+		FileAUC: steganalysis.AUC(fp.vals, fn.vals), FileLo: flo, FileHi: fhi,
+		Invariance: invariance,
+	}
 }
 
 func perceptualTool() *quality.Tool {

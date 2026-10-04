@@ -2,6 +2,7 @@ package steganalysis
 
 import (
 	"cmp"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -44,28 +45,45 @@ func AUC(pos, neg []float64) float64 {
 	return (rankSum - np*(np+1)/2) / (np * nn)
 }
 
-// AUCInterval is a percentile bootstrap 95% confidence interval for AUC,
-// resampling each population rounds times from a generator seeded by seed.
-func AUCInterval(pos, neg []float64, rounds int, seed uint64) (lo, hi float64) {
+// AUCInterval is a percentile bootstrap 95% confidence interval for AUC.
+// Scores come in groups that are not independent, such as the chunks of
+// one carrier scored stego and clean, so each of rounds draws picks whole
+// groups with replacement and takes every positive and negative score of
+// each. posGroup and negGroup give each score's group; seed fixes the draws.
+func AUCInterval(pos, neg []float64, posGroup, negGroup []int, rounds int, seed uint64) (lo, hi float64) {
 	if rounds < 1 {
 		auc := AUC(pos, neg)
 		return auc, auc
 	}
+	type cluster struct{ pos, neg []float64 }
+	byID := map[int]*cluster{}
+	member := func(id int) *cluster {
+		if byID[id] == nil {
+			byID[id] = &cluster{}
+		}
+		return byID[id]
+	}
+	for i, v := range pos {
+		c := member(posGroup[i])
+		c.pos = append(c.pos, v)
+	}
+	for i, v := range neg {
+		c := member(negGroup[i])
+		c.neg = append(c.neg, v)
+	}
+	ids := slices.Sorted(maps.Keys(byID))
 	rng := rand.New(rand.NewPCG(seed, seed))
-	bp, bn := make([]float64, len(pos)), make([]float64, len(neg))
 	aucs := make([]float64, rounds)
+	var bp, bn []float64
 	for r := range aucs {
-		resample(rng, pos, bp)
-		resample(rng, neg, bn)
+		bp, bn = bp[:0], bn[:0]
+		for range ids {
+			c := byID[ids[rng.IntN(len(ids))]]
+			bp, bn = append(bp, c.pos...), append(bn, c.neg...)
+		}
 		aucs[r] = AUC(bp, bn)
 	}
 	slices.Sort(aucs)
 	last := float64(rounds - 1)
 	return aucs[int(0.025*last)], aucs[int(math.Ceil(0.975*last))]
-}
-
-func resample(rng *rand.Rand, src, dst []float64) {
-	for i := range dst {
-		dst[i] = src[rng.IntN(len(src))]
-	}
 }

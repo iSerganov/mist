@@ -38,6 +38,15 @@ func (s *AUCSuite) TestAUC() {
 	}
 }
 
+// ungrouped puts every score in a group of its own.
+func ungrouped(n, from int) []int {
+	g := make([]int, n)
+	for i := range g {
+		g[i] = from + i
+	}
+	return g
+}
+
 func (s *AUCSuite) TestAUCIntervalPinsUnambiguousPopulations() {
 	tests := []struct {
 		title string
@@ -50,7 +59,7 @@ func (s *AUCSuite) TestAUCIntervalPinsUnambiguousPopulations() {
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
-			lo, hi := AUCInterval(tc.pos, tc.neg, 500, 7)
+			lo, hi := AUCInterval(tc.pos, tc.neg, ungrouped(len(tc.pos), 0), ungrouped(len(tc.neg), 0), 500, 7)
 			s.Equal(tc.want, lo)
 			s.Equal(tc.want, hi)
 		})
@@ -60,18 +69,34 @@ func (s *AUCSuite) TestAUCIntervalPinsUnambiguousPopulations() {
 func (s *AUCSuite) TestAUCIntervalBracketsEstimate() {
 	pos := []float64{0.3, 0.6, 0.45, 0.95, 0.7, 0.5, 0.85, 0.75}
 	neg := []float64{0.1, 0.4, 0.35, 0.8, 0.65, 0.2, 0.9, 0.55}
-	lo, hi := AUCInterval(pos, neg, 500, 7)
+	lo, hi := AUCInterval(pos, neg, ungrouped(len(pos), 0), ungrouped(len(neg), 0), 500, 7)
 	auc := AUC(pos, neg)
 	s.LessOrEqual(lo, auc)
 	s.GreaterOrEqual(hi, auc)
 	s.Less(lo, hi)
 }
 
+func (s *AUCSuite) TestAUCIntervalWidensWhenScoresShareAGroup() {
+	const copies = 50
+	base := []struct{ pos, neg float64 }{{0.3, 0.1}, {0.6, 0.4}, {0.45, 0.35}, {0.95, 0.8}, {0.7, 0.65}, {0.5, 0.2}}
+	var pos, neg []float64
+	var groups []int
+	for g, b := range base {
+		for range copies {
+			pos, neg, groups = append(pos, b.pos), append(neg, b.neg), append(groups, g)
+		}
+	}
+	clo, chi := AUCInterval(pos, neg, groups, groups, 500, 7)
+	ulo, uhi := AUCInterval(pos, neg, ungrouped(len(pos), 0), ungrouped(len(neg), len(pos)), 500, 7)
+	s.Greater(chi-clo, 2*(uhi-ulo))
+}
+
 func (s *AUCSuite) TestAUCIntervalIsDeterministicPerSeed() {
 	pos := []float64{0.3, 0.6, 0.45, 0.95, 0.7}
 	neg := []float64{0.1, 0.4, 0.35, 0.8, 0.65}
-	lo1, hi1 := AUCInterval(pos, neg, 200, 42)
-	lo2, hi2 := AUCInterval(pos, neg, 200, 42)
+	groups := []int{0, 0, 1, 2, 2}
+	lo1, hi1 := AUCInterval(pos, neg, groups, groups, 200, 42)
+	lo2, hi2 := AUCInterval(pos, neg, groups, groups, 200, 42)
 	s.Equal(lo1, lo2)
 	s.Equal(hi1, hi2)
 }
@@ -81,7 +106,7 @@ func (s *AUCSuite) TestAUCIntervalWithoutRoundsIsThePointEstimate() {
 	neg := []float64{0.1, 0.4, 0.5}
 	for _, rounds := range []int{0, -3} {
 		s.Run(fmt.Sprintf("%d rounds", rounds), func() {
-			lo, hi := AUCInterval(pos, neg, rounds, 7)
+			lo, hi := AUCInterval(pos, neg, ungrouped(3, 0), ungrouped(3, 0), rounds, 7)
 			s.Equal(AUC(pos, neg), lo)
 			s.Equal(AUC(pos, neg), hi)
 		})

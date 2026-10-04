@@ -230,11 +230,25 @@ $$
 its sign flipped. A value well below 0.5 is still a detection. For Mist the goal
 is **AUC ≈ 0.5 for every detector**.
 
-**`AUCInterval`** is a percentile bootstrap. It resamples each population with
-replacement, recomputes the AUC, and reports the 2.5th and 97.5th percentiles.
-It is deterministic for a given seed, so reports can be compared run to run.
-With fewer than one round it returns the AUC itself as both bounds.
+**`AUCInterval`** is a percentile cluster bootstrap. Every score carries a group,
+and the harness uses the carrier as the group. Each round redraws whole groups
+with replacement, taking every positive and negative score of each, recomputes
+the AUC, and reports the 2.5th and 97.5th percentiles. Chunks of one track are
+correlated, and clean and stego chunks of one track are paired, so resampling
+chunks one by one would make the interval far too narrow: its width would follow
+the number of chunks rather than the number of tracks. It is deterministic for a
+given seed, so reports can be compared run to run. With fewer than one round it
+returns the AUC itself as both bounds.
+
+**From AUC to ε.** Cachin calls a scheme ε-secure when the relative entropy
+D(P_C ‖ P_S) between clean and stego files is at most ε. Any detector's
+|AUC − ½| is at most the total variation δ between the two, and Pinsker's
+inequality gives δ ≤ √(ε/2), so a measured AUC proves ε ≥ 2(AUC − ½)² nats. This
+is only ever a lower bound: an AUC at chance says the detector found nothing, not
+that ε is small.
 
 > J. A. Hanley, B. J. McNeil. *The Meaning and Use of the Area under a Receiver
 > Operating Characteristic (ROC) Curve.* Radiology 143, 1982.
 > B. Efron, R. Tibshirani. *An Introduction to the Bootstrap.* Chapman & Hall, 1993.
+> C. Cachin. *An Information-Theoretic Model for Steganography.* Information and
+> Computation 192(1), 2004.

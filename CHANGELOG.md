@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against that ffmpeg copy, and again against Mist's own re-encode to
   isolate the embedding. The harness now needs `ffmpeg` on `PATH`, and the
   synthetic corpus gains a 24-bit carrier.
+- The harness scores detection per file as well as per chunk, and its 95%
+  intervals are bootstrapped by carrier instead of by chunk, so they reflect
+  how many tracks were measured. Each detector also reports the lower bound
+  on Cachin's ε that its file-level AUC proves.
 
 ### Fixed
 

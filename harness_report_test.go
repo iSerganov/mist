@@ -59,7 +59,29 @@ type detectorResult struct {
 	AUC        float64 `json:"auc"`
 	Lo         float64 `json:"auc_lo"`
 	Hi         float64 `json:"auc_hi"`
+	FileAUC    float64 `json:"file_auc"`
+	FileLo     float64 `json:"file_auc_lo"`
+	FileHi     float64 `json:"file_auc_hi"`
 	Invariance float64 `json:"payload_invariance"`
+}
+
+// epsilon is the smallest Cachin ε that a detector reaching this AUC
+// proves: |AUC−½| is at most the total variation between clean and stego,
+// and Pinsker's inequality turns total variation δ into ε ≥ 2δ² nats.
+func epsilon(auc float64) float64 {
+	d := auc - 0.5
+	return 2 * d * d
+}
+
+// epsilonRange is the ε lower bound across the file-level interval: zero
+// when the interval reaches chance, else from its nearest end.
+func (d detectorResult) epsilonRange() (lo, hi float64) {
+	if d.FileLo <= 0.5 && d.FileHi >= 0.5 {
+		lo = 0
+	} else {
+		lo = min(epsilon(d.FileLo), epsilon(d.FileHi))
+	}
+	return lo, max(epsilon(d.FileLo), epsilon(d.FileHi))
 }
 
 type stat struct {
@@ -183,11 +205,21 @@ func (f formatReport) fingerprint() (level, string) {
 	return fail, fmt.Sprintf("differs on %d of %d carriers: %s", n, len(f.Traces), strings.Join(names, ", "))
 }
 
+// verdict judges both the chunk and the file score and reports the worse:
+// a bias too slight to show in one chunk can add up over a whole file.
 func (d detectorResult) verdict() (level, string) {
+	l, t := verdictOf(d.AUC, d.Lo, d.Hi)
+	if fl, ft := verdictOf(d.FileAUC, d.FileLo, d.FileHi); fl > l {
+		return fl, ft + " per file"
+	}
+	return l, t
+}
+
+func verdictOf(auc, lo, hi float64) (level, string) {
 	switch {
-	case d.Lo <= 0.5 && d.Hi >= 0.5:
+	case lo <= 0.5 && hi >= 0.5:
 		return pass, "chance"
-	case math.Abs(d.AUC-0.5) < aucDetectable:
+	case math.Abs(auc-0.5) < aucDetectable:
 		return watch, "faint signal"
 	}
 	return fail, "detectable"
@@ -277,19 +309,21 @@ func (r harnessReport) markdown(baseline *harnessReport) string {
 }
 
 func detectorTable(b *strings.Builder, ds []detectorResult, base *formatReport) {
-	b.WriteString("| Detector | Looks for | AUC | 95% interval | Verdict | Message size |")
+	b.WriteString("| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |")
 	if base != nil {
 		b.WriteString(" AUC change |")
 	}
-	b.WriteString("\n|---|---|---|---|---|---|")
+	b.WriteString("\n|---|---|---|---|---|---|---|")
 	if base != nil {
 		b.WriteString("---|")
 	}
 	for _, d := range ds {
 		vl, vt := d.verdict()
 		il, it := d.invariance()
-		fmt.Fprintf(b, "\n| %s | %s | %.3f | %.3f–%.3f | %s %s | %s %s (%.3f) |",
-			d.Name, detectorTargets[d.Name], d.AUC, d.Lo, d.Hi, vl.mark(), vt, il.mark(), it, d.Invariance)
+		elo, ehi := d.epsilonRange()
+		fmt.Fprintf(b, "\n| %s | %s | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) | %s %s | %s %s (%.3f) |",
+			d.Name, detectorTargets[d.Name], d.AUC, d.Lo, d.Hi, d.FileAUC, d.FileLo, d.FileHi,
+			epsilon(d.FileAUC), elo, ehi, vl.mark(), vt, il.mark(), it, d.Invariance)
 		if base != nil {
 			b.WriteString(" " + base.aucDelta(d) + " |")
 		}
@@ -377,9 +411,21 @@ apart from an ordinary file outright, however well the embedding hides, so every
 compares against the ffmpeg copy, the cover a warden would actually have. **The embedding alone** compares against
 Mist's own re-encode, so it isolates the embedded changes from every other way Mist's pipeline differs from ffmpeg. 0.5 is a coin
 flip, which is the goal; 1.0 means it is caught every time. A value well below 0.5 is a detection too: the
-detector is right, just with its sign flipped. Each carrier is cut into chunks of 65,536 values and every chunk
-is scored, so the **95% interval** says how sure the estimate is. Ogg Vorbis is scored on the residues Mist may
-change, lossless formats on the decoded samples.
+detector is right, just with its sign flipped. Ogg Vorbis is scored on the residues Mist may change, lossless
+formats on the decoded samples.
+
+Each carrier is cut into chunks of 65,536 values and every chunk is scored: that is the **chunk AUC**. The
+**file AUC** averages each carrier's chunk scores into one score per file, which is what a warden holding whole
+files would use; a bias too slight to show in one chunk can add up over a file. The **95% intervals** are
+bootstrapped by carrier: each round redraws whole carriers, with all their chunks, because chunks of one track are
+not independent. Their width reflects how many carriers there are, not how many chunks. The verdict is the worse
+of the chunk and file verdicts.
+
+**ε ≥** is what the file AUC proves about Mist in Cachin's sense, where a scheme is ε-secure when the relative
+entropy between clean and stego files is at most ε. A detector's |AUC − ½| is at most the total variation between
+the two, and Pinsker's inequality turns that into ε ≥ 2(AUC − ½)² nats. It is a **lower bound** only: a detector
+at chance shows that this detector found no gap, not that ε is small. The bracket applies the same formula across
+the file AUC's interval.
 
 Chi-square, SPA and RS look for bits being overwritten, which Mist never does, so they are expected to sit at
 chance; a rise means the embedder has drifted. HCF-COM looks for ±1 changes, which is exactly what Mist does,
