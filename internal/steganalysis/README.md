@@ -93,7 +93,7 @@ $$
 
 and the score is the smaller root, clamped to `[0, 1]`. This is Ker's
 trace-set form, summed over every difference class m, re-derived here; p = 1
-is an exact root, as it should be. For small p it reduces to `p ≈ s / |D₀|`.
+is a root in expectation, since a fully randomised stream has |D₀| ≈ |C₀|/2. For small p it reduces to `p ≈ s / |D₀|`.
 When sampling noise makes the discriminant negative, near p = 1, the real part
 of the complex roots is used, following Ker.
 
@@ -160,7 +160,11 @@ $$
 
 so a lower COM, the embedding signature, gives a higher score.
 
-**Limits.** The absolute COM depends heavily on the content. It is meaningful
+**Limits.** A stream spanning 2^20 or more distinct values (a wide 24-bit
+sample grid, or a single outlier) is not scored and returns `0`, which bounds the
+FFT at 16 MiB. The histogram is zero-padded to a power of two, so the score shifts
+slightly when the value range crosses one, by about 5·10⁻³ in the tests; compare it
+only between carriers of similar range. The absolute COM depends heavily on the content. It is meaningful
 only in comparison with a matched clean carrier, which is exactly how the harness
 uses it, through AUC. The effect is strongest on peaked histograms, such as
 Vorbis residue indices, and weak on wide ones, such as 16-bit PCM from a lossless
@@ -191,6 +195,7 @@ is **AUC ≈ 0.5 for every detector**.
 **`AUCInterval`** is a percentile bootstrap. It resamples each population with
 replacement, recomputes the AUC, and reports the 2.5th and 97.5th percentiles.
 It is deterministic for a given seed, so reports can be compared run to run.
+With fewer than one round it returns the AUC itself as both bounds.
 
 > J. A. Hanley, B. J. McNeil. *The Meaning and Use of the Area under a Receiver
 > Operating Characteristic (ROC) Curve.* Radiology 143, 1982.
