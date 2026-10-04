@@ -10,7 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,6 +54,8 @@ func (s *HarnessSuite) TestMeasure() {
 	pub, _, err := GenerateKeyPair()
 	s.Require().NoError(err)
 
+	jobs, err := harnessJobs(os.Getenv("MIST_HARNESS_JOBS"))
+	s.Require().NoError(err)
 	tool := perceptualTool()
 	rep := harnessReport{
 		Commit:   commit(),
@@ -63,7 +68,7 @@ func (s *HarnessSuite) TestMeasure() {
 	}
 	for _, spec := range harnessFormats(os.Getenv("MIST_HARNESS_FORMATS")) {
 		s.T().Logf("measuring %s", spec)
-		rep.Formats = append(rep.Formats, measureFormat(s.T().Context(), spec, carriers, pub, tool))
+		rep.Formats = append(rep.Formats, measureFormat(s.T().Context(), spec, carriers, pub, tool, jobs))
 	}
 	md, err := rep.write(cmp.Or(os.Getenv("MIST_HARNESS_OUT"), "harness-out"), baseline)
 	s.Require().NoError(err)
@@ -84,13 +89,20 @@ func harnessFormats(spec string) []string {
 	return strings.Split(spec, ",")
 }
 
+func harnessJobs(spec string) (int, error) {
+	if spec == "" {
+		return min(4, runtime.NumCPU()), nil
+	}
+	return strconv.Atoi(spec)
+}
+
 type carrierRun struct {
-	clean, stego, minimal []int32
+	clean, stego, minimal scores
 	transcode, stegoSDR   float64
 	perceptual            float64
 }
 
-func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, pub []byte, tool *quality.Tool) formatReport {
+func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, pub []byte, tool *quality.Tool, jobs int) formatReport {
 	name, codecName, _ := strings.Cut(strings.TrimSpace(spec), "/")
 	fr := formatReport{Format: spec}
 	f, err := LookupFormat(name, codecName)
@@ -104,18 +116,30 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 		fr.Error = err.Error()
 		return fr
 	}
+	runs := make([]carrierRun, len(carriers))
+	errs := make([]error, len(carriers))
+	sem := make(chan struct{}, jobs)
+	var wg sync.WaitGroup
+	for i, c := range carriers {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			runs[i], errs[i] = measureCarrier(ctx, em, f.Ext, c, tool)
+		})
+	}
+	wg.Wait()
+
 	clean, stegoScores, minimal := scores{}, scores{}, scores{}
 	var transcode, stegoSDR, gap, drop []float64
-	for _, c := range carriers {
-		run, err := measureCarrier(ctx, em, f.Ext, c, tool)
-		if err != nil {
-			fr.Skipped = append(fr.Skipped, skippedCarrier{Name: c.name, Reason: err.Error()})
+	for i, run := range runs {
+		if errs[i] != nil {
+			fr.Skipped = append(fr.Skipped, skippedCarrier{Name: carriers[i].name, Reason: errs[i].Error()})
 			continue
 		}
 		fr.Measured++
-		clean.add(run.clean)
-		stegoScores.add(run.stego)
-		minimal.add(run.minimal)
+		clean.merge(run.clean)
+		stegoScores.merge(run.stego)
+		minimal.merge(run.minimal)
 		transcode = append(transcode, run.transcode)
 		stegoSDR = append(stegoSDR, run.stegoSDR)
 		gap = append(gap, run.transcode-run.stegoSDR)
@@ -180,9 +204,9 @@ func measureCarrier(ctx context.Context, em *Emitter, ext string, c harnessCarri
 	}
 	maxLag := info.SampleRate / 10
 	run := carrierRun{
-		clean:     cleanVals,
-		stego:     stegoVals,
-		minimal:   minimalVals,
+		clean:     scoresOf(cleanVals),
+		stego:     scoresOf(stegoVals),
+		minimal:   scoresOf(minimalVals),
 		transcode: quality.SDR(ref.Planes, cleanPCM, maxLag),
 		stegoSDR:  quality.SDR(ref.Planes, stegoPCM, maxLag),
 	}
@@ -252,11 +276,19 @@ func gridValues(planes [][]float32, scale float32) []int32 {
 
 type scores map[string][]float64
 
-func (sc scores) add(v []int32) {
+func scoresOf(v []int32) scores {
+	sc := scores{}
 	for _, d := range steganalysis.Detectors() {
 		for off := 0; off < len(v); off += harnessChunk {
 			sc[d.Name] = append(sc[d.Name], d.Score(v[off:min(off+harnessChunk, len(v))]))
 		}
+	}
+	return sc
+}
+
+func (sc scores) merge(o scores) {
+	for name, v := range o {
+		sc[name] = append(sc[name], v...)
 	}
 }
 

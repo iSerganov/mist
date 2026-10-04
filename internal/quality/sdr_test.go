@@ -82,6 +82,11 @@ func (s *SDRSuite) TestLag() {
 	}
 }
 
+func (s *SDRSuite) TestLagOfReferenceShorterThanSearchRangeIsZero() {
+	short := noise(1, 2, 50)
+	s.Zero(Lag(short, short, 100))
+}
+
 func (s *SDRSuite) TestLagIgnoresDelayBeyondRange() {
 	ref := noise(1, 2, testLen)
 	s.NotEqual(80, Lag(ref, delay(ref, 80), 50))

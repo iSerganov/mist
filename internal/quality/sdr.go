@@ -3,7 +3,12 @@
 // perceptual scores from external tools.
 package quality
 
-import "math"
+import (
+	"math"
+	"math/cmplx"
+
+	"github.com/iSerganov/mist/internal/dsp"
+)
 
 const (
 	alignWindow = 1 << 18
@@ -12,13 +17,44 @@ const (
 )
 
 // Lag returns the offset d within ±maxLag at which test[i+d] best matches
-// ref[i], by cross-correlation over the first part of their overlap. Ties,
-// including all-silent signals, resolve to the smallest |d|.
+// ref[i], by FFT cross-correlation of a window of ref starting maxLag
+// samples in against test. Ties, including all-silent signals, resolve to
+// the smallest |d|.
 func Lag(ref, test [][]float32, maxLag int) int {
-	best, bestCorr := 0, correlate(ref, test, 0)
+	chans := min(len(ref), len(test))
+	if chans == 0 {
+		return 0
+	}
+	start := min(maxLag, len(ref[0]))
+	w := min(alignWindow, len(ref[0])-start)
+	if w <= 0 {
+		return 0
+	}
+	n := dsp.NextPow2(w + 2*maxLag)
+	acc := make([]complex128, n)
+	r, x := make([]complex128, n), make([]complex128, n)
+	for ch := range chans {
+		clear(r)
+		clear(x)
+		for i := range w {
+			r[i] = complex(float64(ref[ch][start+i]), 0)
+		}
+		for i := range w + 2*maxLag {
+			if j := start - maxLag + i; j >= 0 && j < len(test[ch]) {
+				x[i] = complex(float64(test[ch][j]), 0)
+			}
+		}
+		dsp.FFT(r)
+		dsp.FFT(x)
+		for k := range acc {
+			acc[k] += cmplx.Conj(r[k]) * x[k]
+		}
+	}
+	dsp.IFFT(acc)
+	best, bestCorr := 0, real(acc[maxLag])
 	for d := 1; d <= maxLag; d++ {
 		for _, c := range []int{d, -d} {
-			if v := correlate(ref, test, c); v > bestCorr {
+			if v := real(acc[c+maxLag]); v > bestCorr {
 				best, bestCorr = c, v
 			}
 		}
@@ -49,19 +85,6 @@ func SegSNR(ref, test [][]float32, maxLag, seg int) float64 {
 		n++
 	}
 	return sum / float64(n)
-}
-
-func correlate(ref, test [][]float32, d int) float64 {
-	lo, hi := span(ref, test, d)
-	hi = min(hi, lo+alignWindow)
-	var c float64
-	for ch := range min(len(ref), len(test)) {
-		r, t := ref[ch], test[ch]
-		for i := lo; i < hi; i++ {
-			c += float64(r[i]) * float64(t[i+d])
-		}
-	}
-	return c
 }
 
 func energy(ref, test [][]float32, d, lo, hi int) (sig, noise float64) {

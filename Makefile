@@ -11,6 +11,7 @@ CORPUS  ?=
 FORMATS ?=
 BASELINE ?=
 HARNESS_OUT ?= harness-out
+JOBS ?=
 
 # libav's own verbosity during a test run, on top of Go's -v:
 # quiet | error | warning | info | verbose | debug | trace
@@ -24,11 +25,11 @@ test:
 test-quiet:
 	go test -race -count=1 ./...
 
-# make harness [CORPUS=dir] [FORMATS=ogg,flac|all] [BASELINE=harness-out/report.json]
+# make harness [CORPUS=dir] [FORMATS=ogg,flac|all] [BASELINE=harness-out/report.json] [JOBS=4]
 # Detectability and quality report for local runs; writes $(HARNESS_OUT)/report.{md,json}.
 harness:
 	MIST_CORPUS="$(CORPUS)" MIST_HARNESS_FORMATS="$(FORMATS)" \
-		MIST_HARNESS_BASELINE="$(BASELINE)" MIST_HARNESS_OUT="$(HARNESS_OUT)" \
+		MIST_HARNESS_BASELINE="$(BASELINE)" MIST_HARNESS_OUT="$(HARNESS_OUT)" MIST_HARNESS_JOBS="$(JOBS)" \
 		go test -tags harness -run TestHarnessSuite -count=1 -timeout 0 -v .
 
 lint:
