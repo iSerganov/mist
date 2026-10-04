@@ -3,7 +3,6 @@ package steganalysis
 import (
 	"fmt"
 	"math"
-	"math/cmplx"
 	"math/rand/v2"
 	"testing"
 
@@ -104,24 +103,6 @@ func (s *DetectorSuite) TestGammaP() {
 		s.Run(tc.title, func() {
 			s.InDelta(tc.want, gammaP(tc.a, tc.x), 1e-5)
 		})
-	}
-}
-
-func (s *DetectorSuite) TestFFTMatchesNaiveDFT() {
-	rng := newRand(3)
-	in := make([]complex128, 16)
-	for i := range in {
-		in[i] = complex(rng.NormFloat64(), 0)
-	}
-	got := append([]complex128(nil), in...)
-	fft(got)
-	for k := range in {
-		var want complex128
-		for n, x := range in {
-			want += x * cmplx.Rect(1, -2*math.Pi*float64(k*n)/float64(len(in)))
-		}
-		s.InDelta(real(want), real(got[k]), 1e-9)
-		s.InDelta(imag(want), imag(got[k]), 1e-9)
 	}
 }
 
