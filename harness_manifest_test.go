@@ -20,7 +20,7 @@ import (
 	"github.com/iSerganov/mist/internal/stego"
 )
 
-const harnessReportSchema = 3
+const harnessReportSchema = 4
 
 type runManifest struct {
 	Schema     int                `json:"schema"`
@@ -63,6 +63,8 @@ type corpusManifest struct {
 	MaxSeconds        int               `json:"max_seconds,omitempty"`
 	Carriers          []carrierManifest `json:"carriers"`
 	IndependentGroups int               `json:"independent_groups"`
+	HeldOut           []heldManifest    `json:"held_out,omitempty"`
+	HeldOutGroups     int               `json:"held_out_groups,omitempty"`
 }
 
 type carrierManifest struct {
@@ -70,6 +72,7 @@ type carrierManifest struct {
 	Category        string  `json:"category"`
 	Lineage         string  `json:"lineage"`
 	License         string  `json:"license,omitempty"`
+	Recipe          string  `json:"recipe,omitempty"`
 	SHA256          string  `json:"sha256"`
 	Bytes           int     `json:"bytes"`
 	Codec           string  `json:"codec"`
@@ -82,6 +85,24 @@ type carrierManifest struct {
 	DurationSeconds float64 `json:"duration_seconds,omitempty"`
 }
 
+// heldManifest is a carrier the run did not score. Reason is "sealed" on a
+// development run, or "development-while-unsealed" when the sealed split is
+// the one being scored. The hash is of the file bytes; the file is not decoded.
+type heldManifest struct {
+	ID          string `json:"id"`
+	Category    string `json:"category"`
+	Lineage     string `json:"lineage"`
+	License     string `json:"license,omitempty"`
+	Recipe      string `json:"recipe,omitempty"`
+	Reason      string `json:"reason"`
+	SHA256      string `json:"sha256"`
+	Bytes       int    `json:"bytes"`
+	SourceCodec string `json:"source_codec,omitempty"`
+	BitDepth    int    `json:"bit_depth,omitempty"`
+	SampleRate  int    `json:"sample_rate,omitempty"`
+	Channels    int    `json:"channels,omitempty"`
+}
+
 type protocolManifest struct {
 	FrameDuration string  `json:"frame_duration"`
 	Density       float64 `json:"density"`
@@ -92,23 +113,25 @@ type protocolManifest struct {
 }
 
 type experimentManifest struct {
-	Formats           []string  `json:"formats"`
-	Jobs              int       `json:"jobs"`
-	ChunkValues       int       `json:"chunk_values"`
-	BootstrapRounds   int       `json:"bootstrap_rounds"`
-	Seed              uint64    `json:"seed"`
-	Folds             int       `json:"folds"`
-	PayloadBytes      int       `json:"payload_bytes"`
-	MinimalBytes      int       `json:"minimal_payload_bytes"`
-	CleanControls     []string  `json:"clean_controls"`
-	ScoreUnit         string    `json:"score_unit"`
-	Classifier        string    `json:"classifier"`
-	Features          []string  `json:"features"`
-	PermutationRounds int       `json:"permutation_rounds"`
-	RefitRounds       int       `json:"refit_rounds"`
-	NestedPenalties   []float64 `json:"nested_penalties"`
-	PowerTarget       float64   `json:"power_target_d"`
-	Power             float64   `json:"power"`
+	Formats            []string  `json:"formats"`
+	Jobs               int       `json:"jobs"`
+	ChunkValues        int       `json:"chunk_values"`
+	BootstrapRounds    int       `json:"bootstrap_rounds"`
+	Seed               uint64    `json:"seed"`
+	Folds              int       `json:"folds"`
+	PayloadBytes       int       `json:"payload_bytes"`
+	MinimalBytes       int       `json:"minimal_payload_bytes"`
+	CleanControls      []string  `json:"clean_controls"`
+	ScoreUnit          string    `json:"score_unit"`
+	Classifier         string    `json:"classifier"`
+	Features           []string  `json:"features"`
+	PermutationRounds  int       `json:"permutation_rounds"`
+	RefitRounds        int       `json:"refit_rounds"`
+	NestedPenalties    []float64 `json:"nested_penalties"`
+	PowerTarget        float64   `json:"power_target_d"`
+	Power              float64   `json:"power"`
+	PlannedConditions  []string  `json:"planned_conditions"`
+	ExecutedConditions []string  `json:"executed_conditions"`
 }
 
 func harnessBinary(env, fallback string) string {
@@ -162,11 +185,13 @@ func makeRunManifest(
 				"first-order SPAM transitions",
 				"second-difference Markov transitions",
 			},
-			PermutationRounds: harnessPerms,
-			RefitRounds:       harnessRefits,
-			NestedPenalties:   steganalysis.NestedPenaltyGrid(),
-			PowerTarget:       harnessPowerTarget,
-			Power:             harnessPower,
+			PermutationRounds:  harnessPerms,
+			RefitRounds:        harnessRefits,
+			NestedPenalties:    steganalysis.NestedPenaltyGrid(),
+			PowerTarget:        harnessPowerTarget,
+			Power:              harnessPower,
+			PlannedConditions:  conditionCatalog(),
+			ExecutedConditions: executedConditions(),
 		},
 	}, nil
 }
@@ -186,6 +211,7 @@ func describeCorpus(carriers []harnessCarrier, corpus corpusDescription, maxSeco
 		sum := sha256.Sum256(data)
 		entry := carrierManifest{
 			ID: carrier.name, Category: carrier.category, Lineage: carrier.lineage, License: carrier.license,
+			Recipe: carrier.recipe,
 			SHA256: hex.EncodeToString(sum[:]), Bytes: len(data), Codec: info.CodecName,
 			Container: info.Container, SampleRate: info.SampleRate, Channels: info.Channels,
 			SampleFmt: sampleFormatName(info.SampleFmt), Bits: info.Bits, Samples: pcm.NbSamples,
@@ -197,6 +223,21 @@ func describeCorpus(carriers []harnessCarrier, corpus corpusDescription, maxSeco
 		groups[carrier.lineage] = true
 	}
 	out.IndependentGroups = len(groups)
+	heldGroups := map[string]bool{}
+	for _, carrier := range corpus.HeldOut {
+		sum, n, err := carrier.digest()
+		if err != nil {
+			return corpusManifest{}, fmt.Errorf("manifest held-out carrier %q: %w", carrier.name, err)
+		}
+		out.HeldOut = append(out.HeldOut, heldManifest{
+			ID: carrier.name, Category: carrier.category, Lineage: carrier.lineage, License: carrier.license,
+			Recipe: carrier.recipe, Reason: carrier.holdReason, SHA256: sum, Bytes: n,
+			SourceCodec: carrier.sourceCodec, BitDepth: carrier.bitDepth,
+			SampleRate: carrier.sampleRate, Channels: carrier.channels,
+		})
+		heldGroups[carrier.lineage] = true
+	}
+	out.HeldOutGroups = len(heldGroups)
 	return out, nil
 }
 

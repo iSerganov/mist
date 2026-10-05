@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Corpus manifests can mark a sealed split. A harness run scores one split and
+  records hashes of the carriers it did not score. `make corpus` writes a
+  generated development set and a source-disjoint sealed holdout outside the
+  repository. Report schema is 4.
 - `make harness`: a local report on detectability and audio quality per
   output format, run on a music corpus or a built-in synthetic set. It
   measures four classical detectors (chi-square, SPA, RS, HCF-COM) and a

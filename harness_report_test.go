@@ -491,8 +491,8 @@ func extraError(gap num) string {
 func (r harnessReport) markdown(baseline *harnessReport) string {
 	var b strings.Builder
 	manifest := r.primaryManifest()
-	fmt.Fprintf(&b, "# Mist harness report\n\nCommit `%s` · %s · corpus: %s (%d carriers, %d independent lineage groups) · perceptual metric: %s",
-		r.Commit, r.Date, r.Corpus, r.Carriers, manifest.Corpus.IndependentGroups, cmp.Or(r.Perceptual, "not installed"))
+	fmt.Fprintf(&b, "# Mist harness report\n\nCommit `%s` · %s · corpus: %s (%d carriers, %d independent lineage groups) · perceptual metric: %s%s",
+		r.Commit, r.Date, r.Corpus, r.Carriers, manifest.Corpus.IndependentGroups, cmp.Or(r.Perceptual, "not installed"), holdoutNote(manifest.Corpus))
 	if baseline != nil {
 		fmt.Fprintf(&b, " · compared with commit `%s`", baseline.Commit)
 	}
@@ -518,6 +518,25 @@ func (r harnessReport) markdown(baseline *harnessReport) string {
 	}
 	b.WriteString(legend)
 	return b.String()
+}
+
+func holdoutNote(c corpusManifest) string {
+	var sealed, dev int
+	for _, held := range c.HeldOut {
+		if held.Reason == "sealed" {
+			sealed++
+			continue
+		}
+		dev++
+	}
+	switch {
+	case sealed > 0:
+		return fmt.Sprintf(" · %d sealed carriers held out", sealed)
+	case dev > 0:
+		return fmt.Sprintf(" · sealed split only; %d development carriers not scored", dev)
+	default:
+		return ""
+	}
 }
 
 func (r harnessReport) primaryManifest() runManifest {

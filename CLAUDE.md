@@ -211,7 +211,11 @@ list, or `all`), `JOBS=`, `BASELINE=`, `HARNESS_OUT=`, and tool paths
 (`FFMPEG`, `VISQOL`, `PEAQ`, `GIT`, `PKG_CONFIG`). It writes `report.md`,
 `report.json`, `manifest.json` and `scores.json` under `HARNESS_OUT`. Reports
 must use public carrier ids: pass a corpus manifest, or accept anonymous
-`carrier-NNNN` ids. Never commit local audio paths. It is never part of
+`carrier-NNNN` ids. A manifest carrier with `split: sealed` is hashed and not
+scored; `MIST_HARNESS_UNSEAL=1` scores that split instead and leaves the
+development carriers out, so one run never trains on both. `make corpus CORPUS_OUT=`
+writes a generated PCM set plus that holdout, and the directory must sit outside
+the checkout. Never commit local audio paths. It is never part of
 `make test` or CI: it needs a corpus and minutes, and its numbers are read,
 not asserted.
 `cnn-warden` runs the harness with `MIST_HARNESS_EXPORT` (`CNN_EXPORT`),

@@ -10,6 +10,7 @@ TIMEOUT ?= 0
 CORPUS  ?=
 CORPUS_MANIFEST ?=
 CORPUS_NAME ?=
+CORPUS_OUT ?=
 FORMATS ?=
 BASELINE ?=
 HARNESS_OUT ?= harness-out
@@ -45,6 +46,13 @@ test-quiet:
 # Writes report.md/json, manifest.json and scores.json under $(HARNESS_OUT).
 # Every executable and filesystem path is an override; do not hard-code local
 # audio directories. Prefer CORPUS_MANIFEST so reports use public ids.
+# make corpus CORPUS_OUT=/path/outside/this/repo
+# Writes a generated PCM corpus and a sealed holdout. Audio is not committed.
+corpus:
+	@test -n "$(CORPUS_OUT)" || { echo "set CORPUS_OUT to a directory outside the repository" >&2; exit 1; }
+	MIST_CORPUS_OUT="$(CORPUS_OUT)" MIST_FFMPEG="$(FFMPEG)" \
+		go test -tags harness -run 'TestHarnessSuite/TestWriteGeneratedCorpus' -count=1 -timeout 10m -v .
+
 harness:
 	MIST_CORPUS="$(CORPUS)" MIST_HARNESS_FORMATS="$(FORMATS)" \
 		MIST_HARNESS_CORPUS_MANIFEST="$(CORPUS_MANIFEST)" MIST_HARNESS_CORPUS_NAME="$(CORPUS_NAME)" \
