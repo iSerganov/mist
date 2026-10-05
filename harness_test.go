@@ -326,33 +326,20 @@ func ffmpegTwin(ctx context.Context, container, codecName, name string, data []b
 	return os.ReadFile(out)
 }
 
-// mistLevel is the Vorbis quality level Mist chose for the carrier, found by
-// asking each level for its nominal rate and matching the one Mist wrote.
+// mistLevel is the Vorbis quality level Mist opened its encoder at for the
+// carrier. It asks the encoder: libvorbis writes a nominal rate of 0 at some
+// sample rates, so matching rates cannot tell the levels apart.
 func mistLevel(target av.Format, data []byte) (int, error) {
 	pcm, info, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
 		return 0, err
 	}
-	chosen, err := openEncoder(target, pcm, info)
+	enc, err := openEncoder(target, pcm, info)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = chosen.Close() }()
-	want := target.Info(pcm.SampleRate, pcm.Channels, info)
-	want.VBR = true
-	for q := minQuality; q <= maxQuality; q++ {
-		want.Quality = q
-		enc, err := av.NewEncoder(want)
-		if err != nil {
-			continue
-		}
-		nominal := nominalRate(enc)
-		_ = enc.Close()
-		if nominal == nominalRate(chosen) {
-			return q, nil
-		}
-	}
-	return 0, fmt.Errorf("no vorbis level has Mist's nominal rate %d", nominalRate(chosen))
+	defer func() { _ = enc.Close() }()
+	return enc.Info().Quality, nil
 }
 
 // mistTwin is the carrier through Mist's own encoder with nothing

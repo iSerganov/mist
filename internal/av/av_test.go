@@ -163,6 +163,31 @@ func (s *AVSuite) TestDemuxMuxRoundTrip() {
 	}
 }
 
+func (s *AVSuite) TestEncoderReportsItsQuality() {
+	s.requireLibav()
+	tests := []struct {
+		title   string
+		vbr     bool
+		quality int
+	}{
+		{"a VBR level", true, 8},
+		{"the lowest VBR level", true, -1},
+		{"an ABR target has no level", false, 0},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			enc, err := NewEncoder(AudioInfo{
+				CodecID: CodecIDVorbis, SampleRate: 44100, Channels: 2, SampleFmt: codec.SampleFmtFLTP,
+				Bitrate: 64_000, VBR: tc.vbr, Quality: tc.quality,
+			})
+			s.Require().NoError(err)
+			defer func() { _ = enc.Close() }()
+			s.Equal(tc.vbr, enc.Info().VBR)
+			s.Equal(tc.quality, enc.Info().Quality)
+		})
+	}
+}
+
 func (s *AVSuite) TestEncodeDecodePCM() {
 	s.requireLibav()
 	enc, err := NewEncoder(AudioInfo{

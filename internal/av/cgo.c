@@ -1038,6 +1038,10 @@ int mist_av_encoder_info(mist_av_encoder *enc, mist_av_audio_info *info)
 	info->sample_fmt = enc->ctx->sample_fmt;
 	info->bits = enc->ctx->bits_per_raw_sample;
 	info->bitrate = enc->ctx->bit_rate;
+	if (enc->ctx->flags & AV_CODEC_FLAG_QSCALE) {
+		info->vbr = 1;
+		info->quality = enc->ctx->global_quality / FF_QP2LAMBDA;
+	}
 	if (enc->ctx->extradata_size > 0 && enc->ctx->extradata != NULL) {
 		info->extradata = av_malloc((size_t)enc->ctx->extradata_size);
 		if (info->extradata == NULL) {

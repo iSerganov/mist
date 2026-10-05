@@ -523,6 +523,8 @@ func goAudioInfo(a C.mist_av_audio_info) AudioInfo {
 		SampleFmt:     codecSampleFmt(int(a.sample_fmt)),
 		Bits:          int(a.bits),
 		Bitrate:       int64(a.bitrate),
+		VBR:           a.vbr != 0,
+		Quality:       int(a.quality),
 		DurationUs:    int64(a.duration_us),
 		Extradata:     extra,
 		FrameSize:     int(a.frame_size),
