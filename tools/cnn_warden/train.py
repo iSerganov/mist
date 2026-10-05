@@ -9,6 +9,7 @@ carrier, one score per file, a 95% interval bootstrapped by carrier.
 import argparse
 import json
 import pathlib
+import platform
 
 import numpy as np
 import torch
@@ -23,7 +24,8 @@ def load(directory):
         stem = meta.with_suffix("")
         clean = np.fromfile(f"{stem}.clean.i32", dtype="<i4")
         stego = np.fromfile(f"{stem}.stego.i32", dtype="<i4")
-        carriers.append((clean, stego))
+        identity = json.loads(meta.read_text())
+        carriers.append({"id": identity["name"], "clean": clean, "stego": stego})
     return carriers
 
 
@@ -99,18 +101,38 @@ def run(directory, args, rng):
     pos, neg = np.zeros(len(carriers)), np.zeros(len(carriers))
     for f in sorted(set(folds)):
         train_ids = [i for i in range(len(carriers)) if folds[i] != f]
-        x = np.concatenate([segments(c[k], args.length) for i in train_ids for c in [carriers[i]] for k in (0, 1)])
-        y = np.concatenate([np.full(len(segments(c[k], args.length)), k, dtype=np.float32)
-                            for i in train_ids for c in [carriers[i]] for k in (0, 1)])
+        x = np.concatenate([segments(c[k], args.length) for i in train_ids
+                            for c in [carriers[i]] for k in ("clean", "stego")])
+        y = np.concatenate([np.full(len(segments(c[k], args.length)), label, dtype=np.float32)
+                            for i in train_ids for c in [carriers[i]]
+                            for k, label in (("clean", 0), ("stego", 1))])
         net = model()
         train(net, x, y, args.epochs, args.batch, rng)
         for i in range(len(carriers)):
             if folds[i] == f:
-                neg[i] = score(net, carriers[i][0], args.length, args.batch)
-                pos[i] = score(net, carriers[i][1], args.length, args.batch)
+                neg[i] = score(net, carriers[i]["clean"], args.length, args.batch)
+                pos[i] = score(net, carriers[i]["stego"], args.length, args.batch)
         print(f"  fold {f}: done", flush=True)
     lo, hi = bootstrap(pos, neg, args.rounds, rng)
-    return {"files": len(carriers), "auc": auc(pos, neg), "lo": lo, "hi": hi, "epochs": args.epochs}
+    return {
+        "files": len(carriers),
+        "auc": auc(pos, neg),
+        "lo": lo,
+        "hi": hi,
+        "folds": args.folds,
+        "epochs": args.epochs,
+        "length": args.length,
+        "batch": args.batch,
+        "rounds": args.rounds,
+        "seed": args.seed,
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "torch": torch.__version__,
+        "scores": [
+            {"carrier": carrier["id"], "clean": float(neg[i]), "stego": float(pos[i])}
+            for i, carrier in enumerate(carriers)
+        ],
+    }
 
 
 def main():

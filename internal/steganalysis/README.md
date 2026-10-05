@@ -300,8 +300,11 @@ as both bounds.
 D(P_C ‖ P_S) between clean and stego files is at most ε. Any detector's
 |AUC − ½| is at most the total variation δ between the two, and Pinsker's
 inequality gives δ ≤ √(ε/2), so a measured AUC proves ε ≥ 2(AUC − ½)² nats. This
-is only ever a lower bound: an AUC at chance says the detector found nothing, not
-that ε is small.
+is only ever a detector-implied lower bound on the *benchmark* KL: an AUC at
+chance says this detector found nothing, not that ε is small. Bind every
+number to the harness `manifest.json` (commit, corpus, independent groups,
+libav versions). The harness writes those artefacts under `HARNESS_OUT`;
+this package itself never reads a filesystem path.
 
 > J. A. Hanley, B. J. McNeil. *The Meaning and Use of the Area under a Receiver
 > Operating Characteristic (ROC) Curve.* Radiology 143, 1982.

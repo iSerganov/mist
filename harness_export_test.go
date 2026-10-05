@@ -40,7 +40,9 @@ func exportCarrier(format string, c harnessCarrier, clean, stego []int32) error 
 			return err
 		}
 	}
-	meta, err := json.Marshal(map[string]string{"name": c.name, "category": c.category})
+	meta, err := json.Marshal(map[string]string{
+		"name": c.name, "category": c.category, "lineage": c.lineage, "license": c.license,
+	})
 	if err != nil {
 		return err
 	}

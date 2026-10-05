@@ -1,5 +1,12 @@
 # Mist harness report
 
+> **Historical measurement.** This snapshot predates the Phase 0 run
+> manifest. It is not bound to a `manifest.json`, still names carriers by
+> original titles, and its `ε ≥` column is only a detector-implied KL lower
+> bound. Later harness runs write public identifiers plus
+> `manifest.json` / `scores.json` under `HARNESS_OUT`. Do not treat these
+> numbers as current or as proof of Cachin security.
+
  perceptual metric: not installed
 
 Every carrier is encoded three times: by the ffmpeg command line at its own defaults (the *clean* copy, which is what a warden without the original would compare against), by Mist's own encoder with nothing embedded (Mist's *own* re-encode), and by Mist with a hidden message (the *stego* copy). The report asks whether the stego copy differs from the clean one in plain properties, whether a detector can tell them apart, and how much worse it sounds. [How to read this report](#how-to-read-this-report) explains every number and threshold.

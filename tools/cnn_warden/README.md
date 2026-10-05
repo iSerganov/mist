@@ -21,15 +21,17 @@ picks up and prints in the report.
 Needs Python 3 with `torch` and `numpy`.
 
 ```bash
-make cnn-warden CORPUS=~/music FORMATS=ogg,flac,wav
+make cnn-warden CORPUS="$CORPUS" CORPUS_MANIFEST=testdata/harness/corpus.example.json FORMATS=ogg,flac,wav
 ```
 
 That runs the harness with the export on, then `train.py` over what it wrote,
-then the harness once more to put the result in the report. By hand:
+then the harness once more to put the result in the report. Every path is an
+override (`PYTHON`, `CNN_WARDEN`, `CNN_EXPORT`, `CNN_OUT`, `HARNESS_OUT`).
+By hand:
 
 ```bash
-MIST_HARNESS_EXPORT=harness-out/export make harness CORPUS=~/music FORMATS=flac
-python3 tools/cnn_warden/train.py harness-out/export --out harness-out/cnn.json
+MIST_HARNESS_EXPORT="$HARNESS_OUT/export" make harness CORPUS="$CORPUS" CORPUS_MANIFEST=testdata/harness/corpus.example.json FORMATS=flac
+"$PYTHON" "$CNN_WARDEN" "$HARNESS_OUT/export" --out "$HARNESS_OUT/cnn.json"
 ```
 
 | Flag | Default | Meaning |

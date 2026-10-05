@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -61,6 +62,11 @@ func (s *HarnessSuite) TestMerge() {
 			merged = r
 			continue
 		}
+		run := len(merged.Manifests)
+		merged.Manifests = append(merged.Manifests, r.Manifests...)
+		for i := range r.Formats {
+			r.Formats[i].Run += run
+		}
 		merged.Formats = append(merged.Formats, r.Formats...)
 	}
 	for i := range merged.Formats {
@@ -80,33 +86,44 @@ func (s *HarnessSuite) TestMeasure() {
 	if !av.Available() {
 		s.T().Skip("libav not available")
 	}
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		s.T().Skip("ffmpeg CLI not on PATH: the harness compares Mist against its output")
+	if _, err := exec.LookPath(harnessBinary("MIST_FFMPEG", "ffmpeg")); err != nil {
+		s.T().Skip("configured ffmpeg CLI is unavailable: the harness compares Mist against its output")
 	}
 	corpus := os.Getenv("MIST_CORPUS")
 	maxSeconds, err := strconv.Atoi(cmp.Or(os.Getenv("MIST_HARNESS_MAX_SECONDS"), "0"))
 	s.Require().NoError(err)
-	carriers, err := loadCarriers(corpus, maxSeconds)
+	carriers, corpusInfo, err := loadCarriers(corpus, os.Getenv("MIST_HARNESS_CORPUS_MANIFEST"), maxSeconds)
 	s.Require().NoError(err)
 	s.Require().NotEmpty(carriers)
+	if name := os.Getenv("MIST_HARNESS_CORPUS_NAME"); name != "" {
+		corpusInfo.Name = name
+	}
 	baseline, err := readReport(os.Getenv("MIST_HARNESS_BASELINE"))
 	s.Require().NoError(err)
-	pub, _, err := GenerateKeyPair()
+	pub, err := harnessPublicKey(os.Getenv("MIST_HARNESS_PUBLIC_KEY_HEX"))
 	s.Require().NoError(err)
 
 	jobs, err := harnessJobs(os.Getenv("MIST_HARNESS_JOBS"))
 	s.Require().NoError(err)
 	tool := perceptualTool()
+	formats := harnessFormats(os.Getenv("MIST_HARNESS_FORMATS"))
+	perceptual := ""
+	if tool != nil {
+		perceptual = tool.Name
+	}
+	manifest, err := makeRunManifest(carriers, corpusInfo, maxSeconds, pub, formats, jobs, perceptual)
+	s.Require().NoError(err)
 	rep := harnessReport{
-		Commit:   commit(),
-		Date:     time.Now().Format(time.DateOnly),
-		Corpus:   corpusLabel(corpus, maxSeconds),
-		Carriers: len(carriers),
+		Commit:    manifest.Git.Describe,
+		Date:      time.Now().UTC().Format(time.DateOnly),
+		Corpus:    corpusLabel(corpusInfo.Name, maxSeconds),
+		Carriers:  len(carriers),
+		Manifests: []runManifest{manifest},
 	}
 	if tool != nil {
 		rep.Perceptual = tool.Name
 	}
-	for _, spec := range harnessFormats(os.Getenv("MIST_HARNESS_FORMATS")) {
+	for _, spec := range formats {
 		s.T().Logf("measuring %s", spec)
 		rep.Formats = append(rep.Formats, measureFormat(s.T().Context(), spec, carriers, pub, tool, jobs))
 	}
@@ -115,12 +132,27 @@ func (s *HarnessSuite) TestMeasure() {
 	s.T().Log("\n" + md)
 }
 
-func corpusLabel(corpus string, maxSeconds int) string {
-	label := cmp.Or(corpus, "synthetic")
+func corpusLabel(name string, maxSeconds int) string {
+	label := cmp.Or(name, "external")
 	if maxSeconds > 0 {
 		label += fmt.Sprintf(", first %d s of each carrier", maxSeconds)
 	}
 	return label
+}
+
+func harnessPublicKey(spec string) ([]byte, error) {
+	if spec == "" {
+		pub, _, err := GenerateKeyPair()
+		return pub, err
+	}
+	pub, err := hex.DecodeString(spec)
+	if err != nil {
+		return nil, fmt.Errorf("MIST_HARNESS_PUBLIC_KEY_HEX: %w", err)
+	}
+	if len(pub) != 32 {
+		return nil, fmt.Errorf("MIST_HARNESS_PUBLIC_KEY_HEX: got %d bytes, want 32", len(pub))
+	}
+	return pub, nil
 }
 
 func harnessFormats(spec string) []string {
@@ -184,10 +216,11 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	var clean, own, stegoFeatures, minimal [][]chunk
 	var keyStego, keyClean scored
 	var categories []string
+	var identities []scoreIdentity
 	var transcode, stegoSDR, gap, added, drop []float64
 	for i, run := range runs {
 		if errs[i] != nil {
-			fr.Skipped = append(fr.Skipped, skippedCarrier{Name: carriers[i].name, Reason: errs[i].Error()})
+			fr.Skipped = append(fr.Skipped, skippedCarrier{Name: carriers[i].name, Reason: redactLocalPaths(errs[i].Error())})
 			continue
 		}
 		fr.Measured++
@@ -196,8 +229,12 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 		stegoFeatures = append(stegoFeatures, run.stego)
 		minimal = append(minimal, run.minimal)
 		categories = append(categories, carriers[i].category)
-		keyStego.add(run.keyStego, i)
-		keyClean.add(run.keyClean, i)
+		group := len(identities)
+		identities = append(identities, scoreIdentity{
+			Carrier: carriers[i].name, Category: carriers[i].category, Lineage: carriers[i].lineage,
+		})
+		keyStego.add(run.keyStego, group)
+		keyClean.add(run.keyClean, group)
 		transcode = append(transcode, run.transcode)
 		stegoSDR = append(stegoSDR, run.stegoSDR)
 		gap = append(gap, run.transcode-run.stegoSDR)
@@ -212,11 +249,13 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	if fr.Measured == 0 {
 		return fr
 	}
-	fr.Detectors = append(detectors(stegoFeatures, clean, minimal), detectorFrom(keyAwareName, keyStego, keyClean, 0.5))
+	fr.Detectors, fr.Raw.Operational = analyzeDetectors(stegoFeatures, clean, minimal, identities)
+	fr.Detectors = append(fr.Detectors, detectorFrom(keyAwareName, keyStego, keyClean, 0.5))
+	fr.Raw.Operational = append(fr.Raw.Operational, rawDetectorFrom(keyAwareName, keyStego, keyClean, scored{}, identities))
 	fr.Scaling = scaling(stegoFeatures, clean, minimal)
 	fr.Categories = byCategory(categories, stegoFeatures, clean, minimal)
 	fr.Pooled = pooled(stegoFeatures, clean, minimal)
-	fr.Embedding = detectors(stegoFeatures, own, minimal)
+	fr.Embedding, fr.Raw.Embedding = analyzeDetectors(stegoFeatures, own, minimal, identities)
 	fr.Transcode = summarize(transcode, minOf)
 	fr.Stego = summarize(stegoSDR, minOf)
 	fr.Gap = summarize(gap, maxOf)
@@ -237,7 +276,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 	if err != nil {
 		return carrierRun{}, err
 	}
-	twin, err := ffmpegTwin(ctx, em.target.Container, codecName, c.name, data)
+	twin, err := ffmpegTwin(ctx, em.target.Container, codecName, c.ext, data)
 	if err != nil {
 		return carrierRun{}, err
 	}
@@ -247,7 +286,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 		if err != nil {
 			return carrierRun{}, err
 		}
-		if sameLevel, err = ffmpegTwin(ctx, em.target.Container, codecName, c.name, data, "-q:a", strconv.Itoa(level)); err != nil {
+		if sameLevel, err = ffmpegTwin(ctx, em.target.Container, codecName, c.ext, data, "-q:a", strconv.Itoa(level)); err != nil {
 			return carrierRun{}, err
 		}
 	}
@@ -296,7 +335,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 		trace:     carrierTrace{Name: c.name, Source: ref.NbSamples, FFmpeg: defaultOut.trace, Mist: stegoDec.trace},
 	}
 	if tool != nil {
-		run.perceptual, err = perceptualDrop(ctx, *tool, c.name, ext, data, own, stegoOut)
+		run.perceptual, err = perceptualDrop(ctx, *tool, c.ext, ext, data, own, stegoOut)
 	}
 	return run, err
 }
@@ -305,13 +344,13 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 // plus any extra encoder arguments. That is the clean file a warden without
 // the original compares Mist's output against. Only the first audio stream
 // is kept, so cover art in an MP3 does not turn into a video stream.
-func ffmpegTwin(ctx context.Context, container, codecName, name string, data []byte, extra ...string) ([]byte, error) {
+func ffmpegTwin(ctx context.Context, container, codecName, carrierExt string, data []byte, extra ...string) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "mist-twin-*")
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	in, out := filepath.Join(dir, "carrier"+filepath.Ext(name)), filepath.Join(dir, "twin")
+	in, out := filepath.Join(dir, "carrier"+carrierExt), filepath.Join(dir, "twin")
 	if err := os.WriteFile(in, data, 0o600); err != nil {
 		return nil, err
 	}
@@ -320,8 +359,8 @@ func ffmpegTwin(ctx context.Context, container, codecName, name string, data []b
 		args = append(args, "-c:a", codecName)
 	}
 	args = append(append(args, extra...), "-f", container, out)
-	if msg, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("ffmpeg: %v: %s", err, bytes.TrimSpace(msg))
+	if msg, err := exec.CommandContext(ctx, harnessBinary("MIST_FFMPEG", "ffmpeg"), args...).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ffmpeg: %s", redactLocalPaths(fmt.Sprintf("%v: %s", err, bytes.TrimSpace(msg)), dir, in, out))
 	}
 	return os.ReadFile(out)
 }
@@ -500,6 +539,12 @@ type detectorScores struct {
 	pos, neg scored
 }
 
+type scoreIdentity struct {
+	Carrier  string
+	Category string
+	Lineage  string
+}
+
 func scoreAll(pos, neg [][]chunk) []detectorScores {
 	var out []detectorScores
 	for k, d := range steganalysis.Detectors() {
@@ -519,10 +564,61 @@ func scoreAll(pos, neg [][]chunk) []detectorScores {
 }
 
 func detectors(pos, neg, minimal [][]chunk) []detectorResult {
+	out, _ := analyzeDetectors(pos, neg, minimal, nil)
+	return out
+}
+
+func analyzeDetectors(pos, neg, minimal [][]chunk, identities []scoreIdentity) ([]detectorResult, []rawDetectorScores) {
 	own := scoreAll(pos, minimal)
 	var out []detectorResult
+	var raw []rawDetectorScores
 	for i, sc := range scoreAll(pos, neg) {
 		out = append(out, detectorFrom(sc.name, sc.pos, sc.neg, steganalysis.AUC(own[i].pos.vals, own[i].neg.vals)))
+		if identities != nil {
+			raw = append(raw, rawDetectorFrom(sc.name, sc.pos, sc.neg, own[i].neg, identities))
+		}
+	}
+	return out, raw
+}
+
+func rawDetectorFrom(name string, pos, neg, minimal scored, identities []scoreIdentity) rawDetectorScores {
+	out := rawDetectorScores{
+		Name:  name,
+		Stego: rawPopulationFrom(pos, identities),
+		Clean: rawPopulationFrom(neg, identities),
+	}
+	if len(minimal.vals) > 0 {
+		population := rawPopulationFrom(minimal, identities)
+		out.Minimal = &population
+	}
+	return out
+}
+
+func rawPopulationFrom(scores scored, identities []scoreIdentity) rawPopulation {
+	var out rawPopulation
+	chunks := map[int]int{}
+	for i, score := range scores.vals {
+		group := scores.groups[i]
+		if group < 0 || group >= len(identities) {
+			continue
+		}
+		identity := identities[group]
+		out.Chunks = append(out.Chunks, rawScore{
+			Carrier: identity.Carrier, Category: identity.Category, Lineage: identity.Lineage,
+			Chunk: chunks[group], Score: score,
+		})
+		chunks[group]++
+	}
+	files := scores.perFile()
+	for i, score := range files.vals {
+		group := files.groups[i]
+		if group < 0 || group >= len(identities) {
+			continue
+		}
+		identity := identities[group]
+		out.Files = append(out.Files, rawScore{
+			Carrier: identity.Carrier, Category: identity.Category, Lineage: identity.Lineage, Score: score,
+		})
 	}
 	return out
 }
@@ -651,23 +747,23 @@ func perceptualTool() *quality.Tool {
 	return nil
 }
 
-func perceptualDrop(ctx context.Context, tool quality.Tool, name, ext string, carrier, clean, stegoOut []byte) (float64, error) {
+func perceptualDrop(ctx context.Context, tool quality.Tool, carrierExt, ext string, carrier, clean, stegoOut []byte) (float64, error) {
 	dir, err := os.MkdirTemp("", "mist-harness-*")
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	files := map[string][]byte{
-		"carrier" + filepath.Ext(name): carrier,
-		"clean." + ext:                 clean,
-		"stego." + ext:                 stegoOut,
+		"carrier" + carrierExt: carrier,
+		"clean." + ext:         clean,
+		"stego." + ext:         stegoOut,
 	}
 	for f, b := range files {
 		if err := os.WriteFile(filepath.Join(dir, f), b, 0o600); err != nil {
 			return 0, err
 		}
 	}
-	ref := filepath.Join(dir, "carrier"+filepath.Ext(name))
+	ref := filepath.Join(dir, "carrier"+carrierExt)
 	cleanScore, err := tool.Score(ctx, ref, filepath.Join(dir, "clean."+ext))
 	if err != nil {
 		return 0, err
@@ -677,9 +773,5 @@ func perceptualDrop(ctx context.Context, tool quality.Tool, name, ext string, ca
 }
 
 func commit() string {
-	out, err := exec.Command("git", "describe", "--always", "--dirty").Output()
-	if err != nil {
-		return "unknown"
-	}
-	return strings.TrimSpace(string(out))
+	return inspectGit().Describe
 }

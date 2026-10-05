@@ -632,8 +632,8 @@ make test                        # verbose: -v -race -cover, full tracebacks
 make test LOG=trace              # ...and libav logging turned all the way up
 make test-quiet                  # same run, results only
 make lint                        # golangci-lint run --timeout=5m
-make harness CORPUS=~/music      # detectability and quality report -> harness-out/
-make cnn-warden CORPUS=~/music   # the same, plus a learned CNN warden (needs Python with torch)
+make harness CORPUS="$CORPUS" CORPUS_MANIFEST=testdata/harness/corpus.example.json
+make cnn-warden CORPUS="$CORPUS" CORPUS_MANIFEST=testdata/harness/corpus.example.json
 ```
 
 `make harness` re-encodes every file in `CORPUS` (or a built-in synthetic set
@@ -645,16 +645,22 @@ digital zeros, sample format and nominal bitrate. Then it reports how well four
 classical detectors, two cross-validated classifiers — one on general
 features, one on second-difference Markov features — and a warden who knows the
 recipient's public key tell the stego copy from each clean one, and how much
-embedding costs in SDR. With subfolders in `CORPUS` it also reports each folder
-on its own, how detection changes with the audio and the number of files a warden
-collects, and, after `make cnn-warden`, the result of a small CNN
-([tools/cnn_warden](tools/cnn_warden/README.md)). It needs `ffmpeg` on
-`PATH`. `FORMATS=ogg,flac` or `FORMATS=all` picks the targets (default: Ogg Vorbis
-and the verified lossless set), `JOBS=` sets how many carriers run at once, `MAX_SECONDS=` cuts each carrier to its first seconds (every carrier is held decoded several times, so hour-long tracks need it), and
-`BASELINE=` points at an earlier `report.json` to show what changed, and `MERGE=` joins the
-`report.json` files of separate runs (one per format, run side by side) into one report. It writes
-`report.md`, ready to paste into a pull request, and `report.json`. It is
-build-tagged, so `make test` and CI never run it.
+embedding costs in SDR. Point `CORPUS_MANIFEST` at a JSON file of public
+ids, categories and lineage groups (see `testdata/harness/corpus.example.json`)
+so reports never contain local filenames. Without a manifest, carriers are
+renamed `carrier-0001` and grouped as `external`. After `make cnn-warden`, the
+report also includes a small CNN
+([tools/cnn_warden](tools/cnn_warden/README.md)). `ffmpeg` is taken from
+`FFMPEG` / `MIST_FFMPEG` (default: `ffmpeg` on `PATH`). `FORMATS=ogg,flac` or
+`FORMATS=all` picks the targets (default: Ogg Vorbis and the verified lossless
+set), `JOBS=` sets how many carriers run at once, `MAX_SECONDS=` cuts each
+carrier to its first seconds (every carrier is held decoded several times, so
+hour-long tracks need it), `HARNESS_OUT=` chooses the output directory,
+`BASELINE=` points at an earlier `report.json` to show what changed, and
+`MERGE=` joins the `report.json` files of separate runs (one per format, run
+side by side) into one report. It writes `report.md`, `report.json`,
+`manifest.json` and `scores.json`. It is build-tagged, so `make test` and CI
+never run it.
 
 `make test` is deliberately loud: every test and subtest is named, `t.Log`
 output is shown, coverage is reported per package, `GOTRACEBACK=all` dumps

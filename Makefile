@@ -8,10 +8,22 @@ CODEC   ?=
 KEY     ?=
 TIMEOUT ?= 0
 CORPUS  ?=
+CORPUS_MANIFEST ?=
+CORPUS_NAME ?=
 FORMATS ?=
 BASELINE ?=
 HARNESS_OUT ?= harness-out
 JOBS ?=
+PUBLIC_KEY_HEX ?=
+FFMPEG ?= ffmpeg
+VISQOL ?= visqol
+PEAQ ?= peaq
+GIT ?= git
+PKG_CONFIG ?= pkg-config
+PYTHON ?= python3
+CNN_WARDEN ?= tools/cnn_warden/train.py
+CNN_EXPORT ?= $(HARNESS_OUT)/export
+CNN_OUT ?= $(HARNESS_OUT)/cnn.json
 
 # libav's own verbosity during a test run, on top of Go's -v:
 # quiet | error | warning | info | verbose | debug | trace
@@ -25,19 +37,29 @@ test:
 test-quiet:
 	go test -race -count=1 ./...
 
-# make harness [CORPUS=dir] [FORMATS=ogg,flac|all] [BASELINE=harness-out/report.json] [JOBS=4] [MAX_SECONDS=300] [MERGE=a/report.json,b/report.json]
-# Detectability and quality report for local runs; writes $(HARNESS_OUT)/report.{md,json}.
+# make harness [CORPUS=dir] [CORPUS_MANIFEST=testdata/harness/corpus.example.json]
+#   [CORPUS_NAME=public-name] [FORMATS=ogg,flac|all] [BASELINE=path/report.json]
+#   [HARNESS_OUT=harness-out] [JOBS=4] [MAX_SECONDS=300] [MERGE=a/report.json,b/report.json]
+#   [FFMPEG=ffmpeg] [VISQOL=visqol] [PEAQ=peaq] [GIT=git] [PKG_CONFIG=pkg-config]
+#   [PUBLIC_KEY_HEX=...] [CNN_OUT=$(HARNESS_OUT)/cnn.json]
+# Writes report.md/json, manifest.json and scores.json under $(HARNESS_OUT).
+# Every executable and filesystem path is an override; do not hard-code local
+# audio directories. Prefer CORPUS_MANIFEST so reports use public ids.
 harness:
 	MIST_CORPUS="$(CORPUS)" MIST_HARNESS_FORMATS="$(FORMATS)" \
+		MIST_HARNESS_CORPUS_MANIFEST="$(CORPUS_MANIFEST)" MIST_HARNESS_CORPUS_NAME="$(CORPUS_NAME)" \
 		MIST_HARNESS_BASELINE="$(BASELINE)" MIST_HARNESS_OUT="$(HARNESS_OUT)" MIST_HARNESS_JOBS="$(JOBS)" MIST_HARNESS_MAX_SECONDS="$(MAX_SECONDS)" MIST_HARNESS_MERGE="$(MERGE)" \
+		MIST_HARNESS_PUBLIC_KEY_HEX="$(PUBLIC_KEY_HEX)" MIST_HARNESS_CNN="$(CNN_OUT)" MIST_FFMPEG="$(FFMPEG)" MIST_VISQOL="$(VISQOL)" MIST_PEAQ="$(PEAQ)" MIST_GIT="$(GIT)" MIST_PKG_CONFIG="$(PKG_CONFIG)" \
 		go test -tags harness -run TestHarnessSuite -count=1 -timeout 0 -v .
 
-# make cnn-warden [CORPUS=dir] [FORMATS=ogg,flac|all]
-# Harness run with the export on, a CNN warden trained on it (tools/cnn_warden),
-# then the harness again so the report shows the CNN's result.
+# make cnn-warden [CORPUS=dir] [CORPUS_MANIFEST=...] [FORMATS=ogg,flac|all]
+#   [PYTHON=python3] [CNN_WARDEN=tools/cnn_warden/train.py]
+#   [CNN_EXPORT=$(HARNESS_OUT)/export] [CNN_OUT=$(HARNESS_OUT)/cnn.json]
+# Harness run with the export on, a CNN warden trained on it, then the harness
+# again so the report shows the CNN's result. All paths are overrides.
 cnn-warden:
-	MIST_HARNESS_EXPORT="$(HARNESS_OUT)/export" $(MAKE) harness
-	python3 tools/cnn_warden/train.py "$(HARNESS_OUT)/export" --out "$(HARNESS_OUT)/cnn.json"
+	MIST_HARNESS_EXPORT="$(CNN_EXPORT)" $(MAKE) harness
+	"$(PYTHON)" "$(CNN_WARDEN)" "$(CNN_EXPORT)" --out "$(CNN_OUT)"
 	$(MAKE) harness
 
 lint:

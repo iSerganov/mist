@@ -4,6 +4,7 @@ package mist
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"math"
@@ -20,17 +21,42 @@ const harnessSeconds = 16
 type harnessCarrier struct {
 	name     string
 	category string
+	lineage  string
+	license  string
+	ext      string
 	load     func() ([]byte, error)
 }
 
-// rootCategory names the carriers that sit directly in the corpus directory.
-const rootCategory = "(top level)"
+type corpusDescription struct {
+	Name    string
+	License string
+}
+
+type corpusFile struct {
+	Name     string              `json:"name"`
+	License  string              `json:"license,omitempty"`
+	Carriers []corpusFileCarrier `json:"carriers"`
+}
+
+type corpusFileCarrier struct {
+	Path     string `json:"path"`
+	ID       string `json:"id"`
+	Category string `json:"category"`
+	Lineage  string `json:"lineage"`
+	License  string `json:"license,omitempty"`
+}
 
 type signal func(t float64, rng *rand.Rand) float64
 
-func loadCarriers(dir string, maxSeconds int) ([]harnessCarrier, error) {
+func loadCarriers(dir, manifestPath string, maxSeconds int) ([]harnessCarrier, corpusDescription, error) {
 	if dir == "" {
-		return syntheticCarriers(), nil
+		if manifestPath != "" {
+			return nil, corpusDescription{}, fmt.Errorf("corpus manifest needs a corpus directory")
+		}
+		return syntheticCarriers(), corpusDescription{Name: "synthetic", License: "generated"}, nil
+	}
+	if manifestPath != "" {
+		return loadManifestCarriers(dir, manifestPath, maxSeconds)
 	}
 	var out []harnessCarrier
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -41,14 +67,70 @@ func loadCarriers(dir string, maxSeconds int) ([]harnessCarrier, error) {
 		if err != nil {
 			return err
 		}
-		category := rootCategory
-		if dir, _, nested := strings.Cut(filepath.ToSlash(rel), "/"); nested {
-			category = dir
-		}
-		out = append(out, harnessCarrier{name: rel, category: category, load: func() ([]byte, error) { return readCarrier(path, maxSeconds) }})
+		id := fmt.Sprintf("carrier-%04d", len(out)+1)
+		source := path
+		out = append(out, harnessCarrier{
+			name: id, category: "external", lineage: id, license: "unspecified",
+			ext: filepath.Ext(rel), load: carrierLoader(id, source, maxSeconds),
+		})
 		return nil
 	})
-	return out, err
+	return out, corpusDescription{Name: "external", License: "unspecified"}, err
+}
+
+func loadManifestCarriers(dir, manifestPath string, maxSeconds int) ([]harnessCarrier, corpusDescription, error) {
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, corpusDescription{}, fmt.Errorf("read corpus manifest: %w", err)
+	}
+	var manifest corpusFile
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return nil, corpusDescription{}, fmt.Errorf("parse corpus manifest: %w", err)
+	}
+	if manifest.Name == "" {
+		return nil, corpusDescription{}, fmt.Errorf("corpus manifest: name is required")
+	}
+	seen := map[string]bool{}
+	out := make([]harnessCarrier, 0, len(manifest.Carriers))
+	for i, entry := range manifest.Carriers {
+		clean := filepath.Clean(entry.Path)
+		if entry.Path == "" || filepath.IsAbs(entry.Path) || clean == ".." ||
+			strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, corpusDescription{}, fmt.Errorf("corpus manifest: carrier %d path must stay below the corpus directory", i)
+		}
+		if entry.ID == "" || strings.ContainsAny(entry.ID, `/\`) {
+			return nil, corpusDescription{}, fmt.Errorf("corpus manifest: carrier %d id must be a path-free public identifier", i)
+		}
+		if seen[entry.ID] {
+			return nil, corpusDescription{}, fmt.Errorf("corpus manifest: duplicate id %q", entry.ID)
+		}
+		seen[entry.ID] = true
+		if entry.Category == "" || entry.Lineage == "" {
+			return nil, corpusDescription{}, fmt.Errorf("corpus manifest: carrier %q needs category and lineage", entry.ID)
+		}
+		source := filepath.Join(dir, clean)
+		license := entry.License
+		if license == "" {
+			license = manifest.License
+		}
+		out = append(out, harnessCarrier{
+			name: entry.ID, category: entry.Category, lineage: entry.Lineage,
+			license: license, ext: filepath.Ext(clean),
+			load: carrierLoader(entry.ID, source, maxSeconds),
+		})
+	}
+	return out, corpusDescription{Name: manifest.Name, License: manifest.License}, nil
+}
+
+func carrierLoader(id, source string, maxSeconds int) func() ([]byte, error) {
+	return func() ([]byte, error) {
+		data, err := readCarrier(source, maxSeconds)
+		if err == nil {
+			return data, nil
+		}
+		message := redactLocalPaths(err.Error(), source)
+		return nil, fmt.Errorf("carrier %q: %s", id, message)
+	}
 }
 
 // readCarrier reads path whole, or its first maxSeconds seconds when that is
@@ -66,7 +148,7 @@ func readCarrier(path string, maxSeconds int) ([]byte, error) {
 	defer func() { _ = os.RemoveAll(dir) }()
 	out := filepath.Join(dir, "cut"+filepath.Ext(path))
 	args := []string{"-nostdin", "-loglevel", "error", "-i", path, "-map", "0:a:0", "-t", strconv.Itoa(maxSeconds), "-c", "copy", out}
-	if msg, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+	if msg, err := exec.Command(harnessBinary("MIST_FFMPEG", "ffmpeg"), args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("ffmpeg cut: %v: %s", err, bytes.TrimSpace(msg))
 	}
 	return os.ReadFile(out)
@@ -75,7 +157,7 @@ func readCarrier(path string, maxSeconds int) ([]byte, error) {
 func syntheticCarriers() []harnessCarrier {
 	noise := wav(44100, 2, 44100*harnessSeconds)
 	return []harnessCarrier{
-		{name: "white-noise-44k-stereo.wav", load: func() ([]byte, error) { return noise, nil }},
+		{name: "white-noise-44k-stereo", category: "synthetic", lineage: "white-noise-44k-stereo", license: "generated", ext: ".wav", load: func() ([]byte, error) { return noise, nil }},
 		synth("shaped-noise-48k-stereo.wav", 48000, 2, 16, shapedNoise),
 		synth("shaped-noise-48k-stereo-24bit.wav", 48000, 2, 24, shapedNoise),
 		synth("tones-noise-44k-mono.wav", 44100, 1, 16, tonesNoise),
@@ -102,7 +184,11 @@ func synth(name string, rate, ch, bits int, newSignal func() signal) harnessCarr
 		}
 	}
 	data := wavBytes(rate, ch, bits, pcm)
-	return harnessCarrier{name: name, load: func() ([]byte, error) { return data, nil }}
+	id := strings.TrimSuffix(name, filepath.Ext(name))
+	return harnessCarrier{
+		name: id, category: "synthetic", lineage: id, license: "generated", ext: filepath.Ext(name),
+		load: func() ([]byte, error) { return data, nil },
+	}
 }
 
 func shapedNoise() signal {

@@ -21,11 +21,13 @@ type harnessReport struct {
 	Corpus     string         `json:"corpus"`
 	Carriers   int            `json:"carriers"`
 	Perceptual string         `json:"perceptual,omitempty"`
+	Manifests  []runManifest  `json:"manifests"`
 	Formats    []formatReport `json:"formats"`
 }
 
 type formatReport struct {
 	Format         string           `json:"format"`
+	Run            int              `json:"run"`
 	Error          string           `json:"error,omitempty"`
 	Measured       int              `json:"measured"`
 	Skipped        []skippedCarrier `json:"skipped,omitempty"`
@@ -35,6 +37,7 @@ type formatReport struct {
 	Categories     []categoryRow    `json:"categories,omitempty"`
 	Pooled         []pooledRow      `json:"pooled,omitempty"`
 	CNN            *cnnResult       `json:"cnn,omitempty"`
+	Raw            rawFormatScores  `json:"raw_scores,omitempty"`
 	Traces         []carrierTrace   `json:"traces,omitempty"`
 	Transcode      stat             `json:"transcode_sdr"`
 	Stego          stat             `json:"stego_sdr"`
@@ -42,6 +45,31 @@ type formatReport struct {
 	Added          stat             `json:"added_sdr"`
 	PerceptualDrop *stat            `json:"perceptual_drop,omitempty"`
 	Carriers       []carrierResult  `json:"carriers,omitempty"`
+}
+
+type rawFormatScores struct {
+	Operational []rawDetectorScores `json:"operational,omitempty"`
+	Embedding   []rawDetectorScores `json:"embedding,omitempty"`
+}
+
+type rawDetectorScores struct {
+	Name    string         `json:"name"`
+	Stego   rawPopulation  `json:"stego"`
+	Clean   rawPopulation  `json:"clean"`
+	Minimal *rawPopulation `json:"minimal,omitempty"`
+}
+
+type rawPopulation struct {
+	Chunks []rawScore `json:"chunks,omitempty"`
+	Files  []rawScore `json:"files,omitempty"`
+}
+
+type rawScore struct {
+	Carrier  string  `json:"carrier"`
+	Category string  `json:"category"`
+	Lineage  string  `json:"lineage"`
+	Chunk    int     `json:"chunk,omitempty"`
+	Score    float64 `json:"score"`
 }
 
 // scalingRow is every detector's result on the first Chunks chunks of each
@@ -54,18 +82,32 @@ type scalingRow struct {
 // cnnResult is the external CNN warden's score for a format, read from the
 // cnn.json that tools/cnn_warden writes.
 type cnnResult struct {
-	Files  int     `json:"files"`
-	AUC    float64 `json:"auc"`
-	Lo     float64 `json:"lo"`
-	Hi     float64 `json:"hi"`
-	Epochs int     `json:"epochs"`
+	Files  int        `json:"files"`
+	AUC    float64    `json:"auc"`
+	Lo     float64    `json:"lo"`
+	Hi     float64    `json:"hi"`
+	Epochs int        `json:"epochs"`
+	Folds  int        `json:"folds,omitempty"`
+	Length int        `json:"length,omitempty"`
+	Batch  int        `json:"batch,omitempty"`
+	Rounds int        `json:"rounds,omitempty"`
+	Seed   int        `json:"seed,omitempty"`
+	Python string     `json:"python,omitempty"`
+	NumPy  string     `json:"numpy,omitempty"`
+	Torch  string     `json:"torch,omitempty"`
+	Scores []cnnScore `json:"scores,omitempty"`
 }
 
-// attachCNN adds the CNN warden's results from dir/cnn.json, if the file
-// exists. The export directory names a format with "-" where the format
-// has "/".
-func (r *harnessReport) attachCNN(dir string) error {
-	raw, err := os.ReadFile(filepath.Join(dir, "cnn.json"))
+type cnnScore struct {
+	Carrier string  `json:"carrier"`
+	Clean   float64 `json:"clean"`
+	Stego   float64 `json:"stego"`
+}
+
+// attachCNN adds the CNN warden's results from path, if it exists. The
+// export directory names a format with "-" where the format has "/".
+func (r *harnessReport) attachCNN(path string) error {
+	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -90,7 +132,7 @@ func (f formatReport) cnnTable(b *strings.Builder) {
 	}
 	elo, ehi := detectorResult{FileLo: f.CNN.Lo, FileHi: f.CNN.Hi}.epsilonRange()
 	fmt.Fprintf(b, "\n### A learned warden\n\nA small CNN trained on the first 16 chunks of each carrier, five folds split by carrier, one score per file (`tools/cnn_warden`).\n\n"+
-		"| Detector | Carriers | File AUC (95%%) | ε ≥ (nats, 95%%) |\n|---|---|---|---|\n| cnn | %d | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) |\n",
+		"| Detector | Carriers | File AUC (95%%) | Detector-implied benchmark KL lower bound (nats, 95%%) |\n|---|---|---|---|\n| cnn | %d | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) |\n",
 		f.CNN.Files, f.CNN.AUC, f.CNN.Lo, f.CNN.Hi, epsilon(f.CNN.AUC), elo, ehi)
 }
 
@@ -246,7 +288,8 @@ func (r harnessReport) write(dir string, baseline *harnessReport) (string, error
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if err := r.attachCNN(dir); err != nil {
+	cnn := cmp.Or(os.Getenv("MIST_HARNESS_CNN"), filepath.Join(dir, "cnn.json"))
+	if err := r.attachCNN(cnn); err != nil {
 		return "", err
 	}
 	js, err := json.MarshalIndent(r, "", "  ")
@@ -254,6 +297,40 @@ func (r harnessReport) write(dir string, baseline *harnessReport) (string, error
 		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "report.json"), append(js, '\n'), 0o644); err != nil {
+		return "", err
+	}
+	manifestBundle := struct {
+		Schema int           `json:"schema"`
+		Runs   []runManifest `json:"runs"`
+	}{Schema: harnessReportSchema, Runs: r.Manifests}
+	manifest, err := json.MarshalIndent(manifestBundle, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(manifest, '\n'), 0o644); err != nil {
+		return "", err
+	}
+	scores := struct {
+		Schema  int    `json:"schema"`
+		Commit  string `json:"commit"`
+		Formats []struct {
+			Format string          `json:"format"`
+			Run    int             `json:"run"`
+			Raw    rawFormatScores `json:"scores"`
+		} `json:"formats"`
+	}{Schema: harnessReportSchema, Commit: r.Commit}
+	for _, f := range r.Formats {
+		scores.Formats = append(scores.Formats, struct {
+			Format string          `json:"format"`
+			Run    int             `json:"run"`
+			Raw    rawFormatScores `json:"scores"`
+		}{Format: f.Format, Run: f.Run, Raw: f.Raw})
+	}
+	scoreJSON, err := json.MarshalIndent(scores, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scores.json"), append(scoreJSON, '\n'), 0o644); err != nil {
 		return "", err
 	}
 	md := r.markdown(baseline)
@@ -387,8 +464,9 @@ func extraError(gap num) string {
 
 func (r harnessReport) markdown(baseline *harnessReport) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Mist harness report\n\nCommit `%s` · %s · corpus: %s (%d carriers) · perceptual metric: %s",
-		r.Commit, r.Date, r.Corpus, r.Carriers, cmp.Or(r.Perceptual, "not installed"))
+	manifest := r.primaryManifest()
+	fmt.Fprintf(&b, "# Mist harness report\n\nCommit `%s` · %s · corpus: %s (%d carriers, %d independent lineage groups) · perceptual metric: %s",
+		r.Commit, r.Date, r.Corpus, r.Carriers, manifest.Corpus.IndependentGroups, cmp.Or(r.Perceptual, "not installed"))
 	if baseline != nil {
 		fmt.Fprintf(&b, " · compared with commit `%s`", baseline.Commit)
 	}
@@ -416,8 +494,15 @@ func (r harnessReport) markdown(baseline *harnessReport) string {
 	return b.String()
 }
 
+func (r harnessReport) primaryManifest() runManifest {
+	if len(r.Manifests) == 0 {
+		return runManifest{}
+	}
+	return r.Manifests[0]
+}
+
 func detectorTable(b *strings.Builder, ds []detectorResult, base *formatReport) {
-	b.WriteString("| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |")
+	b.WriteString("| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | Detector-implied benchmark KL lower bound (nats, 95%) | Verdict | Message size |")
 	if base != nil {
 		b.WriteString(" AUC change |")
 	}
@@ -467,7 +552,7 @@ func (f formatReport) categoryTable(b *strings.Builder) {
 	if len(f.Categories) == 0 {
 		return
 	}
-	b.WriteString("\n### By kind of audio\n\nFile AUC (95%) against the clean ffmpeg copy, per corpus folder. The count is carriers; few carriers means a wide interval.\n\n| Detector |")
+	b.WriteString("\n### By kind of audio\n\nFile AUC (95%) against the clean ffmpeg copy, per public category from the corpus manifest. The count is carriers; few carriers means a wide interval.\n\n| Detector |")
 	rule := "|---|"
 	for _, c := range f.Categories {
 		fmt.Fprintf(b, " %s (%d) |", c.Name, c.Carriers)
@@ -608,11 +693,10 @@ bootstrapped by carrier: each round redraws whole carriers, with all their chunk
 not independent. Their width reflects how many carriers there are, not how many chunks. The verdict is the worse
 of the chunk and file verdicts.
 
-**ε ≥** is what the file AUC proves about Mist in Cachin's sense, where a scheme is ε-secure when the relative
-entropy between clean and stego files is at most ε. A detector's |AUC − ½| is at most the total variation between
-the two, and Pinsker's inequality turns that into ε ≥ 2(AUC − ½)² nats. It is a **lower bound** only: a detector
-at chance shows that this detector found no gap, not that ε is small. The bracket applies the same formula across
-the file AUC's interval.
+The **detector-implied benchmark KL lower bound** applies Pinsker's inequality to the file AUC:
+|AUC − ½| is at most the total variation between the benchmark clean and stego populations, so
+KL ≥ 2(AUC − ½)² nats. This is only weak attack evidence for this detector and benchmark. It is not an estimate
+or upper bound for Cachin's ε; a detector at chance shows that this detector found no gap, not that KL is small.
 
 Chi-square, SPA and RS look for bits being overwritten, which Mist never does, so they are expected to sit at
 chance; a rise means the embedder has drifted. HCF-COM looks for ±1 changes, which is exactly what Mist does,

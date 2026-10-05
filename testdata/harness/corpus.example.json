@@ -1,0 +1,18 @@
+{
+  "name": "example-public-corpus",
+  "license": "CC0-1.0",
+  "carriers": [
+    {
+      "path": "speech/session-a.flac",
+      "id": "speech-session-a",
+      "category": "speech",
+      "lineage": "session-a"
+    },
+    {
+      "path": "music/session-b.wav",
+      "id": "music-session-b",
+      "category": "music",
+      "lineage": "session-b"
+    }
+  ]
+}

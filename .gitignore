@@ -30,6 +30,27 @@ go.work.sum
 
 bin/
 harness-out/
+grok-measure/
+export/
+
+# Harness/CNN data and locally generated keys never belong in source control.
+keys/
+*.key
+*.pem
+*.clean.i32
+*.stego.i32
+
+# Carriers and local embed outputs can contain private or licensed audio.
+*.mp3
+*.flac
+*.wav
+*.ogg
+*.opus
+*.m4a
+*.aiff
+*.caf
+*.tta
+*.wv
 
 # Editor/IDE
 # .idea/
