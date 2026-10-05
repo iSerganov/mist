@@ -20,7 +20,7 @@ import (
 	"github.com/iSerganov/mist/internal/stego"
 )
 
-const harnessReportSchema = 4
+const harnessReportSchema = 5
 
 type runManifest struct {
 	Schema     int                `json:"schema"`
@@ -132,6 +132,9 @@ type experimentManifest struct {
 	Power              float64   `json:"power"`
 	PlannedConditions  []string  `json:"planned_conditions"`
 	ExecutedConditions []string  `json:"executed_conditions"`
+	CanonicalWorkflow  string    `json:"canonical_workflow"`
+	MetadataThreshold  string    `json:"metadata_threshold"`
+	MetadataFeatures   []string  `json:"metadata_features"`
 }
 
 func harnessBinary(env, fallback string) string {
@@ -176,9 +179,13 @@ func makeRunManifest(
 			Formats: formats, Jobs: jobs, ChunkValues: harnessChunk,
 			BootstrapRounds: harnessRounds, Seed: harnessSeed, Folds: harnessFolds,
 			PayloadBytes: 64, MinimalBytes: 1,
-			CleanControls: []string{"ffmpeg-default", "ffmpeg-matched-quality", "mist-clean"},
-			ScoreUnit:     "chunks grouped by lineage; files stay one per recording",
-			Classifier:    "L2-regularised logistic regression, z-scored on the training fold, nested lineage-grouped CV",
+			CleanControls: []string{
+				"ffmpeg-default (separate threat model; not the fingerprint verdict)",
+				"ffmpeg-canonical (vorbis -q:a at Mist's level; lossless defaults)",
+				"mist-clean",
+			},
+			ScoreUnit:  "chunks grouped by lineage; files stay one per recording",
+			Classifier: "L2-regularised logistic regression, z-scored on the training fold, nested lineage-grouped CV",
 			Features: []string{
 				"classical detector scores",
 				"histogram share at -3..3",
@@ -191,6 +198,9 @@ func makeRunManifest(
 			PowerTarget:        harnessPowerTarget,
 			Power:              harnessPower,
 			PlannedConditions:  conditionCatalog(),
+			CanonicalWorkflow:  canonicalWorkflow,
+			MetadataThreshold:  metaThreshold,
+			MetadataFeatures:   append([]string(nil), metaFeatureNames...),
 			ExecutedConditions: executedConditions(),
 		},
 	}, nil

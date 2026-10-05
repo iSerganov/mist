@@ -176,5 +176,18 @@ func (m *Muxer) Info() AudioInfo { return m.info }
 // was written at want the demuxer's own probed AudioInfo, not this.
 func (d *Decoder) Info() AudioInfo { return d.info }
 
-// Info returns the encoder parameters.
-func (e *Encoder) Info() AudioInfo { return e.info }
+// Info returns the encoder parameters. It re-reads them: a FLAC encoder
+// writes the MD5 and the total sample count into its extradata only once
+// it has been flushed, and the muxer copies that blob into STREAMINFO.
+func (e *Encoder) Info() AudioInfo {
+	if e == nil {
+		return AudioInfo{}
+	}
+	if e.handle != nil {
+		container := e.info.Container
+		if err := avEncInfo(e); err == nil {
+			e.info.Container = container
+		}
+	}
+	return e.info
+}

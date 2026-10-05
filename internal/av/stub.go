@@ -24,6 +24,8 @@ func avNewDecoder(AudioInfo) (*Decoder, error) { return nil, errUnimplemented }
 
 func avNewEncoder(AudioInfo) (*Encoder, error) { return nil, errUnimplemented }
 
+func avEncInfo(*Encoder) error { return errUnimplemented }
+
 func avDemuxRead(*Demuxer) (Packet, error) { return Packet{}, errUnimplemented }
 
 func avDemuxClose(*Demuxer) error { return nil }

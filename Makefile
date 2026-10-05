@@ -17,6 +17,7 @@ HARNESS_OUT ?= harness-out
 JOBS ?=
 PUBLIC_KEY_HEX ?=
 FFMPEG ?= ffmpeg
+FFPROBE ?= ffprobe
 VISQOL ?= visqol
 PEAQ ?= peaq
 GIT ?= git
@@ -41,7 +42,7 @@ test-quiet:
 # make harness [CORPUS=dir] [CORPUS_MANIFEST=testdata/harness/corpus.example.json]
 #   [CORPUS_NAME=public-name] [FORMATS=ogg,flac|all] [BASELINE=path/report.json]
 #   [HARNESS_OUT=harness-out] [JOBS=4] [MAX_SECONDS=300] [MERGE=a/report.json,b/report.json]
-#   [FFMPEG=ffmpeg] [VISQOL=visqol] [PEAQ=peaq] [GIT=git] [PKG_CONFIG=pkg-config]
+#   [FFMPEG=ffmpeg] [FFPROBE=ffprobe] [VISQOL=visqol] [PEAQ=peaq] [GIT=git] [PKG_CONFIG=pkg-config]
 #   [PUBLIC_KEY_HEX=...] [CNN_OUT=$(HARNESS_OUT)/cnn.json]
 # Writes report.md/json, manifest.json and scores.json under $(HARNESS_OUT).
 # Every executable and filesystem path is an override; do not hard-code local
@@ -57,7 +58,7 @@ harness:
 	MIST_CORPUS="$(CORPUS)" MIST_HARNESS_FORMATS="$(FORMATS)" \
 		MIST_HARNESS_CORPUS_MANIFEST="$(CORPUS_MANIFEST)" MIST_HARNESS_CORPUS_NAME="$(CORPUS_NAME)" \
 		MIST_HARNESS_BASELINE="$(BASELINE)" MIST_HARNESS_OUT="$(HARNESS_OUT)" MIST_HARNESS_JOBS="$(JOBS)" MIST_HARNESS_MAX_SECONDS="$(MAX_SECONDS)" MIST_HARNESS_MERGE="$(MERGE)" \
-		MIST_HARNESS_PUBLIC_KEY_HEX="$(PUBLIC_KEY_HEX)" MIST_HARNESS_CNN="$(CNN_OUT)" MIST_FFMPEG="$(FFMPEG)" MIST_VISQOL="$(VISQOL)" MIST_PEAQ="$(PEAQ)" MIST_GIT="$(GIT)" MIST_PKG_CONFIG="$(PKG_CONFIG)" \
+		MIST_HARNESS_PUBLIC_KEY_HEX="$(PUBLIC_KEY_HEX)" MIST_HARNESS_CNN="$(CNN_OUT)" MIST_FFMPEG="$(FFMPEG)" MIST_FFPROBE="$(FFPROBE)" MIST_VISQOL="$(VISQOL)" MIST_PEAQ="$(PEAQ)" MIST_GIT="$(GIT)" MIST_PKG_CONFIG="$(PKG_CONFIG)" \
 		go test -tags harness -run TestHarnessSuite -count=1 -timeout 0 -v .
 
 # make cnn-warden [CORPUS=dir] [CORPUS_MANIFEST=...] [FORMATS=ogg,flac|all]

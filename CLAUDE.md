@@ -208,12 +208,15 @@ OpenSSL emits PKCS#8/SPKI DER, whose last 32 bytes are the key — so its output
 interoperates with `crypto/ecdh` and the CLI's own hex format.
 `harness` takes `CORPUS=`, `CORPUS_MANIFEST=`, `CORPUS_NAME=`, `FORMATS=` (a
 list, or `all`), `JOBS=`, `BASELINE=`, `HARNESS_OUT=`, and tool paths
-(`FFMPEG`, `VISQOL`, `PEAQ`, `GIT`, `PKG_CONFIG`). It writes `report.md`,
+(`FFMPEG`, `FFPROBE`, `VISQOL`, `PEAQ`, `GIT`, `PKG_CONFIG`). It writes `report.md`,
 `report.json`, `manifest.json` and `scores.json` under `HARNESS_OUT`. Reports
 must use public carrier ids: pass a corpus manifest, or accept anonymous
 `carrier-NNNN` ids. A manifest carrier with `split: sealed` is hashed and not
 scored; `MIST_HARNESS_UNSEAL=1` scores that split instead and leaves the
-development carriers out, so one run never trains on both. `make corpus CORPUS_OUT=`
+development carriers out, so one run never trains on both. The fingerprint verdict
+compares Mist with the canonical workflow: Vorbis at the `-q:a` level Mist chose,
+lossless at ffmpeg's defaults. Default ffmpeg is a labeled second threat model.
+`MIST_FFPROBE` (`FFPROBE`) supplies the audio-blind metadata warden. `make corpus CORPUS_OUT=`
 writes a generated PCM set plus that holdout, and the directory must sit outside
 the checkout. Never commit local audio paths. It is never part of
 `make test` or CI: it needs a corpus and minutes, and its numbers are read,
@@ -228,7 +231,7 @@ the decoding and hands them `[]int32` values and `[][]float32` planes.
 
 Phase 1 is feature-complete end to end, with a `cmd/mist` CLI over it. All internal packages are implemented; `Emitter` embeds text and `Catcher` recovers it via `Listen` / `ListenReader` / `Extract`. Output is Ogg Vorbis or any lossless codec the installed FFmpeg can encode — verified end to end for FLAC, WAV, ALAC, WavPack, TTA, AIFF and CAF. `make harness` measures detectability and quality per output format, against a plain ffmpeg encode of the same carrier. A historical 84-carrier run (see `REPORT.md`; not bound to a Phase 0 manifest) found no detector's aggregate file AUC above 0.55 for FLAC or WAV, while the key-aware warden sat at chance. That is not undetectable: scored within one kind of audio, the classifier separated several categories. Bind any later claim to that run's commit, corpus name and independent lineage count. Embedding costs under 0.05 dB of SDR beyond a plain re-encode, and lossless output leaves digital silence untouched. A warden holding the original carrier can diff against it, which the harness cannot measure.
 
-Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic for the Vorbis path only — it ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time), and it does not describe a lossless target at all, which holds far more (`EstimateCapacity`, and the `mist estimate` command built on it, report the real number instead, at the cost of decoding and re-encoding the carrier); `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either; a FLAC written to a non-seekable writer has no total sample count or MD5 in STREAMINFO, which ffmpeg writing a file fills in.
+Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic for the Vorbis path only — it ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time), and it does not describe a lossless target at all, which holds far more (`EstimateCapacity`, and the `mist estimate` command built on it, report the real number instead, at the cost of decoding and re-encoding the carrier); `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either.
 
 ## Design principles
 

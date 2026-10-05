@@ -20,8 +20,10 @@
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
 #include <libavutil/intreadwrite.h>
+#include <libavutil/avstring.h>
 #include <libavutil/mem.h>
 #include <libavutil/samplefmt.h>
+#include <libavcodec/version.h>
 #include <libswresample/swresample.h>
 
 extern int     mist_av_go_read(int id, uint8_t *buf, int buf_size);
@@ -487,6 +489,12 @@ mist_av_io *mist_av_io_new(int handle, int writable)
 		av_free(io);
 		return NULL;
 	}
+	/*
+	 * A seek callback is not enough. avio_alloc_context leaves seekable
+	 * clear, and the FLAC muxer will not rewrite STREAMINFO unless the
+	 * flag is set. The callback reports the size, so the IO is seekable.
+	 */
+	io->avio->seekable = AVIO_SEEKABLE_NORMAL;
 	return io;
 }
 
@@ -664,6 +672,19 @@ static mist_av_muxer *muxer_alloc(const char *url, const mist_av_audio_info *inf
 		avformat_free_context(m->fmt);
 		av_free(m);
 		return NULL;
+	}
+	/*
+	 * ffmpeg's CLI writes "Lavc<version> <codec>" into the stream metadata
+	 * (set_encoder_id). Ogg and FLAC copy that into the comment header.
+	 * A raw PCM muxer instead records its own Lavf ident, and putting the
+	 * Lavc string there makes the file unlike `ffmpeg` on WAV.
+	 */
+	const AVCodec *enc = avcodec_find_encoder(st->codecpar->codec_id);
+	if (enc != NULL && enc->name != NULL && strncmp(enc->name, "pcm_", 4) != 0) {
+		char *tag = av_asprintf("%s %s", LIBAVCODEC_IDENT, enc->name);
+		if (tag != NULL) {
+			av_dict_set(&st->metadata, "encoder", tag, AV_DICT_DONT_STRDUP_VAL);
+		}
 	}
 	if (io != NULL) {
 		m->fmt->pb = io->avio;
@@ -963,6 +984,21 @@ static enum AVSampleFormat pick_sample_fmt(const AVCodec *codec, AVCodecContext 
 	return best != AV_SAMPLE_FMT_NONE ? best : AV_SAMPLE_FMT_FLTP;
 }
 
+/* Largest power of two no greater than a tenth of a second, which is the
+ * FLAC block size the ffmpeg command line writes. */
+static int flac_cli_blocksize(int rate)
+{
+	int target = rate / 10;
+	int block = 16;
+	if (target < block) {
+		return block;
+	}
+	while ((block << 1) <= target && (block << 1) <= 65535) {
+		block <<= 1;
+	}
+	return block;
+}
+
 mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errbuf, int errlen, int *invalid)
 {
 	*invalid = 0;
@@ -999,6 +1035,15 @@ mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errb
 	}
 	av_channel_layout_default(&e->ctx->ch_layout, info->channels > 0 ? info->channels : 2);
 	e->ctx->time_base = (AVRational){1, e->ctx->sample_rate};
+	/*
+	 * flacenc keeps a frame size it was already given. The ffmpeg CLI's
+	 * filter supplies a power-of-two frame near a tenth of a second, so a
+	 * plain `ffmpeg -c:a flac` file uses that. Leaving this at 0 selects
+	 * the encoder's own 105 ms block (4608 samples at 44.1 kHz) instead.
+	 */
+	if (codec->id == AV_CODEC_ID_FLAC && e->ctx->frame_size <= 0) {
+		e->ctx->frame_size = flac_cli_blocksize(e->ctx->sample_rate);
+	}
 	int err = avcodec_open2(e->ctx, codec, NULL);
 	if (err < 0) {
 		set_averr(errbuf, errlen, err, "open encoder");

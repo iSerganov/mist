@@ -265,6 +265,7 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	if fr.Measured == 0 {
 		return fr
 	}
+	fr.Meta = scoreMetadata(fr.Traces, familyOf)
 	fr.Detectors, fr.Raw.Operational = analyzeDetectors(stegoFeatures, clean, minimal, identities, familyOf, true)
 	fr.Detectors = append(fr.Detectors, detectorFrom(keyAwareName, keyStego, keyClean, 0.5, true))
 	fr.Raw.Operational = append(fr.Raw.Operational, rawDetectorFrom(keyAwareName, keyStego, keyClean, scored{}, identities))
@@ -352,7 +353,11 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 		kbps:      stegoDec.trace.Kbps,
 		keyStego:  keyStego,
 		keyClean:  keyClean,
-		trace:     carrierTrace{Name: c.name, Source: ref.NbSamples, FFmpeg: defaultOut.trace, Mist: stegoDec.trace},
+		trace: carrierTrace{
+			Name: c.name, Source: ref.NbSamples,
+			SourceRate: info.SampleRate, SourceChannels: info.Channels, SourceFmt: sampleFmtName(info.SampleFmt),
+			FFmpeg: defaultOut.trace, Canonical: cleanOut.trace, Clean: ownOut.trace, Mist: stegoDec.trace,
+		},
 	}
 	if tool != nil {
 		run.perceptual, err = perceptualDrop(ctx, *tool, c.ext, ext, data, own, stegoOut)
@@ -402,8 +407,10 @@ func mistLevel(target av.Format, data []byte) (int, error) {
 }
 
 // mistTwin is the carrier through Mist's own encoder with nothing
-// embedded, so comparing it with the stego copy isolates the embedding
-// from everything else Mist's pipeline does differently from ffmpeg.
+// embedded, including the lossless grid snap Embed does before it
+// changes a sample. Comparing it with the stego copy isolates the
+// embedding from everything else Mist's pipeline does differently
+// from ffmpeg.
 func mistTwin(target av.Format, data []byte) ([]byte, error) {
 	pcm, info, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
@@ -414,6 +421,14 @@ func mistTwin(target av.Format, data []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = enc.Close() }()
+	// Embed snaps a lossless carrier onto the encoder grid before it changes
+	// anything. The clean twin has to do the same, or the comparison is a
+	// second resample rather than the pipeline with nothing embedded.
+	if target.Lossless {
+		if err := enc.Snap(pcm.Planes); err != nil {
+			return nil, err
+		}
+	}
 	rc, err := encodeAndMux(enc, pcm, nil)
 	if err != nil {
 		return nil, err

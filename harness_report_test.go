@@ -47,6 +47,7 @@ type formatReport struct {
 	CNN            *cnnResult        `json:"cnn,omitempty"`
 	Raw            rawFormatScores   `json:"raw_scores,omitempty"`
 	Traces         []carrierTrace    `json:"traces,omitempty"`
+	Meta           []metaResult      `json:"metadata,omitempty"`
 	Transcode      stat              `json:"transcode_sdr"`
 	Stego          stat              `json:"stego_sdr"`
 	Gap            stat              `json:"gap"`
@@ -411,9 +412,79 @@ func (f formatReport) fingerprint() (level, string) {
 		}
 	}
 	if n == 0 {
-		return pass, fmt.Sprintf("matches ffmpeg on all %d carriers", len(f.Traces))
+		return pass, fmt.Sprintf("matches the canonical ffmpeg encode on all %d carriers", len(f.Traces))
 	}
-	return fail, fmt.Sprintf("differs on %d of %d carriers: %s", n, len(f.Traces), strings.Join(names, ", "))
+	return fail, fmt.Sprintf("differs from the canonical ffmpeg encode on %d of %d carriers: %s", n, len(f.Traces), strings.Join(names, ", "))
+}
+
+func (f formatReport) defaultFingerprint() string {
+	odd := map[string]bool{}
+	var names []string
+	n := 0
+	for _, t := range f.Traces {
+		d := t.defaultDifferences()
+		if len(d) == 0 {
+			continue
+		}
+		n++
+		for _, x := range d {
+			if !odd[x] {
+				odd[x] = true
+				names = append(names, x)
+			}
+		}
+	}
+	if n == 0 {
+		return fmt.Sprintf("matches ffmpeg defaults on all %d carriers", len(f.Traces))
+	}
+	return fmt.Sprintf("differs from ffmpeg defaults on %d of %d carriers: %s. That is a separate threat model, not the canonical verdict", n, len(f.Traces), strings.Join(names, ", "))
+}
+
+func (f formatReport) metadataVerdict() (level, string) {
+	if len(f.Meta) == 0 {
+		return watch, "metadata warden not scored"
+	}
+	var failed []string
+	scored := 0
+	for _, m := range f.Meta {
+		if !m.Scored {
+			continue
+		}
+		scored++
+		if !m.Passed {
+			failed = append(failed, m.Question)
+		}
+	}
+	if scored == 0 {
+		return watch, "metadata warden not scored"
+	}
+	if len(failed) > 0 {
+		return fail, "metadata interval excludes 0.5: " + strings.Join(failed, ", ")
+	}
+	return pass, "metadata file intervals include 0.5"
+}
+
+func (f formatReport) metadataSection(b *strings.Builder) {
+	b.WriteString("\n### Audio-blind metadata\n\n" +
+		"This classifier sees ffprobe fields, container summaries and file size. It does not see samples. " +
+		"Two questions are scored apart: canonical ffmpeg against Mist-clean (a pipeline fingerprint) and Mist-clean against Mist-stego (an embedding side effect). " +
+		"The preregistered pass is a file interval that includes 0.5. An interval that excludes 0.5 is a failed objective.\n\n")
+	if len(f.Meta) == 0 {
+		b.WriteString("Not scored.\n")
+		return
+	}
+	b.WriteString("| Question | File AUC (95%) | D | Interval includes 0.5 |\n|---|---|---|---|\n")
+	for _, m := range f.Meta {
+		if !m.Scored {
+			fmt.Fprintf(b, "| %s | — | — | not scored |\n", m.Question)
+			continue
+		}
+		mark := "no"
+		if m.Passed {
+			mark = "yes"
+		}
+		fmt.Fprintf(b, "| %s | %.3f (%.3f–%.3f) | %.3f | %s |\n", m.Question, m.FileAUC, m.FileLo, m.FileHi, m.Detectability, mark)
+	}
 }
 
 // verdict judges both the chunk and the file score and reports the worse:
@@ -496,22 +567,24 @@ func (r harnessReport) markdown(baseline *harnessReport) string {
 	if baseline != nil {
 		fmt.Fprintf(&b, " · compared with commit `%s`", baseline.Commit)
 	}
-	b.WriteString("\n\nEvery carrier is encoded three times: by the ffmpeg command line at its own defaults (the *clean* copy, " +
-		"which is what a warden without the original would compare against), by Mist's own encoder with nothing embedded " +
-		"(Mist's *own* re-encode), and by Mist with a hidden message (the *stego* copy). The report asks whether the stego copy " +
-		"differs from the clean one in plain properties, whether a detector can tell them apart, and how much worse it sounds. " +
+	b.WriteString("\n\nEach carrier is compared as four files: ffmpeg at its defaults, ffmpeg at the canonical workflow, " +
+		"Mist with nothing embedded, and Mist with a hidden message. For Vorbis the canonical workflow is `ffmpeg -q:a N` " +
+		"at the level Mist chose. For a lossless codec it is ffmpeg's defaults, so those two files are the same encode. " +
+		"The fingerprint verdict is Mist against the canonical file. Default ffmpeg is a second threat model and does not " +
+		"decide that verdict. Detectors for Vorbis use the canonical file, so the quality setting is not the signal. " +
 		"[How to read this report](#how-to-read-this-report) explains every number and threshold.\n\n")
-	b.WriteString("## Summary\n\n| Format | Carriers | Looks like ffmpeg? | Hidden from detectors? | Audio quality |\n|---|---|---|---|---|\n")
+	b.WriteString("## Summary\n\n| Format | Carriers | Canonical ffmpeg? | Metadata warden? | Hidden from detectors? | Audio quality |\n|---|---|---|---|---|---|\n")
 	for _, f := range r.Formats {
 		if f.Error != "" || f.Measured == 0 {
-			fmt.Fprintf(&b, "| %s | %d / %d | not measured | not measured | not measured |\n", f.Format, f.Measured, f.Measured+len(f.Skipped))
+			fmt.Fprintf(&b, "| %s | %d / %d | not measured | not measured | not measured | not measured |\n", f.Format, f.Measured, f.Measured+len(f.Skipped))
 			continue
 		}
 		fl, ft := f.fingerprint()
+		ml, mt := f.metadataVerdict()
 		dl, dt := f.detection()
 		ql, qt := f.quality()
-		fmt.Fprintf(&b, "| %s | %d / %d | %s %s | %s %s | %s %s |\n",
-			f.Format, f.Measured, f.Measured+len(f.Skipped), fl.mark(), ft, dl.mark(), dt, ql.mark(), qt)
+		fmt.Fprintf(&b, "| %s | %d / %d | %s %s | %s %s | %s %s | %s %s |\n",
+			f.Format, f.Measured, f.Measured+len(f.Skipped), fl.mark(), ft, ml.mark(), mt, dl.mark(), dt, ql.mark(), qt)
 	}
 	for _, f := range r.Formats {
 		f.markdown(&b, baseline.format(f.Format))
@@ -719,19 +792,24 @@ func (f formatReport) markdown(b *strings.Builder, base *formatReport) {
 		return
 	}
 	fl, ft := f.fingerprint()
-	b.WriteString("\n### Does it look like a plain ffmpeg encode?\n\n" +
-		"The ffmpeg column is ffmpeg at its own defaults. Ogg Vorbis keeps the source's quality, so it differs from ffmpeg's default q3 whenever the carrier maps to another level.\n\n" +
-		"| Carrier | Source samples | Samples (ffmpeg / Mist) | Zero tail (ffmpeg / Mist) | Sample format (ffmpeg / Mist) | Nominal kbps (ffmpeg / Mist) | Differs in |\n" +
-		"|---|---|---|---|---|---|---|")
+	b.WriteString("\n### Does it match the canonical ffmpeg encode?\n\n" +
+		"Canonical means `ffmpeg -q:a N` at the level Mist chose for Vorbis, and ffmpeg's own defaults for a lossless codec. " +
+		"The verdict fails when Mist-clean or Mist-stego differs from that file on an identity field (length, trailing zeros, " +
+		"sample format, nominal rate, tags, FLAC STREAMINFO, Ogg granule and serial count). File size and packet size are left " +
+		"to the metadata warden. Ogg serial values are random and are not compared. Default ffmpeg is the next sentence, and it is a different threat model.\n\n" +
+		"| Carrier | Source samples | Samples (canonical / Mist) | Zero tail (canonical / Mist) | Sample format (canonical / Mist) | Nominal kbps (canonical / Mist) | Canonical differs | Default ffmpeg differs |\n" +
+		"|---|---|---|---|---|---|---|---|")
 	for _, t := range f.Traces {
-		fmt.Fprintf(b, "\n| %s | %d | %d / %d | %d / %d | %s / %s | %.0f / %.0f | %s |", t.Name, t.Source,
-			t.FFmpeg.Samples, t.Mist.Samples, t.FFmpeg.ZeroTail, t.Mist.ZeroTail,
-			t.FFmpeg.SampleFmt, t.Mist.SampleFmt, t.FFmpeg.NominalKbps, t.Mist.NominalKbps,
-			cmp.Or(strings.Join(t.differences(), ", "), "—"))
+		fmt.Fprintf(b, "\n| %s | %d | %d / %d | %d / %d | %s / %s | %.0f / %.0f | %s | %s |", t.Name, t.Source,
+			t.Canonical.Samples, t.Mist.Samples, t.Canonical.ZeroTail, t.Mist.ZeroTail,
+			t.Canonical.SampleFmt, t.Mist.SampleFmt, t.Canonical.NominalKbps, t.Mist.NominalKbps,
+			cmp.Or(strings.Join(t.differences(), ", "), "—"),
+			cmp.Or(strings.Join(t.defaultDifferences(), ", "), "—"))
 	}
-	fmt.Fprintf(b, "\n\n**Verdict:** %s %s.\n", fl.mark(), ft)
+	fmt.Fprintf(b, "\n\n**Verdict:** %s %s.\n\n%s.\n", fl.mark(), ft, f.defaultFingerprint())
+	f.metadataSection(b)
 
-	b.WriteString("\n### Can a detector tell?\n\nStego copy against the clean ffmpeg copy (for Ogg Vorbis, ffmpeg at the quality level Mist chose, so only the embedding differs).\n\n")
+	b.WriteString("\n### Can a detector tell?\n\nStego copy against the canonical ffmpeg copy, so the quality setting is not the signal.\n\n")
 	detectorTable(b, f.Detectors, base)
 	f.recordingNote(b)
 	f.powerNote(b)
@@ -844,6 +922,15 @@ more carriers, and to the carriers that remain. It does not retrain.
 **Message size** compares a 64-byte message with a 1-byte one. Mist changes the same amount of audio whatever
 the message, so this should read 0.5: anything else means the message length shows.
 
+**Canonical workflow** is ffmpeg -q:a N at the Vorbis level Mist chose, and ffmpeg's defaults for a lossless
+codec. The fingerprint verdict uses that file. A nominal-rate gap against ffmpeg's default quality is reported
+beside it and does not fail the verdict: that warden re-encoded at a different setting. Ogg serial numbers are
+random on every encode, so the audit compares how many serials a file has, not the number itself.
+
+**Metadata warden** is a logistic regression on file metadata only, with the same nested lineage folds as the
+audio classifier when there are at least four lineages. Its pass is a file interval that includes 0.5. File
+size and packet size are features here; they are not required to be equal.
+
 ### Audio quality
 
 **SDR** (signal-to-distortion ratio) is how loud the music is compared with the error added to it, in dB. Higher
@@ -862,7 +949,8 @@ mean.
 
 | Measure | ✅ | ⚠️ | ❌ |
 |---|---|---|---|
-| Plain properties | every carrier matches ffmpeg | — | any carrier differs |
+| Canonical properties | every carrier matches the canonical ffmpeg encode | — | any identity field differs |
+| Metadata warden | file interval includes 0.5 | not scored | interval excludes 0.5 |
 | Detector AUC | 95% interval includes 0.5 | interval excludes 0.5, AUC within 0.4–0.6 | AUC outside 0.4–0.6 |
 | Message size | 0.45–0.55 | — | outside 0.45–0.55 |
 | Embedding cost | ≤ 0.3 dB, or Mist output ≥ 70 dB SDR | 0.3–1 dB | over 1 dB |

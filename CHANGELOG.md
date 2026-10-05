@@ -54,13 +54,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is written at q8. The stream header then reads like an ordinary
   `ffmpeg -q:a N` encode. Vorbis capacity drops with the rate: a 128 kbps
   MP3 carrier holds about a third of what it did.
+- FLAC output now writes the sample count and MD5 into STREAMINFO after the
+  encoder is flushed, and uses the same block size as `ffmpeg -c:a flac`:
+  the largest power of two within a tenth of a second, rather than the
+  encoder's own 105 ms block. Ogg Vorbis comments carry the same `Lavc`
+  encoder tag the ffmpeg command line writes. Payload framing is unchanged,
+  so a file embedded before this still extracts.
 
 ### Added
 
+- The harness fingerprint verdict compares Mist with the canonical ffmpeg
+  workflow: Vorbis at the `-q:a` level Mist chose, and a lossless codec at
+  ffmpeg's defaults. Default ffmpeg stays a labeled second comparison, so a
+  nominal-rate gap against ffmpeg's default quality is not a failed verdict.
+  An audio-blind classifier scores file metadata only, separately for
+  canonical against Mist-clean and for Mist-clean against stego. Its pass is
+  a file interval that includes 0.5. Report schema is 5.
 - Corpus manifests can mark a sealed split. A harness run scores one split and
   records hashes of the carriers it did not score. `make corpus` writes a
   generated development set and a source-disjoint sealed holdout outside the
-  repository. Report schema is 4.
+  repository.
 - `make harness`: a local report on detectability and audio quality per
   output format, run on a music corpus or a built-in synthetic set. It
   measures four classical detectors (chi-square, SPA, RS, HCF-COM) and a
