@@ -19,6 +19,101 @@ import (
 
 const keyAwareName = "key-aware"
 
+// selectionScore is the warden who knows the recipient public key and reads
+// the LSB gap at the positions that key implies. The first chunk stands in
+// for frame 0: the harness value stream is not split on the same silence
+// mask Embed uses, so this is the operational approximation, not the
+// sender's private cost. A cover the warden does not hold is not an input.
+func selectionScore(vals []int32, pub []byte) (float64, error) {
+	if len(vals) == 0 {
+		return 0, nil
+	}
+	window := vals
+	if len(window) > harnessChunk {
+		window = window[:harnessChunk]
+	}
+	seed, err := crypto.PositionSeed(pub, 0)
+	if err != nil {
+		return 0, err
+	}
+	at := stego.NewSelector(seed, len(window)).Pick(stego.Covered(len(window)))
+	return steganalysis.ParityGap(window, at), nil
+}
+
+func (s *HarnessSuite) TestSelectionScoreSeesAPlantedBias() {
+	pub, _, err := crypto.GenerateX25519()
+	s.Require().NoError(err)
+	vals := make([]int32, 4000)
+	for i := range vals {
+		vals[i] = int32(i % 7)
+	}
+	clean, err := selectionScore(vals, pub)
+	s.Require().NoError(err)
+	seed, err := crypto.PositionSeed(pub, 0)
+	s.Require().NoError(err)
+	for _, i := range stego.NewSelector(seed, len(vals)).Pick(stego.Covered(len(vals))) {
+		vals[i] |= 1
+	}
+	forced, err := selectionScore(vals, pub)
+	s.Require().NoError(err)
+	s.Greater(forced, clean+0.15)
+}
+
+func (s *HarnessSuite) TestEnvelopeRepIsNotAnHonestKey() {
+	pub, priv, err := crypto.GenerateX25519()
+	s.Require().NoError(err)
+	_, other, err := crypto.GenerateX25519()
+	s.Require().NoError(err)
+	var top, hits int
+	seen := map[[32]byte]bool{}
+	const seals = 64
+	for range seals {
+		env, err := crypto.Seal([]byte("mist"), pub)
+		s.Require().NoError(err)
+		if steganalysis.HonestX25519(env.EphemeralPub[:]) {
+			hits++
+		}
+		if env.EphemeralPub[31]&0x80 != 0 {
+			top++
+		}
+		s.False(seen[env.EphemeralPub])
+		seen[env.EphemeralPub] = true
+		_, err = crypto.Open(env, other)
+		s.ErrorIs(err, crypto.ErrOpen)
+		_, err = crypto.Open(env, priv)
+		s.NoError(err)
+	}
+	// A random 32-byte string passes about one time in 32, so a handful of
+	// hits is the floor of that test, not evidence the representative is a key.
+	s.Less(hits, seals/8)
+	s.NotZero(top)
+	a, err := crypto.PositionSeed(pub, 0)
+	s.Require().NoError(err)
+	b, err := crypto.PositionSeed(pub, 1)
+	s.Require().NoError(err)
+	s.NotEqual(a, b)
+	otherPub, _, err := crypto.GenerateX25519()
+	s.Require().NoError(err)
+	left, err := crypto.Seal([]byte("mist"), pub)
+	s.Require().NoError(err)
+	right, err := crypto.Seal([]byte("mist"), otherPub)
+	s.Require().NoError(err)
+	s.NotEqual(left.EphemeralPub, right.EphemeralPub)
+	_, signPriv, err := crypto.GenerateEd25519()
+	s.Require().NoError(err)
+	sig, err := crypto.Sign(signPriv, []byte("mist"))
+	s.Require().NoError(err)
+	signed, err := wire.MarshalPayload(wire.Payload{Version: wire.CurrentVersion, Type: 0x01, Data: []byte("mist"), Signature: sig})
+	s.Require().NoError(err)
+	env, err := crypto.Seal(signed, pub)
+	s.Require().NoError(err)
+	s.False(steganalysis.HonestX25519(env.EphemeralPub[:]))
+	start := wire.MarshalSpanStart(64, []byte("chunk"))
+	cont := wire.MarshalSpanContinue([]byte("chunk"))
+	s.NotEqual(wire.CurrentVersion, start[0])
+	s.NotEqual(start[0], cont[0])
+}
+
 // keyAwareScore is the warden who knows the recipient's public key but not
 // the private one. Position seeds come from the public key alone, so it
 // recovers the first frame's bits exactly as the catcher does and looks at

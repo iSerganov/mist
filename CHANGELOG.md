@@ -63,13 +63,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The harness confirmatory family is frozen at six wardens: HCF-COM, the
+  logistic classifier, the Markov model, the key-aware warden, a rich-model
+  logistic, and a public-key selection-channel score. Fisher, stump and
+  random-subspace fits of the rich vector, plus the CNN waveform,
+  spectrogram and hybrid nets, are baselines with a positive control each.
+  Report schema is 6. This does not change an embedded file.
 - The harness fingerprint verdict compares Mist with the canonical ffmpeg
   workflow: Vorbis at the `-q:a` level Mist chose, and a lossless codec at
   ffmpeg's defaults. Default ffmpeg stays a labeled second comparison, so a
   nominal-rate gap against ffmpeg's default quality is not a failed verdict.
   An audio-blind classifier scores file metadata only, separately for
   canonical against Mist-clean and for Mist-clean against stego. Its pass is
-  a file interval that includes 0.5. Report schema is 5.
+  a file interval that includes 0.5.
 - Corpus manifests can mark a sealed split. A harness run scores one split and
   records hashes of the carriers it did not score. `make corpus` writes a
   generated development set and a source-disjoint sealed holdout outside the

@@ -24,6 +24,11 @@ type carrier interface {
 // slots is the bit budget for n eligible carriers at the constant density.
 func slots(n int) int { return int(float64(n) * Density) }
 
+// Covered is how many values of a frame of n eligible carriers the constant
+// density touches. A warden who knows the recipient public key uses the
+// same count the embedder does.
+func Covered(n int) int { return slots(n) }
+
 // layout is how a frame of n eligible values carries its slots(n) bits:
 // which values form the cover, in keyed order, and the code over them.
 func layout(n int, posKey []byte) (cover []int, code stcCode, m int) {

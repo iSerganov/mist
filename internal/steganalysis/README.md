@@ -23,6 +23,8 @@ stream, returns `0`.
 | [`HCF`](#hcf-centre-of-mass--harmsen--pearlman) | ±1 embedding (LSB matching) | 1 − normalised HCF centre of mass | peaked histograms |
 | [`CrossValidate`](#logistic-classifier--the-adversary-of-record) | anything learnable from Mist's own output | out-of-fold probability of stego | whatever the training data holds |
 | [`Markov`](#second-difference-markov-features--liu-sung--qiao) + `CrossValidate` | ±1 embedding in smooth audio | out-of-fold probability of stego | smooth, correlated signals |
+| [`Rich`](#frozen-wardens) + `CrossValidate` | the same ±1 changes, on a wider summary | out-of-fold probability of stego | low-amplitude and smooth signals |
+| [`ParityGap`](#frozen-wardens) | LSB bias at positions a public key implies | absolute gap in LSB rate | a warden who knows the recipient key |
 
 **Why the first three matter to Mist even though it does not use LSB replacement.**
 Mist embeds by LSB *matching* (±1). On lossless outputs that is literal ±1 on
@@ -316,3 +318,25 @@ this package itself never reads a filesystem path.
 > B. Efron, R. Tibshirani. *An Introduction to the Bootstrap.* Chapman & Hall, 1993.
 > C. Cachin. *An Information-Theoretic Model for Steganography.* Information and
 > Computation 192(1), 2004.
+
+## Frozen wardens
+
+`Rich` is a fixed summary, not a full spatial rich model: prediction errors of
+orders 1–8, differences of orders 1–4, an order-8 LPC residual energy, two
+decimation phases, parity, order-2 and order-3 co-occurrence symmetrized under
+sign flip and time reversal, a two-number order-4 summary, spectral flatness,
+eight log-spaced bands, a phase difference and a group-delay proxy. `RichPlanar`
+is the same vector when channels are stored one plane after another. The
+harness trains a logistic model on it. `TrainFLD`, `TrainStumps` and
+`TrainSubspace` are the linear, depth-1 boosted and random-subspace baselines
+on that same vector. They are not extra Holm rows.
+
+`ParityGap` is the selection-channel score. `ChangedFraction` needs the cover
+as well as the stego file, so it is an oracle and not an operational warden.
+`PlausibleLength` and `DeadTail` are the controls for an unmasked length and a
+payload with no filler. `HonestX25519` remains the control for a raw ephemeral
+public key.
+
+Vorbis packet, codebook and Huffman conditioning is not in `Rich`. The harness
+passes a flat `[]int32`. A model that needs that structure has to be given it
+explicitly; this package does not invent it.

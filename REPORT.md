@@ -1,13 +1,35 @@
 # Mist harness report
 
-> **Historical measurement.** This snapshot predates the Phase 0 run
-> manifest. It is not bound to a `manifest.json`, still names carriers by
-> original titles, and its `ε ≥` column is only a detector-implied KL lower
-> bound. Later harness runs write public identifiers plus
-> `manifest.json` / `scores.json` under `HARNESS_OUT`. Do not treat these
-> numbers as current or as proof of Cachin security.
+> **Phase 1 baseline, 2026-10-05.** 
+> This run only changes how detectors are scored.
+>
+> Corpus name `metal-dev`: 84 carriers, the first 300 seconds of each. Public ids are `carrier-NNNN`. There is no session manifest, so each file is its own lineage (84 groups). Intervals do not account for album or session dependence. One category, `external`, so there is no per-category table and no leave-one-lineage table. Perceptual metric not installed. Seed 1. Permutation rounds 199, classifier and Markov refits 9.
+>
+> This is not a Cachin ε and not a claim that the embedding is undetectable. The KL column is a detector-implied lower bound for this benchmark. A file interval that excludes 0.5 is a faint signal on that detector; Holm or Benjamini-Hochberg is the confirmatory or exploratory adjustment. Machine-readable `manifest.json`, `report.json` and `scores.json` stay in the local harness output and are not in the tree. Filenames and machine paths are not recorded here.
 
- perceptual metric: not installed
+## Headline file results
+
+Stego against the clean ffmpeg copy. D = 0.5 + |file AUC − 0.5|.
+
+| Format | Detector | File AUC (95%) | D | Adjusted p | KL lower bound (nats, 95%) |
+|---|---|---|---|---|---|
+| flac | classifier | 0.555 (0.527–0.585) | 0.555 | Holm 0.340 | 0.006 (0.001–0.015) |
+| flac | markov | 0.549 (0.524–0.579) | 0.549 | Holm 0.340 | 0.005 (0.001–0.013) |
+| flac | hcf-com | 0.501 (0.500–0.503) | 0.501 | Holm 0.340 | 0.000 (0.000–0.000) |
+| flac | chi-square | 0.502 (0.501–0.503) | 0.502 | BH 0.015 | 0.000 (0.000–0.000) |
+| wav/pcm_s16le | classifier | 0.507 (0.502–0.513) | 0.507 | Holm 0.300 | 0.000 (0.000–0.000) |
+| wav/pcm_s16le | hcf-com | 0.502 (0.500–0.503) | 0.502 | Holm 0.120 | 0.000 (0.000–0.000) |
+| ogg/vorbis | hcf-com | 0.508 (0.506–0.511) | 0.508 | Holm 0.020 | 0.000 (0.000–0.000) |
+| ogg/vorbis | markov | 0.488 (0.483–0.492) | 0.512 | Holm 0.300 | 0.000 (0.000–0.001) |
+| ogg/vorbis | classifier | 0.492 (0.490–0.493) | 0.508 | Holm 0.300 | 0.000 (0.000–0.000) |
+
+Key-aware file AUC stays inside an interval that contains 0.5 on all three formats (FLAC 0.500, WAV 0.476, Vorbis 0.506). Message-size checks sit at 0.5. FLAC matches ffmpeg on every carrier. WAV differs in the zero tail on 5 of 84. Vorbis differs in nominal bitrate, and in the zero tail, on 73 of 84. Embedding cost on Vorbis is 0.01 dB. The power simulation asks for about 128 lineages to detect D = 0.55 on this FLAC classifier dispersion, and about 8 on WAV and Vorbis; that is a simulation, not a sample-size guarantee.
+
+The sections below are the harness report this baseline is copied from.
+
+# Mist harness report
+
+Commit `b610b12-dirty` · 2026-10-05 · corpus: metal-dev, first 300 s of each carrier (84 carriers, 84 independent lineage groups) · perceptual metric: not installed
 
 Every carrier is encoded three times: by the ffmpeg command line at its own defaults (the *clean* copy, which is what a warden without the original would compare against), by Mist's own encoder with nothing embedded (Mist's *own* re-encode), and by Mist with a hidden message (the *stego* copy). The report asks whether the stego copy differs from the clean one in plain properties, whether a detector can tell them apart, and how much worse it sounds. [How to read this report](#how-to-read-this-report) explains every number and threshold.
 
@@ -15,9 +37,9 @@ Every carrier is encoded three times: by the ffmpeg command line at its own defa
 
 | Format | Carriers | Looks like ffmpeg? | Hidden from detectors? | Audio quality |
 |---|---|---|---|---|
-| flac | 84 / 84 | ✅ matches ffmpeg on all 84 carriers | ⚠️ faint signal from chi-square (AUC 0.500) | ✅ inaudible: the added error is at least 94.13 dB below the music |
-| wav/pcm_s16le | 84 / 84 | ✅ matches ffmpeg on all 84 carriers | ⚠️ faint signal from hcf-com (AUC 0.500) | ✅ inaudible: the added error is at least 82.56 dB below the music |
-| ogg/vorbis | 84 / 84 | ❌ differs on 73 of 84 carriers: nominal bitrate | ⚠️ faint signal from spa (AUC 0.500) | ✅ Mist's own error sits 55.15 dB below the music; embedding costs 0.01 dB, within the 0.3 dB target |
+| flac | 84 / 84 | ✅ matches ffmpeg on all 84 carriers | ⚠️ faint signal from chi-square (AUC 0.500) | ✅ inaudible: the added error is at least 94.07 dB below the music |
+| wav/pcm_s16le | 84 / 84 | ❌ differs on 5 of 84 carriers: zero tail | ⚠️ faint signal from hcf-com (AUC 0.500) | ✅ inaudible: the added error is at least 83.98 dB below the music |
+| ogg/vorbis | 84 / 84 | ❌ differs on 73 of 84 carriers: nominal bitrate, zero tail | ⚠️ faint signal from hcf-com (AUC 0.501) | ✅ Mist's own error sits 55.06 dB below the music; embedding costs 0.01 dB, within the 0.3 dB target |
 
 ## flac
 
@@ -29,90 +51,90 @@ The ffmpeg column is ffmpeg at its own defaults. Ogg Vorbis keeps the source's q
 
 | Carrier | Source samples | Samples (ffmpeg / Mist) | Zero tail (ffmpeg / Mist) | Sample format (ffmpeg / Mist) | Nominal kbps (ffmpeg / Mist) | Differs in |
 |---|---|---|---|---|---|---|
-| 02 - Ride the Lightning.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| 03 - Disposable Heroes.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| 04 - No Remorse.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| 06 - For Whom the Bell Tolls.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| 07 - The Four Horsemen.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| 08 - Fade to Black.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| 09 - Seek & Destroy.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| 10 - Whiplash.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| 11 - Fight Fire with Fire.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| 14 - Motorbreath.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| ATB.06.20.2025/01 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| ATB.06.20.2025/02 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| ATB.06.20.2025/03 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| ATB.06.20.2025/04 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| Pillars_of_the_Sky.wav | 2880000 | 2880000 / 2880000 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| Starlight_Ascent.wav | 5760000 | 5760000 / 5760000 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| Stellar_Ascent.wav | 5760000 | 5760000 / 5760000 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side1.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side2.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t01.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t02.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t03.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t04.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t05.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t06.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t07.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t08.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t09.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/01 Track01.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/02 Track02.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/03 Track03.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/04 Track04.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/05 Track05.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/06 Track06.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/07 Track07.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/08 Track08.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/09 Track09.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/10 Track10.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/11 Track11.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/12 Track12.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/13 Track13.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/14 Track14.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/15 Track15.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/16 Track16.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/17 Track17.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/18 Track18.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/19 Track19.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/20 Track20.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/21 Track21.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/22 Track22.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/23 Track23.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/24 Track24.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/25 Track25.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 0 / 0 | — |
-| sundaytimes-wind-in-the-willows/26 Track26.flac | 6560316 | 6560316 / 6560316 | 20 / 20 | s16 / s16 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Adam Ellis - Broken (& Jo Cartwright).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Hurt of intention 2019 (& Neev Kennedy).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Right back.opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Alex Leavon - When I'm with you (& Julia Ross).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Ana Criado - In a thousand skies.opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Blue5even - Through the barricades (& Jo Cartwright).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Braulio Stefield - See ghosts (& Victoriya).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Costa - Always (& Cathy Burton).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Delta-S - Letting go (Ikerya Project remix) (& Kate Louise Smith).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Derek Ryan - After dark (ft Melissa R. Kaplan).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Drival - Saviour (& Michele C).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/F.G. Noise - Waiting for the thunder (Killing time) (& Lauren Ní Chasaide).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - Hold of you (Denis Kenzo remix).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - When you come home (Myde rework).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Karanda - Still got time (& Sarah Russell).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Limelght - Run & hide (ft Alina Renae).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Lost Witness - Sewn.opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Mhammed El Alami - Warriors (& Emma Horan).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Nicholas Gunn - Older (Costa remix) (ft Alina Renae).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Nitrous Oxide - Lower than the ground (& Sarah Russell).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Passenger 75 - Heartless (& Score).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Perpetual - Innocent (ft Fisher).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Raz Nitzan - Beyond time (Aurosonic remix) (& Ellie Lawson).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Ronski Speed - Beat alive (Denis Airwave remix) (& Sarah Lynn).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Rub!k - Everglow (& Sue McLaren).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Be here with me (ft Katty Heath).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Crystalize (& Fenna Day).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/The Blizzard - Always a stranger (Nitrous Oxide remix) (& Carol Lee).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/The City Never Sleeps - Addicted (NyTiGen remix) (& Summer Haze).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
-| va-female-vocal-trance-2019-opus-128/Whiteout - The part in-between (Wilderness & A-Line remix) (& One Half Bear).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0001 | 13230191 | 13230191 / 13230191 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0002 | 13230191 | 13230191 / 13230191 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0003 | 13230191 | 13230191 / 13230191 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0004 | 11669231 | 11669231 / 11669231 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0005 | 13230191 | 13230191 / 13230191 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0006 | 13230191 | 13230191 / 13230191 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0007 | 13230191 | 13230191 / 13230191 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0008 | 13230191 | 13230191 / 13230191 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0009 | 11631215 | 11631215 / 11631215 | 288 / 288 | s32 / s32 | 0 / 0 | — |
+| carrier-0010 | 12556271 | 12556271 / 12556271 | 30761 / 30761 | s32 / s32 | 0 / 0 | — |
+| carrier-0011 | 13230767 | 13230767 / 13230767 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0012 | 13230767 | 13230767 / 13230767 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0013 | 13230767 | 13230767 / 13230767 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0014 | 13230767 | 13230767 / 13230767 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0015 | 2880000 | 2880000 / 2880000 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0016 | 5760000 | 5760000 / 5760000 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0017 | 5760000 | 5760000 / 5760000 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0018 | 28803072 | 28803072 / 28803072 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0019 | 28803072 | 28803072 / 28803072 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0020 | 27650560 | 27650560 / 27650560 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0021 | 27998720 | 27998720 / 27998720 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0022 | 24209920 | 24209920 / 24209920 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0023 | 28803072 | 28803072 / 28803072 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0024 | 24574720 | 24574720 / 24574720 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0025 | 26830080 | 26830080 / 26830080 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0026 | 24695040 | 24695040 / 24695040 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0027 | 18909440 | 18909440 / 18909440 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0028 | 28803072 | 28803072 / 28803072 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0029 | 7939176 | 7939176 / 7939176 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0030 | 8334312 | 8334312 / 8334312 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0031 | 8187312 | 8187312 / 8187312 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0032 | 7616952 | 7616952 / 7616952 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0033 | 7703976 | 7703976 / 7703976 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0034 | 7795116 | 7795116 / 7795116 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0035 | 8786484 | 8786484 / 8786484 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0036 | 8306676 | 8306676 / 8306676 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0037 | 7848624 | 7848624 / 7848624 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0038 | 7849212 | 7849212 / 7849212 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0039 | 8371356 | 8371356 / 8371356 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0040 | 7808052 | 7808052 / 7808052 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0041 | 7792764 | 7792764 / 7792764 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0042 | 7705152 | 7705152 / 7705152 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0043 | 7733376 | 7733376 / 7733376 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0044 | 8332548 | 8332548 / 8332548 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0045 | 7836864 | 7836864 / 7836864 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0046 | 7783356 | 7783356 / 7783356 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0047 | 8134980 | 8134980 / 8134980 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0048 | 7904484 | 7904484 / 7904484 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0049 | 7577556 | 7577556 / 7577556 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0050 | 8433684 | 8433684 / 8433684 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0051 | 8167320 | 8167320 / 8167320 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0052 | 7443492 | 7443492 / 7443492 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0053 | 7847448 | 7847448 / 7847448 | 0 / 0 | s16 / s16 | 0 / 0 | — |
+| carrier-0054 | 6560316 | 6560316 / 6560316 | 20 / 20 | s16 / s16 | 0 / 0 | — |
+| carrier-0055 | 7567536 | 7567536 / 7567536 | 1004 / 1004 | s32 / s32 | 0 / 0 | — |
+| carrier-0056 | 10716829 | 10716829 / 10716829 | 2375 / 2375 | s32 / s32 | 0 / 0 | — |
+| carrier-0057 | 10753254 | 10753254 / 10753254 | 462 / 462 | s32 / s32 | 0 / 0 | — |
+| carrier-0058 | 8507078 | 8507078 / 8507078 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0059 | 9099131 | 9099131 / 9099131 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0060 | 10184328 | 10184328 / 10184328 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0061 | 9848955 | 9848955 / 9848955 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0062 | 10444219 | 10444219 / 10444219 | 1522 / 1522 | s32 / s32 | 0 / 0 | — |
+| carrier-0063 | 10854001 | 10854001 / 10854001 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0064 | 9693408 | 9693408 / 9693408 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0065 | 9766958 | 9766958 / 9766958 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0066 | 9359938 | 9359938 / 9359938 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0067 | 9855000 | 9855000 / 9855000 | 8479 / 8479 | s32 / s32 | 0 / 0 | — |
+| carrier-0068 | 9146026 | 9146026 / 9146026 | 276 / 276 | s32 / s32 | 0 / 0 | — |
+| carrier-0069 | 10717286 | 10717286 / 10717286 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0070 | 8370000 | 8370000 / 8370000 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0071 | 10456119 | 10456119 / 10456119 | 23958 / 23958 | s32 / s32 | 0 / 0 | — |
+| carrier-0072 | 9573914 | 9573914 / 9573914 | 7702 / 7702 | s32 / s32 | 0 / 0 | — |
+| carrier-0073 | 10171848 | 10171848 / 10171848 | 826 / 826 | s32 / s32 | 0 / 0 | — |
+| carrier-0074 | 9735652 | 9735652 / 9735652 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0075 | 9412488 | 9412488 / 9412488 | 7538 / 7538 | s32 / s32 | 0 / 0 | — |
+| carrier-0076 | 9888000 | 9888000 / 9888000 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0077 | 10440000 | 10440000 / 10440000 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0078 | 11520002 | 11520002 / 11520002 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0079 | 10450747 | 10450747 / 10450747 | 21505 / 21505 | s32 / s32 | 0 / 0 | — |
+| carrier-0080 | 8598259 | 8598259 / 8598259 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0081 | 11520000 | 11520000 / 11520000 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0082 | 11102609 | 11102609 / 11102609 | 0 / 0 | s32 / s32 | 0 / 0 | — |
+| carrier-0083 | 8540309 | 8540309 / 8540309 | 7055 / 7055 | s32 / s32 | 0 / 0 | — |
+| carrier-0084 | 10279847 | 10279847 / 10279847 | 7063 / 7063 | s32 / s32 | 0 / 0 | — |
 
 **Verdict:** ✅ matches ffmpeg on all 84 carriers.
 
@@ -120,15 +142,19 @@ The ffmpeg column is ffmpeg at its own defaults. Ogg Vorbis keeps the source's q
 
 Stego copy against the clean ffmpeg copy (for Ogg Vorbis, ffmpeg at the quality level Mist chose, so only the embedding differs).
 
-| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
-|---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.503 (0.501–0.505) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.501 (0.500–0.502) | 0.504 (0.500–0.507) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| rs | bit overwriting (not what Mist does) | 0.499 (0.499–0.500) | 0.498 (0.494–0.503) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.499) |
-| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.500 (0.499–0.501) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.507 (0.503–0.511) | 0.527 (0.512–0.546) | 0.001 (0.000–0.004) | ⚠️ faint signal | ✅ hidden (0.500) |
-| markov | how the waveform's curvature changes from sample to sample | 0.504 (0.502–0.506) | 0.519 (0.507–0.533) | 0.001 (0.000–0.002) | ⚠️ faint signal | ✅ hidden (0.500) |
-| key-aware | the ephemeral key in the first frame's envelope, read with the public key alone | 0.500 (0.476–0.524) | 0.500 (0.476–0.524) | 0.000 (0.000–0.001) | ✅ chance | ✅ hidden (0.500) |
+| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | D | Detector-implied benchmark KL lower bound (nats, 95%) | Adjusted p | Verdict | Message size |
+|---|---|---|---|---|---|---|---|---|
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.502 (0.501–0.503) | 0.502 | 0.000 (0.000–0.000) | BH 0.015 | ⚠️ faint signal | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.500 (0.500–0.501) | 0.502 (0.498–0.507) | 0.502 | 0.000 (0.000–0.000) | BH 0.413 | ✅ chance | ✅ hidden (0.500) |
+| rs | bit overwriting (not what Mist does) | 0.500 (0.499–0.500) | 0.501 (0.496–0.506) | 0.501 | 0.000 (0.000–0.000) | BH 0.620 | ✅ chance | ✅ hidden (0.500) |
+| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.501 (0.500–0.503) | 0.501 | 0.000 (0.000–0.000) | Holm 0.340 | ⚠️ faint signal | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.506 (0.503–0.510) | 0.555 (0.527–0.585) | 0.555 | 0.006 (0.001–0.015) | Holm 0.340 | ⚠️ faint signal | ✅ hidden (0.500) |
+| markov | how the waveform's curvature changes from sample to sample | 0.504 (0.502–0.506) | 0.549 (0.524–0.579) | 0.549 | 0.005 (0.001–0.013) | Holm 0.340 | ⚠️ faint signal | ✅ hidden (0.500) |
+| key-aware | the ephemeral key in the first frame's envelope, read with the public key alone | 0.500 (0.465–0.530) | 0.500 (0.465–0.530) | 0.500 | 0.000 (0.000–0.002) | Holm 1.000 | ✅ chance | ✅ hidden (0.500) |
+
+Power: shifting this run's classifier file scores to D = 0.55, about 128 independent lineages give 90% power for a lineage-cluster interval to exclude 0.5. The figure is a simulation from this run's dispersion.
+
+Worst cell: classifier on aggregate, file AUC 0.555, D 0.555.
 
 **Verdict:** ⚠️ faint signal from chi-square (AUC 0.500).
 
@@ -136,14 +162,14 @@ Stego copy against the clean ffmpeg copy (for Ogg Vorbis, ffmpeg at the quality 
 
 Stego copy against Mist's own re-encode, so only the embedded changes differ.
 
-| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
-|---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.503 (0.501–0.505) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.501 (0.500–0.502) | 0.504 (0.500–0.507) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| rs | bit overwriting (not what Mist does) | 0.499 (0.499–0.500) | 0.498 (0.494–0.503) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.499) |
-| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.500 (0.499–0.501) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.507 (0.503–0.511) | 0.527 (0.512–0.546) | 0.001 (0.000–0.004) | ⚠️ faint signal | ✅ hidden (0.500) |
-| markov | how the waveform's curvature changes from sample to sample | 0.504 (0.502–0.506) | 0.519 (0.507–0.533) | 0.001 (0.000–0.002) | ⚠️ faint signal | ✅ hidden (0.500) |
+| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | D | Detector-implied benchmark KL lower bound (nats, 95%) | Adjusted p | Verdict | Message size |
+|---|---|---|---|---|---|---|---|---|
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.502 (0.501–0.503) | 0.502 | 0.000 (0.000–0.000) | — | ⚠️ faint signal | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.500 (0.500–0.501) | 0.502 (0.498–0.507) | 0.502 | 0.000 (0.000–0.000) | — | ✅ chance | ✅ hidden (0.500) |
+| rs | bit overwriting (not what Mist does) | 0.500 (0.499–0.500) | 0.501 (0.496–0.506) | 0.501 | 0.000 (0.000–0.000) | — | ✅ chance | ✅ hidden (0.500) |
+| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.501 (0.500–0.503) | 0.501 | 0.000 (0.000–0.000) | — | ⚠️ faint signal | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.506 (0.503–0.510) | 0.555 (0.527–0.585) | 0.555 | 0.006 (0.001–0.015) | — | ⚠️ faint signal | ✅ hidden (0.500) |
+| markov | how the waveform's curvature changes from sample to sample | 0.504 (0.502–0.506) | 0.549 (0.524–0.579) | 0.549 | 0.005 (0.001–0.013) | — | ⚠️ faint signal | ✅ hidden (0.500) |
 
 ### Does detection grow with audio?
 
@@ -151,25 +177,12 @@ File AUC (95%) against the clean ffmpeg copy on the first chunks of each carrier
 
 | Detector | First 40 chunks | First 240 chunks | Whole file |
 |---|---|---|---|
-| chi-square | 0.503 (0.501–0.505) | 0.503 (0.501–0.505) | 0.503 (0.501–0.505) |
-| spa | 0.504 (0.500–0.508) | 0.503 (0.499–0.506) | 0.504 (0.500–0.507) |
-| rs | 0.502 (0.496–0.507) | 0.499 (0.495–0.504) | 0.498 (0.494–0.503) |
-| hcf-com | 0.500 (0.499–0.501) | 0.500 (0.499–0.501) | 0.500 (0.499–0.501) |
-| classifier | 0.525 (0.510–0.543) | 0.527 (0.512–0.547) | 0.527 (0.512–0.546) |
-| markov | 0.524 (0.510–0.543) | 0.518 (0.507–0.532) | 0.519 (0.507–0.533) |
-
-### By kind of audio
-
-File AUC (95%) against the clean ffmpeg copy, per corpus folder. The count is carriers; few carriers means a wide interval.
-
-| Detector | (top level) (13) | ATB.06.20.2025 (4) | disc1 (2) | hmbb2015-03-18.sbd.flac24 (9) | sundaytimes-wind-in-the-willows (26) | va-female-vocal-trance-2019-opus-128 (30) |
-|---|---|---|---|---|---|---|
-| chi-square | 0.491 (0.481–0.500) | 0.531 (0.417–0.667) | 0.500 (0.500–0.500) | 0.519 (0.506–0.539) | 0.506 (0.498–0.516) | 0.516 (0.508–0.529) |
-| spa | 0.509 (0.472–0.541) | 0.625 (0.600–0.667) | 0.500 (0.000–1.000) | 0.506 (0.457–0.562) | 0.506 (0.483–0.527) | 0.516 (0.504–0.531) |
-| rs | 0.497 (0.430–0.557) | 0.562 (0.417–0.667) | 0.500 (0.000–1.000) | 0.469 (0.439–0.507) | 0.499 (0.479–0.523) | 0.491 (0.473–0.506) |
-| hcf-com | 0.503 (0.494–0.513) | 0.469 (0.375–0.500) | 0.250 (0.000–0.333) | 0.543 (0.526–0.561) | 0.500 (0.492–0.511) | 0.499 (0.497–0.500) |
-| classifier | 0.491 (0.459–0.515) | 0.625 (0.417–1.000) | 0.250 (0.000–0.333) | 0.753 (0.603–0.956) | 0.499 (0.491–0.506) | 0.942 (0.887–0.980) |
-| markov | 0.497 (0.479–0.516) | 0.625 (0.417–1.000) | 0.500 (0.000–1.000) | 0.543 (0.519–0.562) | 0.494 (0.487–0.501) | 0.917 (0.846–0.974) |
+| chi-square | 0.501 (0.500–0.502) | 0.502 (0.500–0.503) | 0.502 (0.501–0.503) |
+| spa | 0.498 (0.493–0.503) | 0.500 (0.497–0.504) | 0.502 (0.498–0.507) |
+| rs | 0.500 (0.493–0.506) | 0.503 (0.498–0.508) | 0.501 (0.496–0.506) |
+| hcf-com | 0.500 (0.500–0.501) | 0.500 (0.499–0.501) | 0.501 (0.500–0.503) |
+| classifier | 0.537 (0.517–0.563) | 0.546 (0.522–0.576) | 0.555 (0.527–0.585) |
+| markov | 0.532 (0.513–0.554) | 0.546 (0.522–0.573) | 0.549 (0.524–0.579) |
 
 ### Does detection grow with the number of files?
 
@@ -177,113 +190,113 @@ AUC when the warden averages a detector's score over k files drawn at random fro
 
 | Detector | 1 file(s) | 3 file(s) | 6 file(s) |
 |---|---|---|---|
-| chi-square | 0.485 | 0.485 | 0.486 |
-| spa | 0.531 | 0.507 | 0.517 |
-| rs | 0.520 | 0.508 | 0.511 |
-| hcf-com | 0.492 | 0.487 | 0.482 |
-| classifier | 0.543 | 0.537 | 0.532 |
-| markov | 0.534 | 0.534 | 0.527 |
+| chi-square | 0.489 | 0.482 | 0.482 |
+| spa | 0.530 | 0.505 | 0.517 |
+| rs | 0.530 | 0.508 | 0.511 |
+| hcf-com | 0.491 | 0.484 | 0.481 |
+| classifier | 0.572 | 0.556 | 0.547 |
+| markov | 0.558 | 0.549 | 0.545 |
 
 ### How much does it cost in sound?
 
 | Measure | Mean | Worst | What it means |
 |---|---|---|---|
-| Plain re-encode SDR | 67.37 dB | 36.40 dB | Loss of Mist's own re-encode, with nothing embedded |
-| Mist output SDR | 87.74 dB | 36.40 dB | The same, with the message embedded |
-| Embedding cost | 0.01 dB | 0.02 dB | Mist's own share; target ≤ 0.3 dB, design-doc reference 0.18 dB |
+| Plain re-encode SDR | 65.46 dB | 35.91 dB | Loss of Mist's own re-encode, with nothing embedded |
+| Mist output SDR | 86.74 dB | 35.91 dB | The same, with the message embedded |
+| Embedding cost | 0.00 dB | 0.02 dB | Mist's own share; target ≤ 0.3 dB, design-doc reference 0.18 dB |
 | Extra error energy | +0% | +0% | Embedding cost as error added on top of a plain re-encode |
-| Mist's error below the music | 134.12 dB | 94.13 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
+| Mist's error below the music | 134.29 dB | 94.07 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
 
-**Verdict:** ✅ inaudible: the added error is at least 94.13 dB below the music.
+**Verdict:** ✅ inaudible: the added error is at least 94.07 dB below the music.
 
 ### Per carrier
 
 | Carrier | Output kbps | Plain re-encode SDR | Mist output SDR | Embedding cost | Mist's error below the music |
 |---|---|---|---|---|---|
-| 02 - Ride the Lightning.mp3 | 1587 | 128.61 dB | 128.59 dB | 0.02 dB | 152.00 dB |
-| 03 - Disposable Heroes.mp3 | 1588 | 128.69 dB | 128.67 dB | 0.02 dB | 152.09 dB |
-| 04 - No Remorse.mp3 | 1572 | 129.90 dB | 129.88 dB | 0.02 dB | 153.21 dB |
-| 06 - For Whom the Bell Tolls.mp3 | 1545 | 127.73 dB | 127.71 dB | 0.02 dB | 151.19 dB |
-| 07 - The Four Horsemen.mp3 | 1557 | 128.96 dB | 128.94 dB | 0.02 dB | 152.34 dB |
-| 08 - Fade to Black.mp3 | 1535 | 127.90 dB | 127.88 dB | 0.02 dB | 151.38 dB |
-| 09 - Seek & Destroy.mp3 | 1590 | 129.98 dB | 129.96 dB | 0.02 dB | 153.28 dB |
-| 10 - Whiplash.mp3 | 1585 | 132.14 dB | 132.12 dB | 0.02 dB | 155.24 dB |
-| 11 - Fight Fire with Fire.mp3 | 1510 | 127.69 dB | 127.67 dB | 0.02 dB | 151.17 dB |
-| 14 - Motorbreath.mp3 | 1509 | 130.35 dB | 130.33 dB | 0.02 dB | 153.63 dB |
-| ATB.06.20.2025/01 ATB 06-20-2025.mp3 | 1494 | 131.10 dB | 131.08 dB | 0.02 dB | 154.45 dB |
-| ATB.06.20.2025/02 ATB 06-20-2025.mp3 | 1560 | 45.23 dB | 45.23 dB | 0.00 dB | 152.51 dB |
-| ATB.06.20.2025/03 ATB 06-20-2025.mp3 | 1535 | 42.92 dB | 42.92 dB | 0.00 dB | 151.71 dB |
-| ATB.06.20.2025/04 ATB 06-20-2025.mp3 | 1418 | 39.61 dB | 39.61 dB | 0.00 dB | 151.83 dB |
-| Pillars_of_the_Sky.wav | 968 | — | 103.10 dB | — | 103.10 dB |
-| Starlight_Ascent.wav | 1046 | — | 105.27 dB | — | 105.27 dB |
-| Stellar_Ascent.wav | 978 | — | 105.99 dB | — | 105.99 dB |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side1.flac | 2296 | — | 135.19 dB | — | 135.19 dB |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side2.flac | 2241 | — | 130.65 dB | — | 130.65 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t01.flac | 2593 | — | 150.03 dB | — | 150.03 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t02.flac | 2693 | — | 150.20 dB | — | 150.20 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t03.flac | 2710 | — | 151.81 dB | — | 151.81 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t04.flac | 2584 | — | 148.67 dB | — | 148.67 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t05.flac | 2671 | — | 149.32 dB | — | 149.32 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t06.flac | 2679 | — | 149.45 dB | — | 149.45 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t07.flac | 2702 | — | 150.53 dB | — | 150.53 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t08.flac | 2688 | — | 150.71 dB | — | 150.71 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t09.flac | 2628 | — | 149.80 dB | — | 149.80 dB |
-| sundaytimes-wind-in-the-willows/01 Track01.flac | 467 | — | 95.62 dB | — | 95.62 dB |
-| sundaytimes-wind-in-the-willows/02 Track02.flac | 464 | — | 95.38 dB | — | 95.38 dB |
-| sundaytimes-wind-in-the-willows/03 Track03.flac | 460 | — | 95.18 dB | — | 95.18 dB |
-| sundaytimes-wind-in-the-willows/04 Track04.flac | 466 | — | 95.07 dB | — | 95.07 dB |
-| sundaytimes-wind-in-the-willows/05 Track05.flac | 469 | — | 95.54 dB | — | 95.54 dB |
-| sundaytimes-wind-in-the-willows/06 Track06.flac | 459 | — | 95.07 dB | — | 95.07 dB |
-| sundaytimes-wind-in-the-willows/07 Track07.flac | 465 | — | 95.09 dB | — | 95.09 dB |
-| sundaytimes-wind-in-the-willows/08 Track08.flac | 469 | — | 95.47 dB | — | 95.47 dB |
-| sundaytimes-wind-in-the-willows/09 Track09.flac | 467 | — | 94.97 dB | — | 94.97 dB |
-| sundaytimes-wind-in-the-willows/10 Track10.flac | 463 | — | 94.92 dB | — | 94.92 dB |
-| sundaytimes-wind-in-the-willows/11 Track11.flac | 459 | — | 94.76 dB | — | 94.76 dB |
-| sundaytimes-wind-in-the-willows/12 Track12.flac | 467 | — | 95.17 dB | — | 95.17 dB |
-| sundaytimes-wind-in-the-willows/13 Track13.flac | 468 | — | 95.60 dB | — | 95.60 dB |
-| sundaytimes-wind-in-the-willows/14 Track14.flac | 478 | — | 95.57 dB | — | 95.57 dB |
-| sundaytimes-wind-in-the-willows/15 Track15.flac | 459 | — | 94.13 dB | — | 94.13 dB |
-| sundaytimes-wind-in-the-willows/16 Track16.flac | 465 | — | 94.83 dB | — | 94.83 dB |
-| sundaytimes-wind-in-the-willows/17 Track17.flac | 481 | — | 95.89 dB | — | 95.89 dB |
-| sundaytimes-wind-in-the-willows/18 Track18.flac | 459 | — | 95.42 dB | — | 95.42 dB |
-| sundaytimes-wind-in-the-willows/19 Track19.flac | 469 | — | 95.36 dB | — | 95.36 dB |
-| sundaytimes-wind-in-the-willows/20 Track20.flac | 467 | — | 95.43 dB | — | 95.43 dB |
-| sundaytimes-wind-in-the-willows/21 Track21.flac | 460 | — | 95.27 dB | — | 95.27 dB |
-| sundaytimes-wind-in-the-willows/22 Track22.flac | 484 | — | 95.48 dB | — | 95.48 dB |
-| sundaytimes-wind-in-the-willows/23 Track23.flac | 461 | — | 95.10 dB | — | 95.10 dB |
-| sundaytimes-wind-in-the-willows/24 Track24.flac | 463 | — | 95.10 dB | — | 95.10 dB |
-| sundaytimes-wind-in-the-willows/25 Track25.flac | 462 | — | 95.17 dB | — | 95.17 dB |
-| sundaytimes-wind-in-the-willows/26 Track26.flac | 473 | — | 94.97 dB | — | 94.97 dB |
-| va-female-vocal-trance-2019-opus-128/Adam Ellis - Broken (& Jo Cartwright).opus | 1878 | 46.75 dB | 46.75 dB | 0.00 dB | 157.75 dB |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Hurt of intention 2019 (& Neev Kennedy).opus | 1913 | 38.01 dB | 38.01 dB | 0.00 dB | 159.32 dB |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Right back.opus | 1789 | 47.54 dB | 47.54 dB | 0.00 dB | 156.81 dB |
-| va-female-vocal-trance-2019-opus-128/Alex Leavon - When I'm with you (& Julia Ross).opus | 1908 | 36.40 dB | 36.40 dB | 0.00 dB | 157.85 dB |
-| va-female-vocal-trance-2019-opus-128/Ana Criado - In a thousand skies.opus | 1914 | 45.28 dB | 45.28 dB | 0.00 dB | 157.52 dB |
-| va-female-vocal-trance-2019-opus-128/Blue5even - Through the barricades (& Jo Cartwright).opus | 1814 | 61.12 dB | 61.12 dB | 0.00 dB | 154.30 dB |
-| va-female-vocal-trance-2019-opus-128/Braulio Stefield - See ghosts (& Victoriya).opus | 1810 | 41.83 dB | 41.83 dB | 0.00 dB | 157.56 dB |
-| va-female-vocal-trance-2019-opus-128/Costa - Always (& Cathy Burton).opus | 1895 | 43.91 dB | 43.91 dB | 0.00 dB | 158.09 dB |
-| va-female-vocal-trance-2019-opus-128/Delta-S - Letting go (Ikerya Project remix) (& Kate Louise Smith).opus | 1890 | 44.97 dB | 44.97 dB | 0.00 dB | 158.31 dB |
-| va-female-vocal-trance-2019-opus-128/Derek Ryan - After dark (ft Melissa R. Kaplan).opus | 1759 | 70.95 dB | 70.95 dB | 0.00 dB | 154.34 dB |
-| va-female-vocal-trance-2019-opus-128/Drival - Saviour (& Michele C).opus | 1865 | 54.63 dB | 54.63 dB | 0.00 dB | 156.53 dB |
-| va-female-vocal-trance-2019-opus-128/F.G. Noise - Waiting for the thunder (Killing time) (& Lauren Ní Chasaide).opus | 1900 | 43.76 dB | 43.76 dB | 0.00 dB | 157.62 dB |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - Hold of you (Denis Kenzo remix).opus | 1953 | 48.48 dB | 48.48 dB | 0.00 dB | 158.16 dB |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - When you come home (Myde rework).opus | 1928 | 39.69 dB | 39.69 dB | 0.00 dB | 159.41 dB |
-| va-female-vocal-trance-2019-opus-128/Karanda - Still got time (& Sarah Russell).opus | 1814 | 54.41 dB | 54.41 dB | 0.00 dB | 157.52 dB |
-| va-female-vocal-trance-2019-opus-128/Limelght - Run & hide (ft Alina Renae).opus | 1817 | 47.27 dB | 47.27 dB | 0.00 dB | 157.41 dB |
-| va-female-vocal-trance-2019-opus-128/Lost Witness - Sewn.opus | 1875 | 43.03 dB | 43.03 dB | 0.00 dB | 156.58 dB |
-| va-female-vocal-trance-2019-opus-128/Mhammed El Alami - Warriors (& Emma Horan).opus | 1892 | 46.45 dB | 46.45 dB | 0.00 dB | 158.60 dB |
-| va-female-vocal-trance-2019-opus-128/Nicholas Gunn - Older (Costa remix) (ft Alina Renae).opus | 1814 | 50.75 dB | 50.75 dB | 0.00 dB | 155.22 dB |
-| va-female-vocal-trance-2019-opus-128/Nitrous Oxide - Lower than the ground (& Sarah Russell).opus | 1897 | 40.55 dB | 40.55 dB | 0.00 dB | 158.54 dB |
-| va-female-vocal-trance-2019-opus-128/Passenger 75 - Heartless (& Score).opus | 1807 | 43.62 dB | 43.62 dB | 0.00 dB | 157.65 dB |
-| va-female-vocal-trance-2019-opus-128/Perpetual - Innocent (ft Fisher).opus | 1977 | 40.04 dB | 40.04 dB | 0.00 dB | 158.63 dB |
-| va-female-vocal-trance-2019-opus-128/Raz Nitzan - Beyond time (Aurosonic remix) (& Ellie Lawson).opus | 1875 | 48.98 dB | 48.98 dB | 0.00 dB | 158.17 dB |
-| va-female-vocal-trance-2019-opus-128/Ronski Speed - Beat alive (Denis Airwave remix) (& Sarah Lynn).opus | 1862 | 42.50 dB | 42.50 dB | 0.00 dB | 159.26 dB |
-| va-female-vocal-trance-2019-opus-128/Rub!k - Everglow (& Sue McLaren).opus | 1909 | 46.15 dB | 46.15 dB | 0.00 dB | 157.59 dB |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Be here with me (ft Katty Heath).opus | 1944 | 46.99 dB | 46.99 dB | 0.00 dB | 157.77 dB |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Crystalize (& Fenna Day).opus | 1876 | 50.51 dB | 50.51 dB | 0.00 dB | 157.17 dB |
-| va-female-vocal-trance-2019-opus-128/The Blizzard - Always a stranger (Nitrous Oxide remix) (& Carol Lee).opus | 1827 | 46.06 dB | 46.06 dB | 0.00 dB | 156.38 dB |
-| va-female-vocal-trance-2019-opus-128/The City Never Sleeps - Addicted (NyTiGen remix) (& Summer Haze).opus | 1916 | 59.55 dB | 59.55 dB | 0.00 dB | 155.60 dB |
-| va-female-vocal-trance-2019-opus-128/Whiteout - The part in-between (Wilderness & A-Line remix) (& One Half Bear).opus | 1804 | 43.41 dB | 43.41 dB | 0.00 dB | 158.32 dB |
+| carrier-0001 | 1594 | 128.79 dB | 128.77 dB | 0.02 dB | 152.17 dB |
+| carrier-0002 | 1588 | 128.91 dB | 128.89 dB | 0.02 dB | 152.29 dB |
+| carrier-0003 | 1576 | 130.61 dB | 130.59 dB | 0.02 dB | 153.86 dB |
+| carrier-0004 | 1545 | 128.38 dB | 128.36 dB | 0.02 dB | 151.80 dB |
+| carrier-0005 | 1563 | 129.30 dB | 129.28 dB | 0.02 dB | 152.66 dB |
+| carrier-0006 | 1574 | 129.70 dB | 129.68 dB | 0.02 dB | 153.05 dB |
+| carrier-0007 | 1598 | 130.09 dB | 130.07 dB | 0.02 dB | 153.39 dB |
+| carrier-0008 | 1549 | 130.75 dB | 130.73 dB | 0.02 dB | 154.02 dB |
+| carrier-0009 | 1531 | 128.88 dB | 128.86 dB | 0.02 dB | 152.29 dB |
+| carrier-0010 | 1449 | 129.02 dB | 129.00 dB | 0.02 dB | 152.45 dB |
+| carrier-0011 | 1518 | 64.22 dB | 64.22 dB | 0.00 dB | 155.26 dB |
+| carrier-0012 | 1663 | 50.07 dB | 50.07 dB | 0.00 dB | 154.35 dB |
+| carrier-0013 | 1553 | 46.00 dB | 46.00 dB | 0.00 dB | 152.59 dB |
+| carrier-0014 | 1443 | 43.92 dB | 43.92 dB | 0.00 dB | 153.13 dB |
+| carrier-0015 | 968 | ∞ | 103.11 dB | ∞ | 103.11 dB |
+| carrier-0016 | 1046 | ∞ | 105.28 dB | ∞ | 105.28 dB |
+| carrier-0017 | 978 | ∞ | 106.00 dB | ∞ | 106.00 dB |
+| carrier-0018 | 2297 | ∞ | 134.66 dB | ∞ | 134.66 dB |
+| carrier-0019 | 2258 | ∞ | 132.11 dB | ∞ | 132.11 dB |
+| carrier-0020 | 2593 | ∞ | 150.09 dB | ∞ | 150.09 dB |
+| carrier-0021 | 2648 | ∞ | 149.81 dB | ∞ | 149.81 dB |
+| carrier-0022 | 2676 | ∞ | 151.33 dB | ∞ | 151.33 dB |
+| carrier-0023 | 2583 | ∞ | 148.63 dB | ∞ | 148.63 dB |
+| carrier-0024 | 2685 | ∞ | 149.65 dB | ∞ | 149.65 dB |
+| carrier-0025 | 2698 | ∞ | 150.01 dB | ∞ | 150.01 dB |
+| carrier-0026 | 2688 | ∞ | 150.50 dB | ∞ | 150.50 dB |
+| carrier-0027 | 2661 | ∞ | 150.48 dB | ∞ | 150.48 dB |
+| carrier-0028 | 2638 | ∞ | 149.98 dB | ∞ | 149.98 dB |
+| carrier-0029 | 466 | ∞ | 95.57 dB | ∞ | 95.57 dB |
+| carrier-0030 | 463 | ∞ | 95.28 dB | ∞ | 95.28 dB |
+| carrier-0031 | 461 | ∞ | 95.18 dB | ∞ | 95.18 dB |
+| carrier-0032 | 467 | ∞ | 95.10 dB | ∞ | 95.10 dB |
+| carrier-0033 | 467 | ∞ | 95.60 dB | ∞ | 95.60 dB |
+| carrier-0034 | 457 | ∞ | 94.90 dB | ∞ | 94.90 dB |
+| carrier-0035 | 464 | ∞ | 95.11 dB | ∞ | 95.11 dB |
+| carrier-0036 | 470 | ∞ | 95.52 dB | ∞ | 95.52 dB |
+| carrier-0037 | 466 | ∞ | 94.89 dB | ∞ | 94.89 dB |
+| carrier-0038 | 464 | ∞ | 95.12 dB | ∞ | 95.12 dB |
+| carrier-0039 | 462 | ∞ | 94.91 dB | ∞ | 94.91 dB |
+| carrier-0040 | 466 | ∞ | 94.89 dB | ∞ | 94.89 dB |
+| carrier-0041 | 465 | ∞ | 95.26 dB | ∞ | 95.26 dB |
+| carrier-0042 | 473 | ∞ | 95.33 dB | ∞ | 95.33 dB |
+| carrier-0043 | 459 | ∞ | 94.07 dB | ∞ | 94.07 dB |
+| carrier-0044 | 468 | ∞ | 94.95 dB | ∞ | 94.95 dB |
+| carrier-0045 | 482 | ∞ | 96.02 dB | ∞ | 96.02 dB |
+| carrier-0046 | 458 | ∞ | 95.37 dB | ∞ | 95.37 dB |
+| carrier-0047 | 469 | ∞ | 95.40 dB | ∞ | 95.40 dB |
+| carrier-0048 | 467 | ∞ | 95.55 dB | ∞ | 95.55 dB |
+| carrier-0049 | 461 | ∞ | 95.19 dB | ∞ | 95.19 dB |
+| carrier-0050 | 476 | ∞ | 95.27 dB | ∞ | 95.27 dB |
+| carrier-0051 | 461 | ∞ | 95.17 dB | ∞ | 95.17 dB |
+| carrier-0052 | 463 | ∞ | 95.09 dB | ∞ | 95.09 dB |
+| carrier-0053 | 464 | ∞ | 95.00 dB | ∞ | 95.00 dB |
+| carrier-0054 | 473 | ∞ | 94.98 dB | ∞ | 94.98 dB |
+| carrier-0055 | 1874 | 46.77 dB | 46.77 dB | 0.00 dB | 157.69 dB |
+| carrier-0056 | 1948 | 36.65 dB | 36.65 dB | 0.00 dB | 159.58 dB |
+| carrier-0057 | 1832 | 45.62 dB | 45.62 dB | 0.00 dB | 157.09 dB |
+| carrier-0058 | 1910 | 35.91 dB | 35.91 dB | 0.00 dB | 157.98 dB |
+| carrier-0059 | 1936 | 44.31 dB | 44.31 dB | 0.00 dB | 157.88 dB |
+| carrier-0060 | 1873 | 58.54 dB | 58.54 dB | 0.00 dB | 155.00 dB |
+| carrier-0061 | 1854 | 41.20 dB | 41.20 dB | 0.00 dB | 158.02 dB |
+| carrier-0062 | 1916 | 41.33 dB | 41.33 dB | 0.00 dB | 158.45 dB |
+| carrier-0063 | 1929 | 43.97 dB | 43.97 dB | 0.00 dB | 158.95 dB |
+| carrier-0064 | 1769 | 68.84 dB | 68.84 dB | 0.00 dB | 154.86 dB |
+| carrier-0065 | 1860 | 52.48 dB | 52.48 dB | 0.00 dB | 157.02 dB |
+| carrier-0066 | 1894 | 43.08 dB | 43.08 dB | 0.00 dB | 157.75 dB |
+| carrier-0067 | 1965 | 46.30 dB | 46.30 dB | 0.00 dB | 158.63 dB |
+| carrier-0068 | 1927 | 38.87 dB | 38.87 dB | 0.00 dB | 159.40 dB |
+| carrier-0069 | 1850 | 54.46 dB | 54.46 dB | 0.00 dB | 157.64 dB |
+| carrier-0070 | 1767 | 47.32 dB | 47.32 dB | 0.00 dB | 156.82 dB |
+| carrier-0071 | 1891 | 43.18 dB | 43.18 dB | 0.00 dB | 156.94 dB |
+| carrier-0072 | 1921 | 45.06 dB | 45.06 dB | 0.00 dB | 158.62 dB |
+| carrier-0073 | 1851 | 49.41 dB | 49.41 dB | 0.00 dB | 155.88 dB |
+| carrier-0074 | 1899 | 40.06 dB | 40.06 dB | 0.00 dB | 158.35 dB |
+| carrier-0075 | 1775 | 44.09 dB | 44.09 dB | 0.00 dB | 157.77 dB |
+| carrier-0076 | 1984 | 39.55 dB | 39.55 dB | 0.00 dB | 158.92 dB |
+| carrier-0077 | 1917 | 48.44 dB | 48.44 dB | 0.00 dB | 158.31 dB |
+| carrier-0078 | 1914 | 40.85 dB | 40.85 dB | 0.00 dB | 159.24 dB |
+| carrier-0079 | 1932 | 45.88 dB | 45.88 dB | 0.00 dB | 157.78 dB |
+| carrier-0080 | 1938 | 46.94 dB | 46.94 dB | 0.00 dB | 157.91 dB |
+| carrier-0081 | 1898 | 48.47 dB | 48.47 dB | 0.00 dB | 157.48 dB |
+| carrier-0082 | 1852 | 43.09 dB | 43.09 dB | 0.00 dB | 156.78 dB |
+| carrier-0083 | 1902 | 59.77 dB | 59.77 dB | 0.00 dB | 155.10 dB |
+| carrier-0084 | 1813 | 41.02 dB | 41.02 dB | 0.00 dB | 158.56 dB |
 
 ## wav/pcm_s16le
 
@@ -295,106 +308,110 @@ The ffmpeg column is ffmpeg at its own defaults. Ogg Vorbis keeps the source's q
 
 | Carrier | Source samples | Samples (ffmpeg / Mist) | Zero tail (ffmpeg / Mist) | Sample format (ffmpeg / Mist) | Nominal kbps (ffmpeg / Mist) | Differs in |
 |---|---|---|---|---|---|---|
-| 02 - Ride the Lightning.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| 03 - Disposable Heroes.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| 04 - No Remorse.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| 06 - For Whom the Bell Tolls.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| 07 - The Four Horsemen.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| 08 - Fade to Black.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| 09 - Seek & Destroy.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| 10 - Whiplash.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| 11 - Fight Fire with Fire.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| 14 - Motorbreath.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| ATB.06.20.2025/01 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| ATB.06.20.2025/02 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| ATB.06.20.2025/03 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| ATB.06.20.2025/04 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| Pillars_of_the_Sky.wav | 2880000 | 2880000 / 2880000 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| Starlight_Ascent.wav | 5760000 | 5760000 / 5760000 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| Stellar_Ascent.wav | 5760000 | 5760000 / 5760000 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side1.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side2.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t01.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t02.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t03.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t04.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t05.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t06.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t07.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t08.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t09.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
-| sundaytimes-wind-in-the-willows/01 Track01.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/02 Track02.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/03 Track03.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/04 Track04.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/05 Track05.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/06 Track06.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/07 Track07.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/08 Track08.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/09 Track09.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/10 Track10.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/11 Track11.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/12 Track12.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/13 Track13.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/14 Track14.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/15 Track15.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/16 Track16.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/17 Track17.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/18 Track18.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/19 Track19.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/20 Track20.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/21 Track21.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/22 Track22.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/23 Track23.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/24 Track24.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/25 Track25.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
-| sundaytimes-wind-in-the-willows/26 Track26.flac | 6560316 | 6560316 / 6560316 | 20 / 20 | s16 / s16 | 1411 / 1411 | — |
-| va-female-vocal-trance-2019-opus-128/Adam Ellis - Broken (& Jo Cartwright).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Hurt of intention 2019 (& Neev Kennedy).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Right back.opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Alex Leavon - When I'm with you (& Julia Ross).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Ana Criado - In a thousand skies.opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Blue5even - Through the barricades (& Jo Cartwright).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Braulio Stefield - See ghosts (& Victoriya).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Costa - Always (& Cathy Burton).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Delta-S - Letting go (Ikerya Project remix) (& Kate Louise Smith).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Derek Ryan - After dark (ft Melissa R. Kaplan).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Drival - Saviour (& Michele C).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/F.G. Noise - Waiting for the thunder (Killing time) (& Lauren Ní Chasaide).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - Hold of you (Denis Kenzo remix).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - When you come home (Myde rework).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Karanda - Still got time (& Sarah Russell).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Limelght - Run & hide (ft Alina Renae).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Lost Witness - Sewn.opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Mhammed El Alami - Warriors (& Emma Horan).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Nicholas Gunn - Older (Costa remix) (ft Alina Renae).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Nitrous Oxide - Lower than the ground (& Sarah Russell).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Passenger 75 - Heartless (& Score).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Perpetual - Innocent (ft Fisher).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Raz Nitzan - Beyond time (Aurosonic remix) (& Ellie Lawson).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Ronski Speed - Beat alive (Denis Airwave remix) (& Sarah Lynn).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Rub!k - Everglow (& Sue McLaren).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Be here with me (ft Katty Heath).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Crystalize (& Fenna Day).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/The Blizzard - Always a stranger (Nitrous Oxide remix) (& Carol Lee).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/The City Never Sleeps - Addicted (NyTiGen remix) (& Summer Haze).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
-| va-female-vocal-trance-2019-opus-128/Whiteout - The part in-between (Wilderness & A-Line remix) (& One Half Bear).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0001 | 13230191 | 13230191 / 13230191 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0002 | 13230191 | 13230191 / 13230191 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0003 | 13230191 | 13230191 / 13230191 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0004 | 11669231 | 11669231 / 11669231 | 0 / 16 | s16 / s16 | 1411 / 1411 | zero tail |
+| carrier-0005 | 13230191 | 13230191 / 13230191 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0006 | 13230191 | 13230191 / 13230191 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0007 | 13230191 | 13230191 / 13230191 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0008 | 13230191 | 13230191 / 13230191 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0009 | 11631215 | 11631215 / 11631215 | 300 / 300 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0010 | 12556271 | 12556271 / 12556271 | 30781 / 30781 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0011 | 13230767 | 13230767 / 13230767 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0012 | 13230767 | 13230767 / 13230767 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0013 | 13230767 | 13230767 / 13230767 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0014 | 13230767 | 13230767 / 13230767 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0015 | 2880000 | 2880000 / 2880000 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0016 | 5760000 | 5760000 / 5760000 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0017 | 5760000 | 5760000 / 5760000 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0018 | 28803072 | 28803072 / 28803072 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0019 | 28803072 | 28803072 / 28803072 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0020 | 27650560 | 27650560 / 27650560 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0021 | 27998720 | 27998720 / 27998720 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0022 | 24209920 | 24209920 / 24209920 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0023 | 28803072 | 28803072 / 28803072 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0024 | 24574720 | 24574720 / 24574720 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0025 | 26830080 | 26830080 / 26830080 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0026 | 24695040 | 24695040 / 24695040 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0027 | 18909440 | 18909440 / 18909440 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0028 | 28803072 | 28803072 / 28803072 | 0 / 0 | s16 / s16 | 3072 / 3072 | — |
+| carrier-0029 | 7939176 | 7939176 / 7939176 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0030 | 8334312 | 8334312 / 8334312 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0031 | 8187312 | 8187312 / 8187312 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0032 | 7616952 | 7616952 / 7616952 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0033 | 7703976 | 7703976 / 7703976 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0034 | 7795116 | 7795116 / 7795116 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0035 | 8786484 | 8786484 / 8786484 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0036 | 8306676 | 8306676 / 8306676 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0037 | 7848624 | 7848624 / 7848624 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0038 | 7849212 | 7849212 / 7849212 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0039 | 8371356 | 8371356 / 8371356 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0040 | 7808052 | 7808052 / 7808052 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0041 | 7792764 | 7792764 / 7792764 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0042 | 7705152 | 7705152 / 7705152 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0043 | 7733376 | 7733376 / 7733376 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0044 | 8332548 | 8332548 / 8332548 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0045 | 7836864 | 7836864 / 7836864 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0046 | 7783356 | 7783356 / 7783356 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0047 | 8134980 | 8134980 / 8134980 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0048 | 7904484 | 7904484 / 7904484 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0049 | 7577556 | 7577556 / 7577556 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0050 | 8433684 | 8433684 / 8433684 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0051 | 8167320 | 8167320 / 8167320 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0052 | 7443492 | 7443492 / 7443492 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0053 | 7847448 | 7847448 / 7847448 | 0 / 0 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0054 | 6560316 | 6560316 / 6560316 | 20 / 20 | s16 / s16 | 1411 / 1411 | — |
+| carrier-0055 | 7567536 | 7567536 / 7567536 | 2973 / 2973 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0056 | 10716829 | 10716829 / 10716829 | 2698 / 2698 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0057 | 10753254 | 10753254 / 10753254 | 466 / 466 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0058 | 8507078 | 8507078 / 8507078 | 3 / 3 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0059 | 9099131 | 9099131 / 9099131 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0060 | 10184328 | 10184328 / 10184328 | 1 / 1 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0061 | 9848955 | 9848955 / 9848955 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0062 | 10444219 | 10444219 / 10444219 | 1526 / 1526 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0063 | 10854001 | 10854001 / 10854001 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0064 | 9693408 | 9693408 / 9693408 | 1 / 0 | s16 / s16 | 1536 / 1536 | zero tail |
+| carrier-0065 | 9766958 | 9766958 / 9766958 | 1 / 1 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0066 | 9359938 | 9359938 / 9359938 | 1 / 1 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0067 | 9855000 | 9855000 / 9855000 | 8479 / 8479 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0068 | 9146026 | 9146026 / 9146026 | 280 / 280 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0069 | 10717286 | 10717286 / 10717286 | 3 / 3 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0070 | 8370000 | 8370000 / 8370000 | 1 / 1 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0071 | 10456119 | 10456119 / 10456119 | 23962 / 23962 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0072 | 9573914 | 9573914 / 9573914 | 8695 / 8695 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0073 | 10171848 | 10171848 / 10171848 | 830 / 830 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0074 | 9735652 | 9735652 / 9735652 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0075 | 9412488 | 9412488 / 9412488 | 7542 / 7542 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0076 | 9888000 | 9888000 / 9888000 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0077 | 10440000 | 10440000 / 10440000 | 2 / 0 | s16 / s16 | 1536 / 1536 | zero tail |
+| carrier-0078 | 11520002 | 11520002 / 11520002 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0079 | 10450747 | 10450747 / 10450747 | 21515 / 21515 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0080 | 8598259 | 8598259 / 8598259 | 5 / 4 | s16 / s16 | 1536 / 1536 | zero tail |
+| carrier-0081 | 11520000 | 11520000 / 11520000 | 0 / 0 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0082 | 11102609 | 11102609 / 11102609 | 2 / 1 | s16 / s16 | 1536 / 1536 | zero tail |
+| carrier-0083 | 8540309 | 8540309 / 8540309 | 7390 / 7390 | s16 / s16 | 1536 / 1536 | — |
+| carrier-0084 | 10279847 | 10279847 / 10279847 | 7068 / 7068 | s16 / s16 | 1536 / 1536 | — |
 
-**Verdict:** ✅ matches ffmpeg on all 84 carriers.
+**Verdict:** ❌ differs on 5 of 84 carriers: zero tail.
 
 ### Can a detector tell?
 
 Stego copy against the clean ffmpeg copy (for Ogg Vorbis, ffmpeg at the quality level Mist chose, so only the embedding differs).
 
-| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
-|---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.501 (0.499–0.503) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.500 (0.499–0.501) | 0.499 (0.496–0.503) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| rs | bit overwriting (not what Mist does) | 0.500 (0.499–0.501) | 0.502 (0.497–0.506) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.502 (0.500–0.503) | 0.000 (0.000–0.000) | ⚠️ faint signal per file | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.501 (0.500–0.501) | 0.502 (0.500–0.505) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| markov | how the waveform's curvature changes from sample to sample | 0.500 (0.499–0.500) | 0.499 (0.497–0.501) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| key-aware | the ephemeral key in the first frame's envelope, read with the public key alone | 0.506 (0.470–0.542) | 0.506 (0.470–0.542) | 0.000 (0.000–0.003) | ✅ chance | ✅ hidden (0.500) |
+| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | D | Detector-implied benchmark KL lower bound (nats, 95%) | Adjusted p | Verdict | Message size |
+|---|---|---|---|---|---|---|---|---|
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.501 (0.499–0.502) | 0.501 | 0.000 (0.000–0.000) | BH 0.585 | ✅ chance | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.500 (0.499–0.500) | 0.498 (0.494–0.502) | 0.502 | 0.000 (0.000–0.000) | BH 0.465 | ✅ chance | ✅ hidden (0.500) |
+| rs | bit overwriting (not what Mist does) | 0.500 (0.499–0.501) | 0.502 (0.498–0.507) | 0.502 | 0.000 (0.000–0.000) | BH 0.495 | ✅ chance | ✅ hidden (0.501) |
+| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.502 (0.500–0.503) | 0.502 | 0.000 (0.000–0.000) | Holm 0.120 | ⚠️ faint signal | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.502 (0.501–0.504) | 0.507 (0.502–0.513) | 0.507 | 0.000 (0.000–0.000) | Holm 0.300 | ⚠️ faint signal | ✅ hidden (0.500) |
+| markov | how the waveform's curvature changes from sample to sample | 0.501 (0.500–0.501) | 0.503 (0.501–0.505) | 0.503 | 0.000 (0.000–0.000) | Holm 0.300 | ⚠️ faint signal | ✅ hidden (0.500) |
+| key-aware | the ephemeral key in the first frame's envelope, read with the public key alone | 0.476 (0.441–0.506) | 0.476 (0.441–0.506) | 0.524 | 0.001 (0.000–0.007) | Holm 0.300 | ✅ chance | ✅ hidden (0.500) |
+
+Power: shifting this run's classifier file scores to D = 0.55, about 8 independent lineages give 90% power for a lineage-cluster interval to exclude 0.5. The figure is a simulation from this run's dispersion.
+
+Worst cell: key-aware on aggregate, file AUC 0.476, D 0.524.
 
 **Verdict:** ⚠️ faint signal from hcf-com (AUC 0.500).
 
@@ -402,14 +419,14 @@ Stego copy against the clean ffmpeg copy (for Ogg Vorbis, ffmpeg at the quality 
 
 Stego copy against Mist's own re-encode, so only the embedded changes differ.
 
-| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
-|---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.501 (0.499–0.503) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.500 (0.499–0.501) | 0.499 (0.496–0.503) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| rs | bit overwriting (not what Mist does) | 0.500 (0.499–0.501) | 0.502 (0.497–0.506) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.502 (0.500–0.503) | 0.000 (0.000–0.000) | ⚠️ faint signal per file | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.501 (0.500–0.501) | 0.502 (0.500–0.505) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| markov | how the waveform's curvature changes from sample to sample | 0.500 (0.499–0.500) | 0.499 (0.497–0.501) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
+| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | D | Detector-implied benchmark KL lower bound (nats, 95%) | Adjusted p | Verdict | Message size |
+|---|---|---|---|---|---|---|---|---|
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.501 (0.499–0.502) | 0.501 | 0.000 (0.000–0.000) | — | ✅ chance | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.500 (0.499–0.500) | 0.498 (0.494–0.502) | 0.502 | 0.000 (0.000–0.000) | — | ✅ chance | ✅ hidden (0.500) |
+| rs | bit overwriting (not what Mist does) | 0.500 (0.499–0.501) | 0.502 (0.497–0.507) | 0.502 | 0.000 (0.000–0.000) | — | ✅ chance | ✅ hidden (0.501) |
+| hcf-com | ±1 changes, which is what Mist does | 0.500 (0.500–0.500) | 0.502 (0.500–0.503) | 0.502 | 0.000 (0.000–0.000) | — | ⚠️ faint signal | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.502 (0.501–0.504) | 0.507 (0.502–0.513) | 0.507 | 0.000 (0.000–0.000) | — | ⚠️ faint signal | ✅ hidden (0.500) |
+| markov | how the waveform's curvature changes from sample to sample | 0.501 (0.500–0.501) | 0.503 (0.501–0.505) | 0.503 | 0.000 (0.000–0.000) | — | ⚠️ faint signal | ✅ hidden (0.500) |
 
 ### Does detection grow with audio?
 
@@ -417,25 +434,12 @@ File AUC (95%) against the clean ffmpeg copy on the first chunks of each carrier
 
 | Detector | First 40 chunks | First 240 chunks | Whole file |
 |---|---|---|---|
-| chi-square | 0.503 (0.500–0.508) | 0.501 (0.499–0.503) | 0.501 (0.499–0.503) |
-| spa | 0.500 (0.495–0.505) | 0.500 (0.496–0.504) | 0.499 (0.496–0.503) |
-| rs | 0.497 (0.490–0.503) | 0.502 (0.498–0.507) | 0.502 (0.497–0.506) |
-| hcf-com | 0.500 (0.499–0.502) | 0.502 (0.500–0.503) | 0.502 (0.500–0.503) |
-| classifier | 0.503 (0.500–0.505) | 0.504 (0.501–0.508) | 0.502 (0.500–0.505) |
-| markov | 0.500 (0.498–0.502) | 0.500 (0.499–0.502) | 0.499 (0.497–0.501) |
-
-### By kind of audio
-
-File AUC (95%) against the clean ffmpeg copy, per corpus folder. The count is carriers; few carriers means a wide interval.
-
-| Detector | (top level) (13) | ATB.06.20.2025 (4) | disc1 (2) | hmbb2015-03-18.sbd.flac24 (9) | sundaytimes-wind-in-the-willows (26) | va-female-vocal-trance-2019-opus-128 (30) |
-|---|---|---|---|---|---|---|
-| chi-square | 0.500 (0.485–0.515) | 0.469 (0.333–0.583) | 0.375 (0.000–0.500) | 0.500 (0.463–0.537) | 0.497 (0.481–0.508) | 0.513 (0.508–0.521) |
-| spa | 0.521 (0.478–0.577) | 0.438 (0.333–0.583) | 0.750 (0.667–1.000) | 0.506 (0.467–0.546) | 0.491 (0.474–0.508) | 0.496 (0.479–0.511) |
-| rs | 0.503 (0.422–0.585) | 0.438 (0.333–0.583) | 0.750 (0.667–1.000) | 0.519 (0.481–0.556) | 0.512 (0.493–0.542) | 0.501 (0.483–0.520) |
-| hcf-com | 0.497 (0.473–0.516) | 0.562 (0.417–0.667) | 0.500 (0.000–1.000) | 0.494 (0.456–0.533) | 0.500 (0.493–0.508) | 0.510 (0.504–0.515) |
-| classifier | 0.503 (0.484–0.524) | 0.500 (0.333–0.667) | 0.250 (0.000–0.333) | 0.469 (0.439–0.506) | 0.497 (0.486–0.506) | 0.683 (0.606–0.762) |
-| markov | 0.515 (0.497–0.533) | 0.562 (0.417–0.667) | 0.250 (0.000–0.333) | 0.469 (0.439–0.506) | 0.494 (0.487–0.505) | 0.562 (0.528–0.603) |
+| chi-square | 0.503 (0.500–0.508) | 0.501 (0.500–0.503) | 0.501 (0.499–0.502) |
+| spa | 0.503 (0.498–0.508) | 0.501 (0.497–0.505) | 0.498 (0.494–0.502) |
+| rs | 0.501 (0.494–0.508) | 0.503 (0.498–0.507) | 0.502 (0.498–0.507) |
+| hcf-com | 0.501 (0.500–0.502) | 0.501 (0.499–0.502) | 0.502 (0.500–0.503) |
+| classifier | 0.502 (0.499–0.505) | 0.507 (0.503–0.514) | 0.507 (0.502–0.513) |
+| markov | 0.501 (0.499–0.503) | 0.507 (0.503–0.512) | 0.503 (0.501–0.505) |
 
 ### Does detection grow with the number of files?
 
@@ -443,113 +447,113 @@ AUC when the warden averages a detector's score over k files drawn at random fro
 
 | Detector | 1 file(s) | 3 file(s) | 6 file(s) |
 |---|---|---|---|
-| chi-square | 0.548 | 0.493 | 0.509 |
-| spa | 0.497 | 0.512 | 0.498 |
-| rs | 0.488 | 0.507 | 0.489 |
-| hcf-com | 0.475 | 0.480 | 0.479 |
-| classifier | 0.526 | 0.520 | 0.505 |
-| markov | 0.523 | 0.518 | 0.498 |
+| chi-square | 0.543 | 0.491 | 0.507 |
+| spa | 0.487 | 0.511 | 0.498 |
+| rs | 0.488 | 0.511 | 0.494 |
+| hcf-com | 0.474 | 0.482 | 0.476 |
+| classifier | 0.530 | 0.521 | 0.509 |
+| markov | 0.530 | 0.513 | 0.499 |
 
 ### How much does it cost in sound?
 
 | Measure | Mean | Worst | What it means |
 |---|---|---|---|
-| Plain re-encode SDR | 59.08 dB | 36.40 dB | Loss of Mist's own re-encode, with nothing embedded |
-| Mist output SDR | 71.89 dB | 36.40 dB | The same, with the message embedded |
+| Plain re-encode SDR | 58.45 dB | 35.91 dB | Loss of Mist's own re-encode, with nothing embedded |
+| Mist output SDR | 71.47 dB | 35.91 dB | The same, with the message embedded |
 | Embedding cost | 0.01 dB | 0.02 dB | Mist's own share; target ≤ 0.3 dB, design-doc reference 0.18 dB |
 | Extra error energy | +0% | +0% | Embedding cost as error added on top of a plain re-encode |
-| Mist's error below the music | 102.59 dB | 82.56 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
+| Mist's error below the music | 102.75 dB | 83.98 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
 
-**Verdict:** ✅ inaudible: the added error is at least 82.56 dB below the music.
+**Verdict:** ✅ inaudible: the added error is at least 83.98 dB below the music.
 
 ### Per carrier
 
 | Carrier | Output kbps | Plain re-encode SDR | Mist output SDR | Embedding cost | Mist's error below the music |
 |---|---|---|---|---|---|
-| 02 - Ride the Lightning.mp3 | 1411 | 79.81 dB | 79.79 dB | 0.02 dB | 103.83 dB |
-| 03 - Disposable Heroes.mp3 | 1411 | 79.89 dB | 79.88 dB | 0.02 dB | 103.92 dB |
-| 04 - No Remorse.mp3 | 1411 | 81.01 dB | 81.00 dB | 0.02 dB | 105.03 dB |
-| 06 - For Whom the Bell Tolls.mp3 | 1411 | 78.99 dB | 78.97 dB | 0.02 dB | 103.03 dB |
-| 07 - The Four Horsemen.mp3 | 1411 | 80.14 dB | 80.12 dB | 0.02 dB | 104.17 dB |
-| 08 - Fade to Black.mp3 | 1411 | 79.18 dB | 79.16 dB | 0.02 dB | 103.20 dB |
-| 09 - Seek & Destroy.mp3 | 1411 | 81.09 dB | 81.07 dB | 0.02 dB | 105.12 dB |
-| 10 - Whiplash.mp3 | 1411 | 83.05 dB | 83.03 dB | 0.02 dB | 107.08 dB |
-| 11 - Fight Fire with Fire.mp3 | 1411 | 78.97 dB | 78.96 dB | 0.02 dB | 103.00 dB |
-| 14 - Motorbreath.mp3 | 1411 | 81.44 dB | 81.42 dB | 0.02 dB | 105.46 dB |
-| ATB.06.20.2025/01 ATB 06-20-2025.mp3 | 1411 | 82.26 dB | 82.24 dB | 0.02 dB | 106.28 dB |
-| ATB.06.20.2025/02 ATB 06-20-2025.mp3 | 1411 | 45.23 dB | 45.23 dB | 0.00 dB | 104.34 dB |
-| ATB.06.20.2025/03 ATB 06-20-2025.mp3 | 1411 | 42.92 dB | 42.92 dB | 0.00 dB | 103.55 dB |
-| ATB.06.20.2025/04 ATB 06-20-2025.mp3 | 1411 | 39.61 dB | 39.61 dB | 0.00 dB | 103.66 dB |
-| Pillars_of_the_Sky.wav | 1536 | — | 103.10 dB | — | 103.10 dB |
-| Starlight_Ascent.wav | 1536 | — | 105.27 dB | — | 105.27 dB |
-| Stellar_Ascent.wav | 1536 | — | 106.00 dB | — | 106.00 dB |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side1.flac | 3072 | 63.02 dB | 63.00 dB | 0.02 dB | 87.10 dB |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side2.flac | 3072 | 58.48 dB | 58.47 dB | 0.02 dB | 82.56 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t01.flac | 3072 | 77.86 dB | 77.84 dB | 0.02 dB | 101.86 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t02.flac | 3072 | 78.03 dB | 78.01 dB | 0.02 dB | 102.03 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t03.flac | 3072 | 79.63 dB | 79.61 dB | 0.02 dB | 103.63 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t04.flac | 3072 | 76.51 dB | 76.49 dB | 0.02 dB | 100.51 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t05.flac | 3072 | 77.15 dB | 77.14 dB | 0.02 dB | 101.15 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t06.flac | 3072 | 77.28 dB | 77.26 dB | 0.02 dB | 101.28 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t07.flac | 3072 | 78.36 dB | 78.34 dB | 0.02 dB | 102.37 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t08.flac | 3072 | 78.54 dB | 78.52 dB | 0.02 dB | 102.54 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t09.flac | 3072 | 77.63 dB | 77.61 dB | 0.02 dB | 101.63 dB |
-| sundaytimes-wind-in-the-willows/01 Track01.flac | 1411 | — | 95.60 dB | — | 95.60 dB |
-| sundaytimes-wind-in-the-willows/02 Track02.flac | 1411 | — | 95.38 dB | — | 95.38 dB |
-| sundaytimes-wind-in-the-willows/03 Track03.flac | 1411 | — | 95.18 dB | — | 95.18 dB |
-| sundaytimes-wind-in-the-willows/04 Track04.flac | 1411 | — | 95.07 dB | — | 95.07 dB |
-| sundaytimes-wind-in-the-willows/05 Track05.flac | 1411 | — | 95.53 dB | — | 95.53 dB |
-| sundaytimes-wind-in-the-willows/06 Track06.flac | 1411 | — | 95.07 dB | — | 95.07 dB |
-| sundaytimes-wind-in-the-willows/07 Track07.flac | 1411 | — | 95.09 dB | — | 95.09 dB |
-| sundaytimes-wind-in-the-willows/08 Track08.flac | 1411 | — | 95.48 dB | — | 95.48 dB |
-| sundaytimes-wind-in-the-willows/09 Track09.flac | 1411 | — | 94.97 dB | — | 94.97 dB |
-| sundaytimes-wind-in-the-willows/10 Track10.flac | 1411 | — | 94.93 dB | — | 94.93 dB |
-| sundaytimes-wind-in-the-willows/11 Track11.flac | 1411 | — | 94.75 dB | — | 94.75 dB |
-| sundaytimes-wind-in-the-willows/12 Track12.flac | 1411 | — | 95.16 dB | — | 95.16 dB |
-| sundaytimes-wind-in-the-willows/13 Track13.flac | 1411 | — | 95.60 dB | — | 95.60 dB |
-| sundaytimes-wind-in-the-willows/14 Track14.flac | 1411 | — | 95.56 dB | — | 95.56 dB |
-| sundaytimes-wind-in-the-willows/15 Track15.flac | 1411 | — | 94.12 dB | — | 94.12 dB |
-| sundaytimes-wind-in-the-willows/16 Track16.flac | 1411 | — | 94.83 dB | — | 94.83 dB |
-| sundaytimes-wind-in-the-willows/17 Track17.flac | 1411 | — | 95.89 dB | — | 95.89 dB |
-| sundaytimes-wind-in-the-willows/18 Track18.flac | 1411 | — | 95.40 dB | — | 95.40 dB |
-| sundaytimes-wind-in-the-willows/19 Track19.flac | 1411 | — | 95.36 dB | — | 95.36 dB |
-| sundaytimes-wind-in-the-willows/20 Track20.flac | 1411 | — | 95.43 dB | — | 95.43 dB |
-| sundaytimes-wind-in-the-willows/21 Track21.flac | 1411 | — | 95.27 dB | — | 95.27 dB |
-| sundaytimes-wind-in-the-willows/22 Track22.flac | 1411 | — | 95.48 dB | — | 95.48 dB |
-| sundaytimes-wind-in-the-willows/23 Track23.flac | 1411 | — | 95.12 dB | — | 95.12 dB |
-| sundaytimes-wind-in-the-willows/24 Track24.flac | 1411 | — | 95.10 dB | — | 95.10 dB |
-| sundaytimes-wind-in-the-willows/25 Track25.flac | 1411 | — | 95.17 dB | — | 95.17 dB |
-| sundaytimes-wind-in-the-willows/26 Track26.flac | 1411 | — | 94.97 dB | — | 94.97 dB |
-| va-female-vocal-trance-2019-opus-128/Adam Ellis - Broken (& Jo Cartwright).opus | 1536 | 46.74 dB | 46.74 dB | 0.00 dB | 109.59 dB |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Hurt of intention 2019 (& Neev Kennedy).opus | 1536 | 38.01 dB | 38.01 dB | 0.00 dB | 111.16 dB |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Right back.opus | 1536 | 47.54 dB | 47.54 dB | 0.00 dB | 108.65 dB |
-| va-female-vocal-trance-2019-opus-128/Alex Leavon - When I'm with you (& Julia Ross).opus | 1536 | 36.40 dB | 36.40 dB | 0.00 dB | 109.69 dB |
-| va-female-vocal-trance-2019-opus-128/Ana Criado - In a thousand skies.opus | 1536 | 45.28 dB | 45.28 dB | 0.00 dB | 109.34 dB |
-| va-female-vocal-trance-2019-opus-128/Blue5even - Through the barricades (& Jo Cartwright).opus | 1536 | 61.08 dB | 61.08 dB | 0.00 dB | 106.13 dB |
-| va-female-vocal-trance-2019-opus-128/Braulio Stefield - See ghosts (& Victoriya).opus | 1536 | 41.82 dB | 41.82 dB | 0.00 dB | 109.39 dB |
-| va-female-vocal-trance-2019-opus-128/Costa - Always (& Cathy Burton).opus | 1536 | 43.91 dB | 43.91 dB | 0.00 dB | 109.93 dB |
-| va-female-vocal-trance-2019-opus-128/Delta-S - Letting go (Ikerya Project remix) (& Kate Louise Smith).opus | 1536 | 44.97 dB | 44.97 dB | 0.00 dB | 110.14 dB |
-| va-female-vocal-trance-2019-opus-128/Derek Ryan - After dark (ft Melissa R. Kaplan).opus | 1536 | 70.63 dB | 70.63 dB | 0.00 dB | 106.18 dB |
-| va-female-vocal-trance-2019-opus-128/Drival - Saviour (& Michele C).opus | 1536 | 54.62 dB | 54.62 dB | 0.00 dB | 108.38 dB |
-| va-female-vocal-trance-2019-opus-128/F.G. Noise - Waiting for the thunder (Killing time) (& Lauren Ní Chasaide).opus | 1536 | 43.76 dB | 43.76 dB | 0.00 dB | 109.46 dB |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - Hold of you (Denis Kenzo remix).opus | 1536 | 48.48 dB | 48.48 dB | 0.00 dB | 110.00 dB |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - When you come home (Myde rework).opus | 1536 | 39.69 dB | 39.69 dB | 0.00 dB | 111.24 dB |
-| va-female-vocal-trance-2019-opus-128/Karanda - Still got time (& Sarah Russell).opus | 1536 | 54.40 dB | 54.40 dB | 0.00 dB | 109.36 dB |
-| va-female-vocal-trance-2019-opus-128/Limelght - Run & hide (ft Alina Renae).opus | 1536 | 47.26 dB | 47.26 dB | 0.00 dB | 109.24 dB |
-| va-female-vocal-trance-2019-opus-128/Lost Witness - Sewn.opus | 1536 | 43.03 dB | 43.03 dB | 0.00 dB | 108.41 dB |
-| va-female-vocal-trance-2019-opus-128/Mhammed El Alami - Warriors (& Emma Horan).opus | 1536 | 46.45 dB | 46.45 dB | 0.00 dB | 110.42 dB |
-| va-female-vocal-trance-2019-opus-128/Nicholas Gunn - Older (Costa remix) (ft Alina Renae).opus | 1536 | 50.75 dB | 50.75 dB | 0.00 dB | 107.05 dB |
-| va-female-vocal-trance-2019-opus-128/Nitrous Oxide - Lower than the ground (& Sarah Russell).opus | 1536 | 40.54 dB | 40.54 dB | 0.00 dB | 110.38 dB |
-| va-female-vocal-trance-2019-opus-128/Passenger 75 - Heartless (& Score).opus | 1536 | 43.61 dB | 43.61 dB | 0.00 dB | 109.49 dB |
-| va-female-vocal-trance-2019-opus-128/Perpetual - Innocent (ft Fisher).opus | 1536 | 40.03 dB | 40.03 dB | 0.00 dB | 110.47 dB |
-| va-female-vocal-trance-2019-opus-128/Raz Nitzan - Beyond time (Aurosonic remix) (& Ellie Lawson).opus | 1536 | 48.97 dB | 48.97 dB | 0.00 dB | 110.01 dB |
-| va-female-vocal-trance-2019-opus-128/Ronski Speed - Beat alive (Denis Airwave remix) (& Sarah Lynn).opus | 1536 | 42.49 dB | 42.49 dB | 0.00 dB | 111.10 dB |
-| va-female-vocal-trance-2019-opus-128/Rub!k - Everglow (& Sue McLaren).opus | 1536 | 46.15 dB | 46.15 dB | 0.00 dB | 109.42 dB |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Be here with me (ft Katty Heath).opus | 1536 | 46.99 dB | 46.99 dB | 0.00 dB | 109.60 dB |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Crystalize (& Fenna Day).opus | 1536 | 50.50 dB | 50.50 dB | 0.00 dB | 109.00 dB |
-| va-female-vocal-trance-2019-opus-128/The Blizzard - Always a stranger (Nitrous Oxide remix) (& Carol Lee).opus | 1536 | 46.06 dB | 46.06 dB | 0.00 dB | 108.20 dB |
-| va-female-vocal-trance-2019-opus-128/The City Never Sleeps - Addicted (NyTiGen remix) (& Summer Haze).opus | 1536 | 59.53 dB | 59.53 dB | 0.00 dB | 107.44 dB |
-| va-female-vocal-trance-2019-opus-128/Whiteout - The part in-between (Wilderness & A-Line remix) (& One Half Bear).opus | 1536 | 43.41 dB | 43.41 dB | 0.00 dB | 110.15 dB |
+| carrier-0001 | 1411 | 79.97 dB | 79.95 dB | 0.02 dB | 104.00 dB |
+| carrier-0002 | 1411 | 80.09 dB | 80.07 dB | 0.02 dB | 104.12 dB |
+| carrier-0003 | 1411 | 81.66 dB | 81.64 dB | 0.02 dB | 105.70 dB |
+| carrier-0004 | 1411 | 79.60 dB | 79.58 dB | 0.02 dB | 103.65 dB |
+| carrier-0005 | 1411 | 80.45 dB | 80.43 dB | 0.02 dB | 104.48 dB |
+| carrier-0006 | 1411 | 80.85 dB | 80.83 dB | 0.02 dB | 104.89 dB |
+| carrier-0007 | 1411 | 81.19 dB | 81.18 dB | 0.02 dB | 105.22 dB |
+| carrier-0008 | 1411 | 81.82 dB | 81.80 dB | 0.02 dB | 105.85 dB |
+| carrier-0009 | 1411 | 80.09 dB | 80.07 dB | 0.02 dB | 104.13 dB |
+| carrier-0010 | 1411 | 80.24 dB | 80.22 dB | 0.02 dB | 104.29 dB |
+| carrier-0011 | 1411 | 64.16 dB | 64.16 dB | 0.00 dB | 107.10 dB |
+| carrier-0012 | 1411 | 50.06 dB | 50.06 dB | 0.00 dB | 106.18 dB |
+| carrier-0013 | 1411 | 45.99 dB | 45.99 dB | 0.00 dB | 104.43 dB |
+| carrier-0014 | 1411 | 43.92 dB | 43.92 dB | 0.00 dB | 104.97 dB |
+| carrier-0015 | 1536 | ∞ | 103.10 dB | ∞ | 103.10 dB |
+| carrier-0016 | 1536 | ∞ | 105.29 dB | ∞ | 105.29 dB |
+| carrier-0017 | 1536 | ∞ | 106.01 dB | ∞ | 106.01 dB |
+| carrier-0018 | 3072 | 62.48 dB | 62.46 dB | 0.02 dB | 86.54 dB |
+| carrier-0019 | 3072 | 59.93 dB | 59.91 dB | 0.02 dB | 83.98 dB |
+| carrier-0020 | 3072 | 77.91 dB | 77.89 dB | 0.02 dB | 101.92 dB |
+| carrier-0021 | 3072 | 77.64 dB | 77.62 dB | 0.02 dB | 101.64 dB |
+| carrier-0022 | 3072 | 79.15 dB | 79.13 dB | 0.02 dB | 103.16 dB |
+| carrier-0023 | 3072 | 76.46 dB | 76.44 dB | 0.02 dB | 100.47 dB |
+| carrier-0024 | 3072 | 77.47 dB | 77.45 dB | 0.02 dB | 101.49 dB |
+| carrier-0025 | 3072 | 77.83 dB | 77.81 dB | 0.02 dB | 101.84 dB |
+| carrier-0026 | 3072 | 78.32 dB | 78.30 dB | 0.02 dB | 102.34 dB |
+| carrier-0027 | 3072 | 78.30 dB | 78.28 dB | 0.02 dB | 102.31 dB |
+| carrier-0028 | 3072 | 77.81 dB | 77.79 dB | 0.02 dB | 101.82 dB |
+| carrier-0029 | 1411 | ∞ | 95.58 dB | ∞ | 95.58 dB |
+| carrier-0030 | 1411 | ∞ | 95.29 dB | ∞ | 95.29 dB |
+| carrier-0031 | 1411 | ∞ | 95.19 dB | ∞ | 95.19 dB |
+| carrier-0032 | 1411 | ∞ | 95.10 dB | ∞ | 95.10 dB |
+| carrier-0033 | 1411 | ∞ | 95.60 dB | ∞ | 95.60 dB |
+| carrier-0034 | 1411 | ∞ | 94.91 dB | ∞ | 94.91 dB |
+| carrier-0035 | 1411 | ∞ | 95.11 dB | ∞ | 95.11 dB |
+| carrier-0036 | 1411 | ∞ | 95.52 dB | ∞ | 95.52 dB |
+| carrier-0037 | 1411 | ∞ | 94.88 dB | ∞ | 94.88 dB |
+| carrier-0038 | 1411 | ∞ | 95.11 dB | ∞ | 95.11 dB |
+| carrier-0039 | 1411 | ∞ | 94.91 dB | ∞ | 94.91 dB |
+| carrier-0040 | 1411 | ∞ | 94.89 dB | ∞ | 94.89 dB |
+| carrier-0041 | 1411 | ∞ | 95.27 dB | ∞ | 95.27 dB |
+| carrier-0042 | 1411 | ∞ | 95.33 dB | ∞ | 95.33 dB |
+| carrier-0043 | 1411 | ∞ | 94.07 dB | ∞ | 94.07 dB |
+| carrier-0044 | 1411 | ∞ | 94.96 dB | ∞ | 94.96 dB |
+| carrier-0045 | 1411 | ∞ | 96.02 dB | ∞ | 96.02 dB |
+| carrier-0046 | 1411 | ∞ | 95.37 dB | ∞ | 95.37 dB |
+| carrier-0047 | 1411 | ∞ | 95.42 dB | ∞ | 95.42 dB |
+| carrier-0048 | 1411 | ∞ | 95.55 dB | ∞ | 95.55 dB |
+| carrier-0049 | 1411 | ∞ | 95.18 dB | ∞ | 95.18 dB |
+| carrier-0050 | 1411 | ∞ | 95.27 dB | ∞ | 95.27 dB |
+| carrier-0051 | 1411 | ∞ | 95.18 dB | ∞ | 95.18 dB |
+| carrier-0052 | 1411 | ∞ | 95.08 dB | ∞ | 95.08 dB |
+| carrier-0053 | 1411 | ∞ | 94.98 dB | ∞ | 94.98 dB |
+| carrier-0054 | 1411 | ∞ | 94.99 dB | ∞ | 94.99 dB |
+| carrier-0055 | 1536 | 46.77 dB | 46.77 dB | 0.00 dB | 109.52 dB |
+| carrier-0056 | 1536 | 36.64 dB | 36.64 dB | 0.00 dB | 111.43 dB |
+| carrier-0057 | 1536 | 45.62 dB | 45.62 dB | 0.00 dB | 108.93 dB |
+| carrier-0058 | 1536 | 35.91 dB | 35.91 dB | 0.00 dB | 109.80 dB |
+| carrier-0059 | 1536 | 44.31 dB | 44.31 dB | 0.00 dB | 109.72 dB |
+| carrier-0060 | 1536 | 58.52 dB | 58.52 dB | 0.00 dB | 106.85 dB |
+| carrier-0061 | 1536 | 41.19 dB | 41.19 dB | 0.00 dB | 109.85 dB |
+| carrier-0062 | 1536 | 41.33 dB | 41.33 dB | 0.00 dB | 110.28 dB |
+| carrier-0063 | 1536 | 43.97 dB | 43.97 dB | 0.00 dB | 110.77 dB |
+| carrier-0064 | 1536 | 68.66 dB | 68.66 dB | 0.00 dB | 106.70 dB |
+| carrier-0065 | 1536 | 52.48 dB | 52.48 dB | 0.00 dB | 108.88 dB |
+| carrier-0066 | 1536 | 43.07 dB | 43.07 dB | 0.00 dB | 109.58 dB |
+| carrier-0067 | 1536 | 46.30 dB | 46.30 dB | 0.00 dB | 110.47 dB |
+| carrier-0068 | 1536 | 38.86 dB | 38.86 dB | 0.00 dB | 111.24 dB |
+| carrier-0069 | 1536 | 54.46 dB | 54.46 dB | 0.00 dB | 109.48 dB |
+| carrier-0070 | 1536 | 47.32 dB | 47.32 dB | 0.00 dB | 108.66 dB |
+| carrier-0071 | 1536 | 43.17 dB | 43.17 dB | 0.00 dB | 108.77 dB |
+| carrier-0072 | 1536 | 45.05 dB | 45.05 dB | 0.00 dB | 110.46 dB |
+| carrier-0073 | 1536 | 49.41 dB | 49.41 dB | 0.00 dB | 107.72 dB |
+| carrier-0074 | 1536 | 40.06 dB | 40.06 dB | 0.00 dB | 110.19 dB |
+| carrier-0075 | 1536 | 44.09 dB | 44.09 dB | 0.00 dB | 109.62 dB |
+| carrier-0076 | 1536 | 39.54 dB | 39.54 dB | 0.00 dB | 110.76 dB |
+| carrier-0077 | 1536 | 48.44 dB | 48.44 dB | 0.00 dB | 110.15 dB |
+| carrier-0078 | 1536 | 40.84 dB | 40.84 dB | 0.00 dB | 111.07 dB |
+| carrier-0079 | 1536 | 45.88 dB | 45.88 dB | 0.00 dB | 109.62 dB |
+| carrier-0080 | 1536 | 46.94 dB | 46.94 dB | 0.00 dB | 109.76 dB |
+| carrier-0081 | 1536 | 48.46 dB | 48.46 dB | 0.00 dB | 109.33 dB |
+| carrier-0082 | 1536 | 43.09 dB | 43.09 dB | 0.00 dB | 108.63 dB |
+| carrier-0083 | 1536 | 59.75 dB | 59.75 dB | 0.00 dB | 106.93 dB |
+| carrier-0084 | 1536 | 41.01 dB | 41.01 dB | 0.00 dB | 110.38 dB |
 
 ## ogg/vorbis
 
@@ -561,121 +565,125 @@ The ffmpeg column is ffmpeg at its own defaults. Ogg Vorbis keeps the source's q
 
 | Carrier | Source samples | Samples (ffmpeg / Mist) | Zero tail (ffmpeg / Mist) | Sample format (ffmpeg / Mist) | Nominal kbps (ffmpeg / Mist) | Differs in |
 |---|---|---|---|---|---|---|
-| 02 - Ride the Lightning.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| 03 - Disposable Heroes.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| 04 - No Remorse.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| 06 - For Whom the Bell Tolls.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| 07 - The Four Horsemen.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| 08 - Fade to Black.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| 09 - Seek & Destroy.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| 10 - Whiplash.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| 11 - Fight Fire with Fire.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| 14 - Motorbreath.mp3 | 6615407 | 6615407 / 6615407 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| ATB.06.20.2025/01 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| ATB.06.20.2025/02 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| ATB.06.20.2025/03 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| ATB.06.20.2025/04 ATB 06-20-2025.mp3 | 6615983 | 6615983 / 6615983 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| Pillars_of_the_Sky.wav | 2880000 | 2880000 / 2880000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| Starlight_Ascent.wav | 5760000 | 5760000 / 5760000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| Stellar_Ascent.wav | 5760000 | 5760000 / 5760000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side1.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side2.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t01.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t02.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t03.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t04.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t05.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t06.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t07.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t08.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t09.flac | 14401536 | 14401536 / 14401536 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
-| sundaytimes-wind-in-the-willows/01 Track01.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/02 Track02.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/03 Track03.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/04 Track04.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/05 Track05.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/06 Track06.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/07 Track07.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/08 Track08.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/09 Track09.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/10 Track10.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/11 Track11.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/12 Track12.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/13 Track13.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/14 Track14.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/15 Track15.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/16 Track16.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/17 Track17.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/18 Track18.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/19 Track19.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/20 Track20.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/21 Track21.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/22 Track22.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/23 Track23.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/24 Track24.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/25 Track25.flac | 6615040 | 6615040 / 6615040 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| sundaytimes-wind-in-the-willows/26 Track26.flac | 6560316 | 6560316 / 6560316 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Adam Ellis - Broken (& Jo Cartwright).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Hurt of intention 2019 (& Neev Kennedy).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Right back.opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Alex Leavon - When I'm with you (& Julia Ross).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Ana Criado - In a thousand skies.opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Blue5even - Through the barricades (& Jo Cartwright).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Braulio Stefield - See ghosts (& Victoriya).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Costa - Always (& Cathy Burton).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Delta-S - Letting go (Ikerya Project remix) (& Kate Louise Smith).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Derek Ryan - After dark (ft Melissa R. Kaplan).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Drival - Saviour (& Michele C).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/F.G. Noise - Waiting for the thunder (Killing time) (& Lauren Ní Chasaide).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - Hold of you (Denis Kenzo remix).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - When you come home (Myde rework).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Karanda - Still got time (& Sarah Russell).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Limelght - Run & hide (ft Alina Renae).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Lost Witness - Sewn.opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Mhammed El Alami - Warriors (& Emma Horan).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Nicholas Gunn - Older (Costa remix) (ft Alina Renae).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Nitrous Oxide - Lower than the ground (& Sarah Russell).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Passenger 75 - Heartless (& Score).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Perpetual - Innocent (ft Fisher).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Raz Nitzan - Beyond time (Aurosonic remix) (& Ellie Lawson).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Ronski Speed - Beat alive (Denis Airwave remix) (& Sarah Lynn).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Rub!k - Everglow (& Sue McLaren).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Be here with me (ft Katty Heath).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Crystalize (& Fenna Day).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/The Blizzard - Always a stranger (Nitrous Oxide remix) (& Carol Lee).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/The City Never Sleeps - Addicted (NyTiGen remix) (& Summer Haze).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
-| va-female-vocal-trance-2019-opus-128/Whiteout - The part in-between (Wilderness & A-Line remix) (& One Half Bear).opus | 7200648 | 7200648 / 7200648 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0001 | 13230191 | 13230191 / 13230191 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0002 | 13230191 | 13230191 / 13230191 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0003 | 13230191 | 13230191 / 13230191 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0004 | 11669231 | 11669231 / 11669231 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0005 | 13230191 | 13230191 / 13230191 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0006 | 13230191 | 13230191 / 13230191 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0007 | 13230191 | 13230191 / 13230191 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0008 | 13230191 | 13230191 / 13230191 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0009 | 11631215 | 11631215 / 11631215 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0010 | 12556271 | 12556271 / 12556271 | 30511 / 30255 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
+| carrier-0011 | 13230767 | 13230767 / 13230767 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0012 | 13230767 | 13230767 / 13230767 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0013 | 13230767 | 13230767 / 13230767 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0014 | 13230767 | 13230767 / 13230767 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0015 | 2880000 | 2880000 / 2880000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0016 | 5760000 | 5760000 / 5760000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0017 | 5760000 | 5760000 / 5760000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0018 | 28803072 | 28803072 / 28803072 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0019 | 28803072 | 28803072 / 28803072 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0020 | 27650560 | 27650560 / 27650560 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0021 | 27998720 | 27998720 / 27998720 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0022 | 24209920 | 24209920 / 24209920 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0023 | 28803072 | 28803072 / 28803072 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0024 | 24574720 | 24574720 / 24574720 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0025 | 26830080 | 26830080 / 26830080 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0026 | 24695040 | 24695040 / 24695040 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0027 | 18909440 | 18909440 / 18909440 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0028 | 28803072 | 28803072 / 28803072 | 0 / 0 | fltp / fltp | 4294967 / 4294967 | — |
+| carrier-0029 | 7939176 | 7939176 / 7939176 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0030 | 8334312 | 8334312 / 8334312 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0031 | 8187312 | 8187312 / 8187312 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0032 | 7616952 | 7616952 / 7616952 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0033 | 7703976 | 7703976 / 7703976 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0034 | 7795116 | 7795116 / 7795116 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0035 | 8786484 | 8786484 / 8786484 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0036 | 8306676 | 8306676 / 8306676 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0037 | 7848624 | 7848624 / 7848624 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0038 | 7849212 | 7849212 / 7849212 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0039 | 8371356 | 8371356 / 8371356 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0040 | 7808052 | 7808052 / 7808052 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0041 | 7792764 | 7792764 / 7792764 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0042 | 7705152 | 7705152 / 7705152 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0043 | 7733376 | 7733376 / 7733376 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0044 | 8332548 | 8332548 / 8332548 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0045 | 7836864 | 7836864 / 7836864 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0046 | 7783356 | 7783356 / 7783356 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0047 | 8134980 | 8134980 / 8134980 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0048 | 7904484 | 7904484 / 7904484 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0049 | 7577556 | 7577556 / 7577556 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0050 | 8433684 | 8433684 / 8433684 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0051 | 8167320 | 8167320 / 8167320 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0052 | 7443492 | 7443492 / 7443492 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0053 | 7847448 | 7847448 / 7847448 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0054 | 6560316 | 6560316 / 6560316 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0055 | 7567536 | 7567536 / 7567536 | 2160 / 368 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
+| carrier-0056 | 10716829 | 10716829 / 10716829 | 1373 / 1117 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
+| carrier-0057 | 10753254 | 10753254 / 10753254 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0058 | 8507078 | 8507078 / 8507078 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0059 | 9099131 | 9099131 / 9099131 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0060 | 10184328 | 10184328 / 10184328 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0061 | 9848955 | 9848955 / 9848955 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0062 | 10444219 | 10444219 / 10444219 | 507 / 635 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
+| carrier-0063 | 10854001 | 10854001 / 10854001 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0064 | 9693408 | 9693408 / 9693408 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0065 | 9766958 | 9766958 / 9766958 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0066 | 9359938 | 9359938 / 9359938 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0067 | 9855000 | 9855000 / 9855000 | 7896 / 7384 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
+| carrier-0068 | 9146026 | 9146026 / 9146026 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0069 | 10717286 | 10717286 / 10717286 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0070 | 8370000 | 8370000 / 8370000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0071 | 10456119 | 10456119 / 10456119 | 23415 / 22903 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
+| carrier-0072 | 9573914 | 9573914 / 9573914 | 7130 / 6874 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
+| carrier-0073 | 10171848 | 10171848 / 10171848 | 8 / 0 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
+| carrier-0074 | 9735652 | 9735652 / 9735652 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0075 | 9412488 | 9412488 / 9412488 | 6088 / 6088 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0076 | 9888000 | 9888000 / 9888000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0077 | 10440000 | 10440000 / 10440000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0078 | 11520002 | 11520002 / 11520002 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0079 | 10450747 | 10450747 / 10450747 | 20731 / 20731 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0080 | 8598259 | 8598259 / 8598259 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0081 | 11520000 | 11520000 / 11520000 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0082 | 11102609 | 11102609 / 11102609 | 0 / 0 | fltp / fltp | 112 / 256 | nominal bitrate |
+| carrier-0083 | 8540309 | 8540309 / 8540309 | 5973 / 5589 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
+| carrier-0084 | 10279847 | 10279847 / 10279847 | 5735 / 6503 | fltp / fltp | 112 / 256 | zero tail, nominal bitrate |
 
-**Verdict:** ❌ differs on 73 of 84 carriers: nominal bitrate.
+**Verdict:** ❌ differs on 73 of 84 carriers: nominal bitrate, zero tail.
 
 ### Can a detector tell?
 
 Stego copy against the clean ffmpeg copy (for Ogg Vorbis, ffmpeg at the quality level Mist chose, so only the embedding differs).
 
-| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
-|---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.500 (0.500–0.501) | 0.505 (0.500–0.516) | 0.000 (0.000–0.001) | ⚠️ faint signal | ✅ hidden (0.500) |
-| rs | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.499–0.501) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| hcf-com | ±1 changes, which is what Mist does | 0.501 (0.501–0.501) | 0.507 (0.506–0.509) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.498 (0.498–0.499) | 0.493 (0.492–0.494) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| markov | how the waveform's curvature changes from sample to sample | 0.497 (0.496–0.497) | 0.490 (0.487–0.492) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| key-aware | the ephemeral key in the first frame's envelope, read with the public key alone | 0.506 (0.488–0.524) | 0.506 (0.488–0.524) | 0.000 (0.000–0.001) | ✅ chance | ✅ hidden (0.500) |
+| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | D | Detector-implied benchmark KL lower bound (nats, 95%) | Adjusted p | Verdict | Message size |
+|---|---|---|---|---|---|---|---|---|
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.500 | 0.000 (0.000–0.000) | BH 1.000 | ✅ chance | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.500–0.501) | 0.500 | 0.000 (0.000–0.000) | BH 1.000 | ✅ chance | ✅ hidden (0.500) |
+| rs | bit overwriting (not what Mist does) | 0.500 (0.500–0.501) | 0.495 (0.484–0.501) | 0.505 | 0.000 (0.000–0.001) | BH 1.000 | ✅ chance | ✅ hidden (0.500) |
+| hcf-com | ±1 changes, which is what Mist does | 0.501 (0.501–0.501) | 0.508 (0.506–0.511) | 0.508 | 0.000 (0.000–0.000) | Holm 0.020 | ⚠️ faint signal | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.499 (0.498–0.499) | 0.492 (0.490–0.493) | 0.508 | 0.000 (0.000–0.000) | Holm 0.300 | ⚠️ faint signal | ✅ hidden (0.500) |
+| markov | how the waveform's curvature changes from sample to sample | 0.497 (0.497–0.498) | 0.488 (0.483–0.492) | 0.512 | 0.000 (0.000–0.001) | Holm 0.300 | ⚠️ faint signal | ✅ hidden (0.500) |
+| key-aware | the ephemeral key in the first frame's envelope, read with the public key alone | 0.506 (0.482–0.530) | 0.506 (0.482–0.530) | 0.506 | 0.000 (0.000–0.002) | Holm 1.000 | ✅ chance | ✅ hidden (0.500) |
 
-**Verdict:** ⚠️ faint signal from spa (AUC 0.500).
+Power: shifting this run's classifier file scores to D = 0.55, about 8 independent lineages give 90% power for a lineage-cluster interval to exclude 0.5. The figure is a simulation from this run's dispersion.
+
+Worst cell: markov on aggregate, file AUC 0.488, D 0.512.
+
+**Verdict:** ⚠️ faint signal from hcf-com (AUC 0.501).
 
 ### The embedding alone
 
 Stego copy against Mist's own re-encode, so only the embedded changes differ.
 
-| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | ε ≥ (nats, 95%) | Verdict | Message size |
-|---|---|---|---|---|---|---|
-| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| spa | bit overwriting (not what Mist does) | 0.500 (0.500–0.501) | 0.505 (0.500–0.516) | 0.000 (0.000–0.001) | ⚠️ faint signal | ✅ hidden (0.500) |
-| rs | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.499–0.501) | 0.000 (0.000–0.000) | ✅ chance | ✅ hidden (0.500) |
-| hcf-com | ±1 changes, which is what Mist does | 0.501 (0.501–0.501) | 0.507 (0.506–0.509) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| classifier | anything it can learn from Mist's own output | 0.498 (0.498–0.499) | 0.493 (0.492–0.494) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
-| markov | how the waveform's curvature changes from sample to sample | 0.497 (0.496–0.497) | 0.490 (0.487–0.492) | 0.000 (0.000–0.000) | ⚠️ faint signal | ✅ hidden (0.500) |
+| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | D | Detector-implied benchmark KL lower bound (nats, 95%) | Adjusted p | Verdict | Message size |
+|---|---|---|---|---|---|---|---|---|
+| chi-square | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.500 | 0.000 (0.000–0.000) | — | ✅ chance | ✅ hidden (0.500) |
+| spa | bit overwriting (not what Mist does) | 0.500 (0.500–0.500) | 0.500 (0.500–0.501) | 0.500 | 0.000 (0.000–0.000) | — | ✅ chance | ✅ hidden (0.500) |
+| rs | bit overwriting (not what Mist does) | 0.500 (0.500–0.501) | 0.495 (0.484–0.501) | 0.505 | 0.000 (0.000–0.001) | — | ✅ chance | ✅ hidden (0.500) |
+| hcf-com | ±1 changes, which is what Mist does | 0.501 (0.501–0.501) | 0.508 (0.506–0.511) | 0.508 | 0.000 (0.000–0.000) | — | ⚠️ faint signal | ✅ hidden (0.500) |
+| classifier | anything it can learn from Mist's own output | 0.499 (0.498–0.499) | 0.492 (0.490–0.493) | 0.508 | 0.000 (0.000–0.000) | — | ⚠️ faint signal | ✅ hidden (0.500) |
+| markov | how the waveform's curvature changes from sample to sample | 0.497 (0.497–0.498) | 0.488 (0.483–0.492) | 0.512 | 0.000 (0.000–0.001) | — | ⚠️ faint signal | ✅ hidden (0.500) |
 
 ### Does detection grow with audio?
 
@@ -684,24 +692,11 @@ File AUC (95%) against the clean ffmpeg copy on the first chunks of each carrier
 | Detector | First 40 chunks | Whole file |
 |---|---|---|
 | chi-square | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) |
-| spa | 0.505 (0.500–0.516) | 0.505 (0.500–0.516) |
-| rs | 0.500 (0.499–0.501) | 0.500 (0.499–0.501) |
-| hcf-com | 0.508 (0.506–0.510) | 0.507 (0.506–0.509) |
-| classifier | 0.491 (0.489–0.493) | 0.493 (0.492–0.494) |
-| markov | 0.490 (0.486–0.492) | 0.490 (0.487–0.492) |
-
-### By kind of audio
-
-File AUC (95%) against the clean ffmpeg copy, per corpus folder. The count is carriers; few carriers means a wide interval.
-
-| Detector | (top level) (13) | ATB.06.20.2025 (4) | disc1 (2) | hmbb2015-03-18.sbd.flac24 (9) | sundaytimes-wind-in-the-willows (26) | va-female-vocal-trance-2019-opus-128 (30) |
-|---|---|---|---|---|---|---|
-| chi-square | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.500 (0.498–0.502) |
-| spa | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.512 (0.498–0.538) |
-| rs | 0.497 (0.491–0.500) | 0.469 (0.375–0.500) | 0.500 (0.000–1.000) | 0.500 (0.500–0.500) | 0.500 (0.500–0.500) | 0.503 (0.499–0.506) |
-| hcf-com | 0.544 (0.537–0.577) | 0.625 (0.600–0.667) | 0.250 (0.000–0.333) | 0.556 (0.551–0.565) | 0.525 (0.519–0.537) | 0.518 (0.514–0.526) |
-| classifier | 0.467 (0.435–0.491) | 0.375 (0.333–0.400) | 0.750 (0.667–1.000) | 0.556 (0.551–0.565) | 0.473 (0.457–0.481) | 0.479 (0.470–0.483) |
-| markov | 0.456 (0.432–0.463) | 0.375 (0.333–0.400) | 0.750 (0.667–1.000) | 0.469 (0.439–0.506) | 0.487 (0.476–0.495) | 0.471 (0.457–0.480) |
+| spa | 0.500 (0.500–0.501) | 0.500 (0.500–0.501) |
+| rs | 0.500 (0.485–0.515) | 0.495 (0.484–0.501) |
+| hcf-com | 0.507 (0.506–0.510) | 0.508 (0.506–0.511) |
+| classifier | 0.492 (0.489–0.494) | 0.492 (0.490–0.493) |
+| markov | 0.489 (0.485–0.492) | 0.488 (0.483–0.492) |
 
 ### Does detection grow with the number of files?
 
@@ -709,113 +704,113 @@ AUC when the warden averages a detector's score over k files drawn at random fro
 
 | Detector | 1 file(s) | 3 file(s) | 6 file(s) |
 |---|---|---|---|
-| chi-square | 0.505 | 0.496 | 0.498 |
-| spa | 0.485 | 0.519 | 0.521 |
-| rs | 0.476 | 0.501 | 0.519 |
-| hcf-com | 0.527 | 0.487 | 0.507 |
-| classifier | 0.511 | 0.502 | 0.493 |
-| markov | 0.507 | 0.502 | 0.491 |
+| chi-square | 0.500 | 0.500 | 0.500 |
+| spa | 0.482 | 0.509 | 0.517 |
+| rs | 0.463 | 0.497 | 0.512 |
+| hcf-com | 0.532 | 0.489 | 0.505 |
+| classifier | 0.520 | 0.508 | 0.495 |
+| markov | 0.515 | 0.508 | 0.487 |
 
 ### How much does it cost in sound?
 
 | Measure | Mean | Worst | What it means |
 |---|---|---|---|
-| Plain re-encode SDR | 27.80 dB | 24.41 dB | Loss of Mist's own re-encode, with nothing embedded |
-| Mist output SDR | 27.79 dB | 24.39 dB | The same, with the message embedded |
+| Plain re-encode SDR | 27.65 dB | 23.99 dB | Loss of Mist's own re-encode, with nothing embedded |
+| Mist output SDR | 27.64 dB | 23.98 dB | The same, with the message embedded |
 | Embedding cost | 0.01 dB | 0.02 dB | Mist's own share; target ≤ 0.3 dB, design-doc reference 0.18 dB |
 | Extra error energy | +0% | +0% | Embedding cost as error added on top of a plain re-encode |
-| Mist's error below the music | 55.15 dB | 49.04 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
+| Mist's error below the music | 55.06 dB | 48.34 dB | Stego copy against Mist's own re-encode: what embedding alone adds |
 
-**Verdict:** ✅ Mist's own error sits 55.15 dB below the music; embedding costs 0.01 dB, within the 0.3 dB target.
+**Verdict:** ✅ Mist's own error sits 55.06 dB below the music; embedding costs 0.01 dB, within the 0.3 dB target.
 
 ### Per carrier
 
 | Carrier | Output kbps | Plain re-encode SDR | Mist output SDR | Embedding cost | Mist's error below the music |
 |---|---|---|---|---|---|
-| 02 - Ride the Lightning.mp3 | 228 | 27.80 dB | 27.79 dB | 0.01 dB | 56.54 dB |
-| 03 - Disposable Heroes.mp3 | 225 | 28.23 dB | 28.22 dB | 0.01 dB | 56.58 dB |
-| 04 - No Remorse.mp3 | 220 | 29.36 dB | 29.36 dB | 0.00 dB | 60.03 dB |
-| 06 - For Whom the Bell Tolls.mp3 | 230 | 28.57 dB | 28.57 dB | 0.00 dB | 60.34 dB |
-| 07 - The Four Horsemen.mp3 | 222 | 28.53 dB | 28.53 dB | 0.00 dB | 60.04 dB |
-| 08 - Fade to Black.mp3 | 225 | 29.77 dB | 29.77 dB | 0.00 dB | 59.71 dB |
-| 09 - Seek & Destroy.mp3 | 225 | 28.71 dB | 28.70 dB | 0.00 dB | 58.44 dB |
-| 10 - Whiplash.mp3 | 234 | 29.93 dB | 29.93 dB | 0.00 dB | 60.42 dB |
-| 11 - Fight Fire with Fire.mp3 | 191 | 26.93 dB | 26.93 dB | 0.01 dB | 55.16 dB |
-| 14 - Motorbreath.mp3 | 190 | 29.51 dB | 29.50 dB | 0.01 dB | 56.46 dB |
-| ATB.06.20.2025/01 ATB 06-20-2025.mp3 | 273 | 32.77 dB | 32.76 dB | 0.01 dB | 59.01 dB |
-| ATB.06.20.2025/02 ATB 06-20-2025.mp3 | 272 | 27.88 dB | 27.87 dB | 0.01 dB | 57.13 dB |
-| ATB.06.20.2025/03 ATB 06-20-2025.mp3 | 266 | 32.19 dB | 32.19 dB | 0.01 dB | 59.97 dB |
-| ATB.06.20.2025/04 ATB 06-20-2025.mp3 | 253 | 31.54 dB | 31.53 dB | 0.01 dB | 61.17 dB |
-| Pillars_of_the_Sky.wav | 262 | 26.02 dB | 26.01 dB | 0.01 dB | 52.10 dB |
-| Starlight_Ascent.wav | 282 | 26.09 dB | 26.08 dB | 0.01 dB | 53.00 dB |
-| Stellar_Ascent.wav | 261 | 27.80 dB | 27.79 dB | 0.01 dB | 54.28 dB |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side1.flac | 321 | 30.20 dB | 30.20 dB | 0.00 dB | 70.96 dB |
-| disc1/lp_music-of-glinka-and-tchaikovsky_glinka-tchaikovsky_disc1side2.flac | 286 | 30.66 dB | 30.66 dB | 0.00 dB | 74.36 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t01.flac | 262 | 29.54 dB | 29.54 dB | 0.00 dB | 60.38 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t02.flac | 211 | 28.37 dB | 28.36 dB | 0.00 dB | 58.06 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t03.flac | 260 | 30.13 dB | 30.12 dB | 0.01 dB | 58.05 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t04.flac | 224 | 30.25 dB | 30.25 dB | 0.00 dB | 61.49 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t05.flac | 264 | 28.97 dB | 28.97 dB | 0.00 dB | 58.79 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t06.flac | 226 | 27.74 dB | 27.73 dB | 0.01 dB | 56.44 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t07.flac | 291 | 27.84 dB | 27.83 dB | 0.01 dB | 56.11 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t08.flac | 223 | 26.71 dB | 26.71 dB | 0.01 dB | 56.20 dB |
-| hmbb2015-03-18.sbd.flac24/hmbb2015-03-18.sbd-t09.flac | 215 | 28.10 dB | 28.10 dB | 0.00 dB | 58.14 dB |
-| sundaytimes-wind-in-the-willows/01 Track01.flac | 233 | 28.57 dB | 28.56 dB | 0.01 dB | 54.33 dB |
-| sundaytimes-wind-in-the-willows/02 Track02.flac | 237 | 29.21 dB | 29.20 dB | 0.01 dB | 56.46 dB |
-| sundaytimes-wind-in-the-willows/03 Track03.flac | 238 | 29.53 dB | 29.52 dB | 0.01 dB | 55.93 dB |
-| sundaytimes-wind-in-the-willows/04 Track04.flac | 246 | 29.51 dB | 29.51 dB | 0.01 dB | 57.17 dB |
-| sundaytimes-wind-in-the-willows/05 Track05.flac | 227 | 28.90 dB | 28.89 dB | 0.01 dB | 55.02 dB |
-| sundaytimes-wind-in-the-willows/06 Track06.flac | 244 | 29.50 dB | 29.49 dB | 0.01 dB | 57.13 dB |
-| sundaytimes-wind-in-the-willows/07 Track07.flac | 239 | 28.93 dB | 28.92 dB | 0.01 dB | 56.07 dB |
-| sundaytimes-wind-in-the-willows/08 Track08.flac | 228 | 28.85 dB | 28.84 dB | 0.01 dB | 54.27 dB |
-| sundaytimes-wind-in-the-willows/09 Track09.flac | 246 | 28.61 dB | 28.60 dB | 0.01 dB | 56.49 dB |
-| sundaytimes-wind-in-the-willows/10 Track10.flac | 249 | 29.30 dB | 29.29 dB | 0.01 dB | 55.68 dB |
-| sundaytimes-wind-in-the-willows/11 Track11.flac | 250 | 29.61 dB | 29.60 dB | 0.01 dB | 57.02 dB |
-| sundaytimes-wind-in-the-willows/12 Track12.flac | 245 | 28.95 dB | 28.94 dB | 0.01 dB | 55.94 dB |
-| sundaytimes-wind-in-the-willows/13 Track13.flac | 234 | 28.87 dB | 28.86 dB | 0.01 dB | 54.93 dB |
-| sundaytimes-wind-in-the-willows/14 Track14.flac | 241 | 28.03 dB | 28.02 dB | 0.01 dB | 54.30 dB |
-| sundaytimes-wind-in-the-willows/15 Track15.flac | 234 | 28.96 dB | 28.95 dB | 0.01 dB | 54.51 dB |
-| sundaytimes-wind-in-the-willows/16 Track16.flac | 244 | 29.63 dB | 29.62 dB | 0.01 dB | 56.64 dB |
-| sundaytimes-wind-in-the-willows/17 Track17.flac | 242 | 27.81 dB | 27.80 dB | 0.01 dB | 55.97 dB |
-| sundaytimes-wind-in-the-willows/18 Track18.flac | 243 | 29.22 dB | 29.21 dB | 0.01 dB | 56.62 dB |
-| sundaytimes-wind-in-the-willows/19 Track19.flac | 247 | 29.18 dB | 29.18 dB | 0.01 dB | 56.36 dB |
-| sundaytimes-wind-in-the-willows/20 Track20.flac | 236 | 29.09 dB | 29.07 dB | 0.01 dB | 56.09 dB |
-| sundaytimes-wind-in-the-willows/21 Track21.flac | 232 | 29.34 dB | 29.33 dB | 0.01 dB | 55.87 dB |
-| sundaytimes-wind-in-the-willows/22 Track22.flac | 239 | 27.05 dB | 27.04 dB | 0.01 dB | 52.91 dB |
-| sundaytimes-wind-in-the-willows/23 Track23.flac | 242 | 28.48 dB | 28.47 dB | 0.01 dB | 54.56 dB |
-| sundaytimes-wind-in-the-willows/24 Track24.flac | 230 | 28.64 dB | 28.63 dB | 0.01 dB | 56.64 dB |
-| sundaytimes-wind-in-the-willows/25 Track25.flac | 230 | 29.36 dB | 29.35 dB | 0.01 dB | 58.09 dB |
-| sundaytimes-wind-in-the-willows/26 Track26.flac | 233 | 27.31 dB | 27.30 dB | 0.01 dB | 53.13 dB |
-| va-female-vocal-trance-2019-opus-128/Adam Ellis - Broken (& Jo Cartwright).opus | 264 | 26.74 dB | 26.72 dB | 0.01 dB | 52.40 dB |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Hurt of intention 2019 (& Neev Kennedy).opus | 250 | 26.99 dB | 26.98 dB | 0.01 dB | 52.81 dB |
-| va-female-vocal-trance-2019-opus-128/Alex Ender - Right back.opus | 262 | 26.24 dB | 26.22 dB | 0.02 dB | 50.33 dB |
-| va-female-vocal-trance-2019-opus-128/Alex Leavon - When I'm with you (& Julia Ross).opus | 254 | 25.28 dB | 25.27 dB | 0.01 dB | 49.98 dB |
-| va-female-vocal-trance-2019-opus-128/Ana Criado - In a thousand skies.opus | 247 | 24.65 dB | 24.64 dB | 0.01 dB | 49.84 dB |
-| va-female-vocal-trance-2019-opus-128/Blue5even - Through the barricades (& Jo Cartwright).opus | 236 | 25.40 dB | 25.39 dB | 0.01 dB | 50.13 dB |
-| va-female-vocal-trance-2019-opus-128/Braulio Stefield - See ghosts (& Victoriya).opus | 242 | 25.26 dB | 25.24 dB | 0.01 dB | 49.99 dB |
-| va-female-vocal-trance-2019-opus-128/Costa - Always (& Cathy Burton).opus | 245 | 26.73 dB | 26.71 dB | 0.01 dB | 52.89 dB |
-| va-female-vocal-trance-2019-opus-128/Delta-S - Letting go (Ikerya Project remix) (& Kate Louise Smith).opus | 252 | 26.10 dB | 26.09 dB | 0.01 dB | 52.53 dB |
-| va-female-vocal-trance-2019-opus-128/Derek Ryan - After dark (ft Melissa R. Kaplan).opus | 231 | 25.79 dB | 25.78 dB | 0.01 dB | 52.34 dB |
-| va-female-vocal-trance-2019-opus-128/Drival - Saviour (& Michele C).opus | 248 | 25.58 dB | 25.57 dB | 0.01 dB | 50.59 dB |
-| va-female-vocal-trance-2019-opus-128/F.G. Noise - Waiting for the thunder (Killing time) (& Lauren Ní Chasaide).opus | 253 | 25.79 dB | 25.77 dB | 0.01 dB | 51.29 dB |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - Hold of you (Denis Kenzo remix).opus | 259 | 25.45 dB | 25.44 dB | 0.01 dB | 50.91 dB |
-| va-female-vocal-trance-2019-opus-128/Kaimo K - When you come home (Myde rework).opus | 266 | 25.99 dB | 25.97 dB | 0.01 dB | 50.94 dB |
-| va-female-vocal-trance-2019-opus-128/Karanda - Still got time (& Sarah Russell).opus | 233 | 26.13 dB | 26.12 dB | 0.01 dB | 51.92 dB |
-| va-female-vocal-trance-2019-opus-128/Limelght - Run & hide (ft Alina Renae).opus | 250 | 27.27 dB | 27.26 dB | 0.01 dB | 53.31 dB |
-| va-female-vocal-trance-2019-opus-128/Lost Witness - Sewn.opus | 244 | 24.74 dB | 24.73 dB | 0.01 dB | 49.39 dB |
-| va-female-vocal-trance-2019-opus-128/Mhammed El Alami - Warriors (& Emma Horan).opus | 246 | 25.81 dB | 25.79 dB | 0.02 dB | 50.24 dB |
-| va-female-vocal-trance-2019-opus-128/Nicholas Gunn - Older (Costa remix) (ft Alina Renae).opus | 250 | 25.34 dB | 25.33 dB | 0.01 dB | 50.33 dB |
-| va-female-vocal-trance-2019-opus-128/Nitrous Oxide - Lower than the ground (& Sarah Russell).opus | 245 | 25.80 dB | 25.78 dB | 0.01 dB | 51.52 dB |
-| va-female-vocal-trance-2019-opus-128/Passenger 75 - Heartless (& Score).opus | 258 | 25.39 dB | 25.38 dB | 0.01 dB | 50.20 dB |
-| va-female-vocal-trance-2019-opus-128/Perpetual - Innocent (ft Fisher).opus | 271 | 24.71 dB | 24.69 dB | 0.02 dB | 49.04 dB |
-| va-female-vocal-trance-2019-opus-128/Raz Nitzan - Beyond time (Aurosonic remix) (& Ellie Lawson).opus | 253 | 25.90 dB | 25.88 dB | 0.01 dB | 50.86 dB |
-| va-female-vocal-trance-2019-opus-128/Ronski Speed - Beat alive (Denis Airwave remix) (& Sarah Lynn).opus | 248 | 27.41 dB | 27.40 dB | 0.01 dB | 54.25 dB |
-| va-female-vocal-trance-2019-opus-128/Rub!k - Everglow (& Sue McLaren).opus | 246 | 24.52 dB | 24.51 dB | 0.01 dB | 49.86 dB |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Be here with me (ft Katty Heath).opus | 258 | 25.48 dB | 25.46 dB | 0.02 dB | 49.92 dB |
-| va-female-vocal-trance-2019-opus-128/Stargazers - Crystalize (& Fenna Day).opus | 243 | 24.93 dB | 24.92 dB | 0.01 dB | 50.45 dB |
-| va-female-vocal-trance-2019-opus-128/The Blizzard - Always a stranger (Nitrous Oxide remix) (& Carol Lee).opus | 246 | 26.04 dB | 26.03 dB | 0.01 dB | 52.09 dB |
-| va-female-vocal-trance-2019-opus-128/The City Never Sleeps - Addicted (NyTiGen remix) (& Summer Haze).opus | 258 | 24.41 dB | 24.39 dB | 0.01 dB | 49.80 dB |
-| va-female-vocal-trance-2019-opus-128/Whiteout - The part in-between (Wilderness & A-Line remix) (& One Half Bear).opus | 268 | 28.51 dB | 28.50 dB | 0.01 dB | 54.89 dB |
+| carrier-0001 | 229 | 28.18 dB | 28.18 dB | 0.01 dB | 57.23 dB |
+| carrier-0002 | 228 | 28.56 dB | 28.55 dB | 0.01 dB | 57.76 dB |
+| carrier-0003 | 221 | 29.59 dB | 29.59 dB | 0.00 dB | 60.12 dB |
+| carrier-0004 | 225 | 28.35 dB | 28.35 dB | 0.00 dB | 60.51 dB |
+| carrier-0005 | 223 | 28.81 dB | 28.81 dB | 0.00 dB | 60.00 dB |
+| carrier-0006 | 226 | 29.55 dB | 29.55 dB | 0.00 dB | 58.87 dB |
+| carrier-0007 | 227 | 29.02 dB | 29.02 dB | 0.00 dB | 58.65 dB |
+| carrier-0008 | 221 | 29.32 dB | 29.31 dB | 0.00 dB | 60.33 dB |
+| carrier-0009 | 189 | 27.89 dB | 27.89 dB | 0.01 dB | 55.52 dB |
+| carrier-0010 | 192 | 29.22 dB | 29.21 dB | 0.01 dB | 57.07 dB |
+| carrier-0011 | 268 | 32.74 dB | 32.73 dB | 0.01 dB | 59.39 dB |
+| carrier-0012 | 269 | 25.99 dB | 25.98 dB | 0.01 dB | 53.83 dB |
+| carrier-0013 | 258 | 32.92 dB | 32.91 dB | 0.01 dB | 61.15 dB |
+| carrier-0014 | 243 | 30.99 dB | 30.99 dB | 0.00 dB | 64.18 dB |
+| carrier-0015 | 262 | 26.02 dB | 26.01 dB | 0.01 dB | 52.18 dB |
+| carrier-0016 | 282 | 26.09 dB | 26.08 dB | 0.01 dB | 52.94 dB |
+| carrier-0017 | 261 | 27.80 dB | 27.79 dB | 0.01 dB | 54.25 dB |
+| carrier-0018 | 332 | 30.98 dB | 30.98 dB | 0.00 dB | 72.29 dB |
+| carrier-0019 | 295 | 30.48 dB | 30.48 dB | 0.00 dB | 74.24 dB |
+| carrier-0020 | 244 | 29.12 dB | 29.12 dB | 0.00 dB | 59.86 dB |
+| carrier-0021 | 218 | 28.35 dB | 28.35 dB | 0.01 dB | 57.64 dB |
+| carrier-0022 | 257 | 29.87 dB | 29.86 dB | 0.01 dB | 58.06 dB |
+| carrier-0023 | 220 | 29.76 dB | 29.76 dB | 0.00 dB | 61.03 dB |
+| carrier-0024 | 271 | 28.28 dB | 28.28 dB | 0.01 dB | 57.55 dB |
+| carrier-0025 | 226 | 27.33 dB | 27.33 dB | 0.01 dB | 55.61 dB |
+| carrier-0026 | 273 | 27.07 dB | 27.06 dB | 0.01 dB | 55.34 dB |
+| carrier-0027 | 224 | 26.76 dB | 26.76 dB | 0.01 dB | 56.03 dB |
+| carrier-0028 | 237 | 28.52 dB | 28.52 dB | 0.00 dB | 58.79 dB |
+| carrier-0029 | 233 | 28.56 dB | 28.55 dB | 0.01 dB | 55.18 dB |
+| carrier-0030 | 237 | 29.33 dB | 29.32 dB | 0.01 dB | 56.65 dB |
+| carrier-0031 | 239 | 29.55 dB | 29.54 dB | 0.01 dB | 55.05 dB |
+| carrier-0032 | 244 | 29.52 dB | 29.51 dB | 0.01 dB | 57.14 dB |
+| carrier-0033 | 230 | 29.20 dB | 29.19 dB | 0.01 dB | 55.45 dB |
+| carrier-0034 | 245 | 29.59 dB | 29.58 dB | 0.01 dB | 56.80 dB |
+| carrier-0035 | 239 | 29.11 dB | 29.10 dB | 0.01 dB | 55.77 dB |
+| carrier-0036 | 231 | 28.73 dB | 28.72 dB | 0.01 dB | 55.82 dB |
+| carrier-0037 | 245 | 28.61 dB | 28.60 dB | 0.01 dB | 54.95 dB |
+| carrier-0038 | 249 | 29.27 dB | 29.27 dB | 0.01 dB | 57.71 dB |
+| carrier-0039 | 248 | 29.16 dB | 29.15 dB | 0.01 dB | 56.63 dB |
+| carrier-0040 | 240 | 28.96 dB | 28.95 dB | 0.01 dB | 56.16 dB |
+| carrier-0041 | 232 | 28.92 dB | 28.91 dB | 0.01 dB | 55.62 dB |
+| carrier-0042 | 242 | 28.21 dB | 28.20 dB | 0.01 dB | 55.91 dB |
+| carrier-0043 | 236 | 29.10 dB | 29.08 dB | 0.01 dB | 54.74 dB |
+| carrier-0044 | 242 | 29.12 dB | 29.11 dB | 0.01 dB | 55.58 dB |
+| carrier-0045 | 244 | 28.05 dB | 28.04 dB | 0.01 dB | 56.07 dB |
+| carrier-0046 | 242 | 29.18 dB | 29.17 dB | 0.01 dB | 56.81 dB |
+| carrier-0047 | 248 | 29.15 dB | 29.14 dB | 0.01 dB | 56.84 dB |
+| carrier-0048 | 233 | 29.35 dB | 29.34 dB | 0.01 dB | 56.40 dB |
+| carrier-0049 | 234 | 29.24 dB | 29.23 dB | 0.01 dB | 56.59 dB |
+| carrier-0050 | 240 | 27.36 dB | 27.34 dB | 0.01 dB | 52.65 dB |
+| carrier-0051 | 242 | 28.76 dB | 28.75 dB | 0.01 dB | 55.64 dB |
+| carrier-0052 | 231 | 28.44 dB | 28.43 dB | 0.01 dB | 57.03 dB |
+| carrier-0053 | 231 | 28.97 dB | 28.97 dB | 0.01 dB | 56.41 dB |
+| carrier-0054 | 233 | 27.31 dB | 27.30 dB | 0.01 dB | 53.81 dB |
+| carrier-0055 | 263 | 26.64 dB | 26.63 dB | 0.01 dB | 52.40 dB |
+| carrier-0056 | 249 | 25.93 dB | 25.92 dB | 0.01 dB | 51.36 dB |
+| carrier-0057 | 264 | 25.30 dB | 25.29 dB | 0.02 dB | 49.39 dB |
+| carrier-0058 | 255 | 25.05 dB | 25.04 dB | 0.01 dB | 49.74 dB |
+| carrier-0059 | 250 | 24.35 dB | 24.34 dB | 0.01 dB | 49.47 dB |
+| carrier-0060 | 243 | 23.99 dB | 23.98 dB | 0.02 dB | 48.34 dB |
+| carrier-0061 | 248 | 25.28 dB | 25.27 dB | 0.02 dB | 49.71 dB |
+| carrier-0062 | 245 | 26.22 dB | 26.21 dB | 0.01 dB | 52.50 dB |
+| carrier-0063 | 259 | 26.16 dB | 26.15 dB | 0.01 dB | 52.40 dB |
+| carrier-0064 | 232 | 26.07 dB | 26.06 dB | 0.01 dB | 52.55 dB |
+| carrier-0065 | 244 | 25.82 dB | 25.80 dB | 0.01 dB | 50.99 dB |
+| carrier-0066 | 251 | 25.61 dB | 25.60 dB | 0.01 dB | 51.05 dB |
+| carrier-0067 | 256 | 24.98 dB | 24.97 dB | 0.01 dB | 50.29 dB |
+| carrier-0068 | 266 | 25.83 dB | 25.81 dB | 0.01 dB | 50.61 dB |
+| carrier-0069 | 233 | 25.43 dB | 25.42 dB | 0.01 dB | 50.92 dB |
+| carrier-0070 | 244 | 27.25 dB | 27.24 dB | 0.01 dB | 53.34 dB |
+| carrier-0071 | 246 | 24.64 dB | 24.63 dB | 0.01 dB | 49.25 dB |
+| carrier-0072 | 248 | 25.06 dB | 25.05 dB | 0.02 dB | 49.39 dB |
+| carrier-0073 | 257 | 25.68 dB | 25.67 dB | 0.01 dB | 50.70 dB |
+| carrier-0074 | 244 | 25.43 dB | 25.42 dB | 0.01 dB | 51.26 dB |
+| carrier-0075 | 259 | 26.01 dB | 26.00 dB | 0.01 dB | 51.04 dB |
+| carrier-0076 | 271 | 24.70 dB | 24.69 dB | 0.02 dB | 48.95 dB |
+| carrier-0077 | 255 | 25.17 dB | 25.16 dB | 0.01 dB | 50.01 dB |
+| carrier-0078 | 256 | 26.06 dB | 26.05 dB | 0.01 dB | 51.73 dB |
+| carrier-0079 | 245 | 24.20 dB | 24.19 dB | 0.01 dB | 49.49 dB |
+| carrier-0080 | 260 | 25.76 dB | 25.75 dB | 0.02 dB | 50.29 dB |
+| carrier-0081 | 244 | 24.64 dB | 24.63 dB | 0.01 dB | 49.97 dB |
+| carrier-0082 | 245 | 25.19 dB | 25.18 dB | 0.01 dB | 50.86 dB |
+| carrier-0083 | 255 | 24.11 dB | 24.10 dB | 0.01 dB | 49.49 dB |
+| carrier-0084 | 261 | 27.70 dB | 27.69 dB | 0.01 dB | 53.61 dB |
 
 ## How to read this report
 
@@ -836,33 +831,50 @@ detector is right, just with its sign flipped. Ogg Vorbis is scored on the resid
 formats on the decoded samples.
 
 Each carrier is cut into chunks of 65,536 values and every chunk is scored: that is the **chunk AUC**. The
-**file AUC** averages each carrier's chunk scores into one score per file, which is what a warden holding whole
-files would use; a bias too slight to show in one chunk can add up over a file. The **95% intervals** are
-bootstrapped by carrier: each round redraws whole carriers, with all their chunks, because chunks of one track are
-not independent. Their width reflects how many carriers there are, not how many chunks. The verdict is the worse
-of the chunk and file verdicts.
+**file AUC** averages each recording's chunk scores into one score per file. Chapters of one session stay
+separate files and share a lineage. The **95% file interval** redraws lineages first and then the recordings
+inside a drawn lineage. The chunk interval redraws whole lineages too, never single chunks. A recording-cluster
+interval is printed beside a detector only when its width differs from the lineage interval by more than 0.01.
+With one recording per lineage the two intervals match. Their width follows the number of lineages, not the
+number of chunks. The verdict is the worse of the chunk and file verdicts.
 
-**ε ≥** is what the file AUC proves about Mist in Cachin's sense, where a scheme is ε-secure when the relative
-entropy between clean and stego files is at most ε. A detector's |AUC − ½| is at most the total variation between
-the two, and Pinsker's inequality turns that into ε ≥ 2(AUC − ½)² nats. It is a **lower bound** only: a detector
-at chance shows that this detector found no gap, not that ε is small. The bracket applies the same formula across
-the file AUC's interval.
+**D** is 0.5 + |AUC − 0.5|. A detector that is perfectly wrong, AUC 0, has the same D as a detector that is
+perfectly right. The file interval and the verdict already treat an interval that sits entirely below 0.5 as
+detection; D puts that on one scale.
+
+The **detector-implied benchmark KL lower bound** applies Pinsker's inequality to the file AUC:
+|AUC − ½| is at most the total variation between the benchmark clean and stego populations, so
+KL ≥ 2(AUC − ½)² nats. This is only weak attack evidence for this detector and benchmark. It is not an estimate
+or upper bound for Cachin's ε; a detector at chance shows that this detector found no gap, not that KL is small.
 
 Chi-square, SPA and RS look for bits being overwritten, which Mist never does, so they are expected to sit at
-chance; a rise means the embedder has drifted. HCF-COM looks for ±1 changes, which is exactly what Mist does,
-so it is the classical detector that matters.
+chance; a rise means the embedder has drifted. They are exploratory: the report gives each a paired lineage
+label-swap p-value and a Benjamini-Hochberg adjustment across the three. HCF-COM looks for ±1 changes, which
+is exactly what Mist does, so it sits in the confirmatory family with the classifier, the Markov model and the
+key-aware warden. That family of four is adjusted with Holm. A dash means that row was not part of the
+confirmatory test (scaling, category and embedding-only tables).
 
-The **classifier** is the adversary of record. It is a logistic regression trained on this run's own clean and
-stego chunks, using every detector's score, the share of values at each of -3…3, and how each step between
-adjacent values follows the one before it. It is cross-validated by carrier: every carrier is scored by a model
-trained without it, so it cannot win by memorising a track. Its message-size check trains a second model to
-tell a 64-byte message from a 1-byte one.
+The **classifier** is the adversary of record. It is a logistic regression on this run's own clean and stego
+chunks, using every detector's score, the share of values at each of -3…3, and how each step between adjacent
+values follows the one before it. Outer folds are lineages. An inner grouped search picks the L2 penalty from
+0.001, 0.01 and 0.1, and a further held-out lineage calibrates the score. Fewer than four lineages falls back
+to the fixed-penalty cross-validation. Standardisation is fit on the training rows of that fold. The primary
+operational comparison repeats that whole fit under nine lineage label swaps; scaling and category rows do not.
+Nine refits make the smallest attainable p-value 0.1, so that row cannot by itself clear 0.05.
+Its message-size check trains a second model to tell a 64-byte message from a 1-byte one.
 
 **Markov** is the same kind of model, trained the same way, on one richer feature set only: how the second
 difference between samples, the waveform's curvature, changes from one sample to the next, with each value
 clipped to -3…3. That curvature is near zero wherever the audio is smooth, so ±1 changes stand out in it more
 than in the values or their steps. These are the rich-model features of audio steganalysis; a detector that
 learns its own features, a CNN trained on exported chunks, is the next step beyond them and is not run here.
+When it is run, its folds follow lineage as well.
+
+**Power** asks how many independent lineages this run's classifier dispersion would need before a shift to
+D = 0.55 pushed the lineage interval off 0.5 in 90% of simulations. It is not a guarantee about a future corpus.
+**Worst cell** is the highest D among category rows, or among the aggregate detectors when the corpus has one
+category. **Leave-one-lineage** restricts the classifier's existing file scores to each lineage that has two or
+more carriers, and to the carriers that remain. It does not retrain.
 
 **Message size** compares a 64-byte message with a 1-byte one. Mist changes the same amount of audio whatever
 the message, so this should read 0.5: anything else means the message length shows.

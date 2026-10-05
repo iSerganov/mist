@@ -44,6 +44,13 @@ MIST_HARNESS_EXPORT="$HARNESS_OUT/export" make harness CORPUS="$CORPUS" CORPUS_M
 | `--length` | 8192 | values per segment |
 | `--rounds` | 1000 | bootstrap rounds for the interval |
 | `--seed` | 1 | seed for folds, training and the bootstrap |
+| `--arch` | `waveform` | `waveform`, `spectrogram`, `hybrid`, `residue`, or `all` |
+| `--stereo` | off | score even/odd samples as left, right, mid and side |
+| `--self-test` | off | train `waveform` on synthetic LSB replacement; exit non-zero below AUC 0.8 |
+
+`waveform` is the net the report's primary CNN row uses. `all` keeps that row and adds the other three under `held_out`, scored on the same lineage folds, so a louder architecture is not silently selected. `residue` is the waveform net run on residue indices; a Vorbis export already is those indices. `hybrid` is a convolution plus an attention pool. Spectrogram is a short-time magnitude net. wav2vec2, AST, SSAST and BEATs are not in this suite: no positive control was run for them, and a transformer is not assumed to be stronger.
+
+`--self-test` needs no export directory. It is the waveform net's positive control, not a measurement of Mist.
 
 Training is slow on a CPU: with 84 carriers expect roughly 30 minutes per
 format at 4 epochs. `cnn.json` is rewritten after each format, so a run that

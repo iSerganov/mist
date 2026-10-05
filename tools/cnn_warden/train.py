@@ -67,7 +67,25 @@ def features(batch):
     return torch.from_numpy(x.astype(np.float32))
 
 
-def model():
+class Hybrid(nn.Module):
+    """Waveform convolution with an attention pool. Not a transformer."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv1d(3, 16, 5, padding=2), nn.ReLU(),
+            nn.Conv1d(16, 16, 5, stride=2, padding=2), nn.ReLU(),
+        )
+        self.attn = nn.Linear(16, 1)
+        self.out = nn.Linear(16, 1)
+
+    def forward(self, x):
+        h = self.conv(x)
+        weight = torch.softmax(self.attn(h.transpose(1, 2)).squeeze(-1), dim=-1)
+        return self.out((h * weight.unsqueeze(1)).sum(-1))
+
+
+def waveform():
     def block(i, o, stride):
         return [nn.Conv1d(i, o, 5, stride, 2), nn.BatchNorm1d(o), nn.ReLU()]
 
@@ -77,7 +95,42 @@ def model():
     )
 
 
-def train(net, x, y, epochs, batch, rng):
+def spectrogram():
+    return nn.Sequential(
+        nn.Conv2d(1, 8, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+        nn.Conv2d(8, 16, 3, padding=1), nn.ReLU(),
+        nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(16, 1),
+    )
+
+
+def build(arch):
+    if arch == "spectrogram":
+        return spectrogram()
+    if arch == "hybrid":
+        return Hybrid()
+    # waveform and residue share this net. Residue means the integers are
+    # codebook indices; the export already is, for a Vorbis run.
+    return waveform()
+
+
+def featurize(batch, arch):
+    if arch == "spectrogram":
+        v = torch.from_numpy(batch.astype(np.float32))
+        spec = torch.stft(v, n_fft=128, hop_length=64, win_length=128, return_complex=True, center=False)
+        return spec.abs().clamp_min(1e-6).log().unsqueeze(1)
+    return features(batch)
+
+
+def views(values, stereo):
+    if not stereo or len(values) < 4:
+        return [values]
+    left, right = values[0::2], values[1::2]
+    n = min(len(left), len(right))
+    left, right = left[:n], right[:n]
+    return [left, right, (left + right) // 2, (left - right) // 2]
+
+
+def train(net, x, y, epochs, batch, rng, arch):
     opt = torch.optim.Adam(net.parameters(), lr=1e-3)
     loss_fn = nn.BCEWithLogitsLoss()
     net.train()
@@ -86,19 +139,25 @@ def train(net, x, y, epochs, batch, rng):
         for i in range(0, len(order), batch):
             idx = order[i : i + batch]
             opt.zero_grad()
-            loss = loss_fn(net(features(x[idx])).squeeze(1), torch.from_numpy(y[idx]))
+            loss = loss_fn(net(featurize(x[idx], arch)).squeeze(1), torch.from_numpy(y[idx]))
             loss.backward()
             opt.step()
 
 
-def score(net, values, length, batch):
+def score_one(net, values, length, batch, arch):
     seg = segments(values, length)
+    if len(seg) == 0:
+        return 0.5
     net.eval()
     out = []
     with torch.no_grad():
         for i in range(0, len(seg), batch):
-            out.append(net(features(seg[i : i + batch])).squeeze(1).numpy())
+            out.append(net(featurize(seg[i : i + batch], arch)).squeeze(1).numpy())
     return float(np.concatenate(out).mean())
+
+
+def score(net, values, length, batch, arch, stereo):
+    return float(np.mean([score_one(net, part, length, batch, arch) for part in views(values, stereo)]))
 
 
 def auc(pos, neg):
@@ -115,10 +174,19 @@ def bootstrap(pos, neg, rounds, rng):
     return float(np.percentile(aucs, 2.5)), float(np.percentile(aucs, 97.5))
 
 
-def run(directory, args, rng):
-    carriers = load(directory)
-    if len(carriers) < 2:
-        return None
+def bag_auc(carriers, pos, neg):
+    groups = {}
+    for i, carrier in enumerate(carriers):
+        groups.setdefault(carrier["lineage"], [[], []])
+        groups[carrier["lineage"]][0].append(pos[i])
+        groups[carrier["lineage"]][1].append(neg[i])
+    return auc(
+        [float(np.mean(v[0])) for v in groups.values()],
+        [float(np.mean(v[1])) for v in groups.values()],
+    )
+
+
+def run_arch(carriers, args, rng, arch):
     folds = assign_folds(carriers, args.folds, rng)
     pos, neg = np.zeros(len(carriers)), np.zeros(len(carriers))
     for f in sorted(set(folds)):
@@ -128,17 +196,19 @@ def run(directory, args, rng):
         y = np.concatenate([np.full(len(segments(c[k], args.length)), label, dtype=np.float32)
                             for i in train_ids for c in [carriers[i]]
                             for k, label in (("clean", 0), ("stego", 1))])
-        net = model()
-        train(net, x, y, args.epochs, args.batch, rng)
+        net = build(arch)
+        train(net, x, y, args.epochs, args.batch, rng, arch)
         for i in range(len(carriers)):
             if folds[i] == f:
-                neg[i] = score(net, carriers[i]["clean"], args.length, args.batch)
-                pos[i] = score(net, carriers[i]["stego"], args.length, args.batch)
-        print(f"  fold {f}: done", flush=True)
+                neg[i] = score(net, carriers[i]["clean"], args.length, args.batch, arch, args.stereo)
+                pos[i] = score(net, carriers[i]["stego"], args.length, args.batch, arch, args.stereo)
+        print(f"  {arch} fold {f}: done", flush=True)
     lo, hi = bootstrap(pos, neg, args.rounds, rng)
     return {
+        "architecture": arch,
         "files": len(carriers),
         "auc": auc(pos, neg),
+        "bag_auc": bag_auc(carriers, pos, neg),
         "lo": lo,
         "hi": hi,
         "folds": args.folds,
@@ -157,10 +227,61 @@ def run(directory, args, rng):
     }
 
 
+def run(directory, args, rng):
+    carriers = load(directory)
+    if len(carriers) < 2:
+        return None
+    names = ["waveform", "spectrogram", "hybrid", "residue"] if args.arch == "all" else [args.arch]
+    primary = None
+    held = []
+    for arch in names:
+        result = run_arch(carriers, args, rng, arch)
+        if primary is None:
+            primary = result
+            continue
+        held.append({
+            "architecture": result["architecture"],
+            "auc": result["auc"],
+            "lo": result["lo"],
+            "hi": result["hi"],
+            "bag_auc": result["bag_auc"],
+        })
+    if held:
+        primary["held_out"] = held
+    return primary
+
+
+def self_test(seed):
+    rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
+    carriers = []
+    for i in range(16):
+        walk = np.cumsum(rng.normal(0, 1, 8192)).astype(np.int32)
+        clean = walk & ~np.int32(1)
+        stego = clean | rng.integers(0, 2, len(walk), dtype=np.int32)
+        carriers.append({"id": f"c{i}", "lineage": f"l{i // 2}", "clean": clean, "stego": stego})
+
+    class Args:
+        pass
+
+    args = Args()
+    args.folds = 4
+    args.epochs = 8
+    args.length = 1024
+    args.batch = 64
+    args.rounds = 50
+    args.seed = seed
+    args.stereo = False
+    result = run_arch(carriers, args, np.random.default_rng(seed), "waveform")
+    print(f"self-test waveform AUC {result['auc']:.3f}", flush=True)
+    if result["auc"] < 0.8:
+        raise SystemExit(f"waveform positive control failed: AUC {result['auc']:.3f}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("export", type=pathlib.Path, help="directory MIST_HARNESS_EXPORT wrote")
-    ap.add_argument("--out", type=pathlib.Path, required=True, help="cnn.json to write, in the harness output directory")
+    ap.add_argument("export", nargs="?", type=pathlib.Path, help="directory MIST_HARNESS_EXPORT wrote")
+    ap.add_argument("--out", type=pathlib.Path, help="cnn.json to write, in the harness output directory")
     ap.add_argument("--formats", nargs="*", help="export subdirectories to score; default all")
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--epochs", type=int, default=6)
@@ -168,7 +289,18 @@ def main():
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--rounds", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--arch", default="waveform", choices=["waveform", "spectrogram", "hybrid", "residue", "all"],
+                    help="waveform is the default; all also reports spectrogram, hybrid and residue")
+    ap.add_argument("--stereo", action="store_true",
+                    help="score even/odd samples as left, right, mid and side; off by default")
+    ap.add_argument("--self-test", action="store_true",
+                    help="train the waveform net on synthetic LSB replacement and require AUC above 0.8")
     args = ap.parse_args()
+    if args.self_test:
+        self_test(args.seed)
+        return
+    if args.export is None or args.out is None:
+        ap.error("export and --out are required unless --self-test is set")
 
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)

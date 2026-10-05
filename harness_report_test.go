@@ -91,20 +91,31 @@ type scalingRow struct {
 // cnnResult is the external CNN warden's score for a format, read from the
 // cnn.json that tools/cnn_warden writes.
 type cnnResult struct {
-	Files  int        `json:"files"`
-	AUC    float64    `json:"auc"`
-	Lo     float64    `json:"lo"`
-	Hi     float64    `json:"hi"`
-	Epochs int        `json:"epochs"`
-	Folds  int        `json:"folds,omitempty"`
-	Length int        `json:"length,omitempty"`
-	Batch  int        `json:"batch,omitempty"`
-	Rounds int        `json:"rounds,omitempty"`
-	Seed   int        `json:"seed,omitempty"`
-	Python string     `json:"python,omitempty"`
-	NumPy  string     `json:"numpy,omitempty"`
-	Torch  string     `json:"torch,omitempty"`
-	Scores []cnnScore `json:"scores,omitempty"`
+	Files        int        `json:"files"`
+	AUC          float64    `json:"auc"`
+	Lo           float64    `json:"lo"`
+	Hi           float64    `json:"hi"`
+	Epochs       int        `json:"epochs"`
+	Folds        int        `json:"folds,omitempty"`
+	Length       int        `json:"length,omitempty"`
+	Batch        int        `json:"batch,omitempty"`
+	Rounds       int        `json:"rounds,omitempty"`
+	Seed         int        `json:"seed,omitempty"`
+	Python       string     `json:"python,omitempty"`
+	NumPy        string     `json:"numpy,omitempty"`
+	Torch        string     `json:"torch,omitempty"`
+	Architecture string     `json:"architecture,omitempty"`
+	BagAUC       float64    `json:"bag_auc,omitempty"`
+	HeldOut      []cnnArch  `json:"held_out,omitempty"`
+	Scores       []cnnScore `json:"scores,omitempty"`
+}
+
+type cnnArch struct {
+	Architecture string  `json:"architecture"`
+	AUC          float64 `json:"auc"`
+	Lo           float64 `json:"lo"`
+	Hi           float64 `json:"hi"`
+	BagAUC       float64 `json:"bag_auc,omitempty"`
 }
 
 type cnnScore struct {
@@ -140,9 +151,18 @@ func (f formatReport) cnnTable(b *strings.Builder) {
 		return
 	}
 	elo, ehi := detectorResult{FileLo: f.CNN.Lo, FileHi: f.CNN.Hi}.epsilonRange()
+	name := "cnn"
+	if f.CNN.Architecture != "" {
+		name = "cnn " + f.CNN.Architecture
+	}
 	fmt.Fprintf(b, "\n### A learned warden\n\nA small CNN trained on the first 16 chunks of each carrier, folds split by lineage (by carrier only when the export has one lineage), one score per file (`tools/cnn_warden`).\n\n"+
-		"| Detector | Carriers | File AUC (95%%) | Detector-implied benchmark KL lower bound (nats, 95%%) |\n|---|---|---|---|\n| cnn | %d | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) |\n",
-		f.CNN.Files, f.CNN.AUC, f.CNN.Lo, f.CNN.Hi, epsilon(f.CNN.AUC), elo, ehi)
+		"| Detector | Carriers | File AUC (95%%) | Detector-implied benchmark KL lower bound (nats, 95%%) |\n|---|---|---|---|\n| %s | %d | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) |\n",
+		name, f.CNN.Files, f.CNN.AUC, f.CNN.Lo, f.CNN.Hi, epsilon(f.CNN.AUC), elo, ehi)
+	for _, held := range f.CNN.HeldOut {
+		hlo, hhi := detectorResult{FileLo: held.Lo, FileHi: held.Hi}.epsilonRange()
+		fmt.Fprintf(b, "| cnn %s | %d | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) |\n",
+			held.Architecture, f.CNN.Files, held.AUC, held.Lo, held.Hi, epsilon(held.AUC), hlo, hhi)
+	}
 }
 
 // pooledRow is each detector's AUC when the warden pools Files files.
@@ -393,6 +413,8 @@ var detectorTargets = map[string]string{
 	"classifier": "anything it can learn from Mist's own output",
 	"markov":     "how the waveform's curvature changes from sample to sample",
 	"key-aware":  "the ephemeral key in the first frame's envelope, read with the public key alone",
+	"rich":       "a frozen summary of prediction error, co-occurrence and a short spectrum",
+	"selection":  "LSB bias at positions the recipient public key implies",
 }
 
 func (f formatReport) fingerprint() (level, string) {
@@ -893,9 +915,9 @@ or upper bound for Cachin's ε; a detector at chance shows that this detector fo
 Chi-square, SPA and RS look for bits being overwritten, which Mist never does, so they are expected to sit at
 chance; a rise means the embedder has drifted. They are exploratory: the report gives each a paired lineage
 label-swap p-value and a Benjamini-Hochberg adjustment across the three. HCF-COM looks for ±1 changes, which
-is exactly what Mist does, so it sits in the confirmatory family with the classifier, the Markov model and the
-key-aware warden. That family of four is adjusted with Holm. A dash means that row was not part of the
-confirmatory test (scaling, category and embedding-only tables).
+is exactly what Mist does, so it sits in the confirmatory family with the classifier, the Markov model, the
+key-aware warden, the rich model and the selection-channel warden. That family of six is adjusted with Holm.
+A dash means that row was not part of the confirmatory test (scaling, category and embedding-only tables).
 
 The **classifier** is the adversary of record. It is a logistic regression on this run's own clean and stego
 chunks, using every detector's score, the share of values at each of -3…3, and how each step between adjacent
@@ -909,9 +931,18 @@ Its message-size check trains a second model to tell a 64-byte message from a 1-
 **Markov** is the same kind of model, trained the same way, on one richer feature set only: how the second
 difference between samples, the waveform's curvature, changes from one sample to the next, with each value
 clipped to -3…3. That curvature is near zero wherever the audio is smooth, so ±1 changes stand out in it more
-than in the values or their steps. These are the rich-model features of audio steganalysis; a detector that
-learns its own features, a CNN trained on exported chunks, is the next step beyond them and is not run here.
-When it is run, its folds follow lineage as well.
+than in the values or their steps.
+
+**Rich** is the same kind of model on a frozen summary: prediction errors through order 8, differences
+through order 4, an LPC residual, decimated scales, parity, symmetrized co-occurrence, and a short
+log-spaced spectrum. The harness flattens Vorbis residues to one stream, so this vector does not
+condition them on packet, codebook or Huffman context. Fisher, stump and random-subspace fits of the
+same vector are package baselines; this row is the logistic one. A CNN trained on exported chunks is a
+separate learned warden and is not run here. When it is run, its folds follow lineage as well.
+
+**Selection** is the LSB gap at positions implied by the recipient public key, on the first chunk at
+frame index 0. It does not see sender-only costs or true span boundaries. A cover-aware changed-fraction
+is recorded as an oracle in the manifest and is not a row in this table.
 
 **Power** asks how many independent lineages this run's classifier dispersion would need before a shift to
 D = 0.55 pushed the lineage interval off 0.5 in 90% of simulations. It is not a guarantee about a future corpus.

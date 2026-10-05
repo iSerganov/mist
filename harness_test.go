@@ -186,6 +186,7 @@ type carrierRun struct {
 	added                      float64
 	kbps                       float64
 	keyStego, keyClean         float64
+	selStego, selClean         float64
 	perceptual                 float64
 	trace                      carrierTrace
 }
@@ -218,7 +219,7 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	wg.Wait()
 
 	var clean, own, stegoFeatures, minimal [][]chunk
-	var keyStego, keyClean scored
+	var keyStego, keyClean, selStego, selClean scored
 	var categories []string
 	var identities []scoreIdentity
 	var familyOf []int
@@ -251,6 +252,8 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 		familyOf = append(familyOf, fam)
 		keyStego.add(run.keyStego, group, fam)
 		keyClean.add(run.keyClean, group, fam)
+		selStego.add(run.selStego, group, fam)
+		selClean.add(run.selClean, group, fam)
 		transcode = append(transcode, run.transcode)
 		stegoSDR = append(stegoSDR, run.stegoSDR)
 		gap = append(gap, run.transcode-run.stegoSDR)
@@ -269,6 +272,8 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	fr.Detectors, fr.Raw.Operational = analyzeDetectors(stegoFeatures, clean, minimal, identities, familyOf, true)
 	fr.Detectors = append(fr.Detectors, detectorFrom(keyAwareName, keyStego, keyClean, 0.5, true))
 	fr.Raw.Operational = append(fr.Raw.Operational, rawDetectorFrom(keyAwareName, keyStego, keyClean, scored{}, identities))
+	fr.Detectors = append(fr.Detectors, detectorFrom(steganalysis.SelectionName, selStego, selClean, 0.5, true))
+	fr.Raw.Operational = append(fr.Raw.Operational, rawDetectorFrom(steganalysis.SelectionName, selStego, selClean, scored{}, identities))
 	adjustConfirmatory(fr.Detectors)
 	fr.PowerFamilies, fr.PowerReached = classifierPower(fr.Raw.Operational)
 	fr.Scaling = scaling(stegoFeatures, clean, minimal, familyOf)
@@ -331,6 +336,10 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 	if err != nil {
 		return carrierRun{}, fmt.Errorf("key-aware: %w", err)
 	}
+	channels := 1
+	if av.Lossless(info.NativeCodecID) {
+		channels = info.Channels
+	}
 	var outs [5]decoded
 	for i, b := range [][]byte{twin, own, stegoOut, minimalOut, sameLevel} {
 		if outs[i], err = inspect(b); err != nil {
@@ -342,17 +351,27 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 		return carrierRun{}, err
 	}
 	maxLag := info.SampleRate / 10
+	selStego, err := selectionScore(stegoDec.vals, em.pub)
+	if err != nil {
+		return carrierRun{}, fmt.Errorf("selection: %w", err)
+	}
+	selClean, err := selectionScore(cleanOut.vals, em.pub)
+	if err != nil {
+		return carrierRun{}, fmt.Errorf("selection: %w", err)
+	}
 	run := carrierRun{
-		clean:     featuresOf(cleanOut.vals),
-		own:       featuresOf(ownOut.vals),
-		stego:     featuresOf(stegoDec.vals),
-		minimal:   featuresOf(minimalDec.vals),
+		clean:     featuresOf(cleanOut.vals, channels),
+		own:       featuresOf(ownOut.vals, channels),
+		stego:     featuresOf(stegoDec.vals, channels),
+		minimal:   featuresOf(minimalDec.vals, channels),
 		transcode: quality.SDR(ref.Planes, ownOut.planes, maxLag),
 		stegoSDR:  quality.SDR(ref.Planes, stegoDec.planes, maxLag),
 		added:     quality.SDR(ownOut.planes, stegoDec.planes, maxLag),
 		kbps:      stegoDec.trace.Kbps,
 		keyStego:  keyStego,
 		keyClean:  keyClean,
+		selStego:  selStego,
+		selClean:  selClean,
 		trace: carrierTrace{
 			Name: c.name, Source: ref.NbSamples,
 			SourceRate: info.SampleRate, SourceChannels: info.Channels, SourceFmt: sampleFmtName(info.SampleFmt),
@@ -489,14 +508,18 @@ func gridValues(planes [][]float32, scale float32) []int32 {
 // classifier's features, led by every detector's score, and the
 // second-difference Markov features the markov classifier trains on alone.
 type chunk struct {
-	features, markov []float64
+	features, markov, rich []float64
 }
 
-func featuresOf(v []int32) []chunk {
+func featuresOf(v []int32, channels int) []chunk {
 	var out []chunk
 	for off := 0; off < len(v); off += harnessChunk {
 		c := v[off:min(off+harnessChunk, len(v))]
-		out = append(out, chunk{features: steganalysis.Features(c), markov: steganalysis.Markov(c)})
+		out = append(out, chunk{
+			features: steganalysis.Features(c),
+			markov:   steganalysis.Markov(c),
+			rich:     steganalysis.RichPlanar(c, channels),
+		})
 	}
 	return out
 }
@@ -630,6 +653,7 @@ func scoreAll(pos, neg [][]chunk, familyOf []int) []detectorScores {
 	}{
 		{classifierName, func(c chunk) []float64 { return c.features }},
 		{markovName, func(c chunk) []float64 { return c.markov }},
+		{steganalysis.RichName, func(c chunk) []float64 { return c.rich }},
 	} {
 		ps, ns, model := classify(pos, neg, cl.pick, familyOf)
 		out = append(out, detectorScores{name: cl.name, pos: ps, neg: ns, model: model})
@@ -648,7 +672,7 @@ func analyzeDetectors(pos, neg, minimal [][]chunk, identities []scoreIdentity, f
 	var raw []rawDetectorScores
 	for i, sc := range scoreAll(pos, neg, familyOf) {
 		d := detectorFrom(sc.name, sc.pos, sc.neg, steganalysis.AUC(own[i].pos.vals, own[i].neg.vals), confirm)
-		if confirm && (sc.name == classifierName || sc.name == markovName) && len(sc.model.x) > 0 {
+		if confirm && trainedDetector(sc.name) && len(sc.model.x) > 0 {
 			d.PermP = steganalysis.RefitPermutationP(sc.model.x, sc.model.y, sc.model.groups, harnessFolds, harnessRefits, harnessSeed)
 		}
 		out = append(out, d)
@@ -820,7 +844,7 @@ func detectorFrom(name string, pos, neg scored, invariance float64, confirm bool
 	)
 	rlo, rhi := steganalysis.AUCInterval(fp.vals, fn.vals, fp.groups, fn.groups, harnessRounds, harnessSeed)
 	perm := -1.0
-	if confirm && name != classifierName && name != markovName {
+	if confirm && !trainedDetector(name) {
 		perm = steganalysis.PairedPermutationP(fp.vals, fn.vals, familyIDs(fp), harnessPerms, harnessSeed)
 	}
 	return detectorResult{
@@ -842,12 +866,11 @@ func familyIDs(s scored) []int {
 }
 
 func confirmatoryDetector(name string) bool {
-	switch name {
-	case "hcf-com", classifierName, markovName, keyAwareName:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(steganalysis.FrozenPrimaries(), name)
+}
+
+func trainedDetector(name string) bool {
+	return name == classifierName || name == markovName || name == steganalysis.RichName
 }
 
 func exploratoryDetector(name string) bool {

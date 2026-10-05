@@ -20,7 +20,7 @@ import (
 	"github.com/iSerganov/mist/internal/stego"
 )
 
-const harnessReportSchema = 5
+const harnessReportSchema = 6
 
 type runManifest struct {
 	Schema     int                `json:"schema"`
@@ -135,6 +135,8 @@ type experimentManifest struct {
 	CanonicalWorkflow  string    `json:"canonical_workflow"`
 	MetadataThreshold  string    `json:"metadata_threshold"`
 	MetadataFeatures   []string  `json:"metadata_features"`
+	FrozenWardens      []string  `json:"frozen_wardens"`
+	Oracle             string    `json:"oracle"`
 }
 
 func harnessBinary(env, fallback string) string {
@@ -191,7 +193,10 @@ func makeRunManifest(
 				"histogram share at -3..3",
 				"first-order SPAM transitions",
 				"second-difference Markov transitions",
+				"frozen rich-model summary",
 			},
+			FrozenWardens:      steganalysis.FrozenPrimaries(),
+			Oracle:             "changed-fraction compares cover and stego sample by sample; it is not an operational warden",
 			PermutationRounds:  harnessPerms,
 			RefitRounds:        harnessRefits,
 			NestedPenalties:    steganalysis.NestedPenaltyGrid(),
