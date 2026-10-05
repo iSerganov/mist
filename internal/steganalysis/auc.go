@@ -7,6 +7,16 @@ import (
 	"slices"
 )
 
+// Detectability folds a reversed detector back onto the same scale as a
+// forward one. 0.5 is chance and 1 is a perfect separation either way.
+func Detectability(auc float64) float64 {
+	d := auc - 0.5
+	if d < 0 {
+		d = -d
+	}
+	return 0.5 + d
+}
+
 // AUC is the area under the ROC curve for scores of a positive and a
 // negative population: the probability that a random positive outscores a
 // random negative, ties counting half. 0.5 is chance.
@@ -75,6 +85,97 @@ func AUCInterval(pos, neg []float64, posGroup, negGroup []int, rounds int, seed 
 		clear(draws)
 		for range n {
 			draws[rng.IntN(n)]++
+		}
+		var w, p float64
+		for c, kc := range draws {
+			for d, kd := range draws {
+				k := kc * kd * between
+				if c == d {
+					k = kc
+				}
+				w += k * wins[c][d]
+				p += k * pairs[c][d]
+			}
+		}
+		aucs[r] = 0.5
+		if p > 0 {
+			aucs[r] = w / p
+		}
+	}
+	slices.Sort(aucs)
+	last := float64(rounds - 1)
+	return aucs[int(0.025*last)], aucs[int(math.Ceil(0.975*last))]
+}
+
+// HierarchicalInterval is a two-stage percentile bootstrap for AUC.
+// Families are drawn with replacement, then the recordings inside each
+// drawn family. posFamily and posRecording align with pos; the negative
+// slices align with neg. A recording drawn once contributes its paired
+// comparison once, the same way AUCInterval does, so a family of one
+// recording reproduces that interval for the same seed.
+func HierarchicalInterval(pos, neg []float64, posFamily, posRecording, negFamily, negRecording []int, rounds int, seed uint64) (lo, hi float64) {
+	if rounds < 1 || len(pos) == 0 || len(neg) == 0 {
+		auc := AUC(pos, neg)
+		return auc, auc
+	}
+	ids, wins, pairs := clusterPairs(pos, neg, posRecording, negRecording)
+	recFamily := map[int]int{}
+	for i, rec := range posRecording {
+		if i < len(posFamily) {
+			recFamily[rec] = posFamily[i]
+		}
+	}
+	for i, rec := range negRecording {
+		if _, ok := recFamily[rec]; !ok && i < len(negFamily) {
+			recFamily[rec] = negFamily[i]
+		}
+	}
+	famOf := make([]int, len(ids))
+	for i, id := range ids {
+		famOf[i] = recFamily[id]
+	}
+	var members [][]int
+	at := map[int]int{}
+	for rec := range famOf {
+		fam := famOf[rec]
+		slot, ok := at[fam]
+		if !ok {
+			slot = len(members)
+			at[fam] = slot
+			members = append(members, nil)
+		}
+		members[slot] = append(members[slot], rec)
+	}
+	n := len(ids)
+	between := 1.0
+	if n > 1 {
+		between = float64(n) / float64(n-1)
+	}
+	direct := len(members) == n
+	for i, mem := range members {
+		if len(mem) != 1 || mem[0] != i {
+			direct = false
+		}
+	}
+	rng := rand.New(rand.NewPCG(seed, seed))
+	aucs := make([]float64, rounds)
+	for r := range aucs {
+		draws := make([]float64, n)
+		if direct {
+			for range n {
+				draws[rng.IntN(n)]++
+			}
+		} else {
+			for range len(members) {
+				mem := members[rng.IntN(len(members))]
+				if len(mem) == 1 {
+					draws[mem[0]]++
+					continue
+				}
+				for range len(mem) {
+					draws[mem[rng.IntN(len(mem))]]++
+				}
+			}
 		}
 		var w, p float64
 		for c, kc := range draws {

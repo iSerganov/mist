@@ -138,6 +138,35 @@ func (s *ClassifierSuite) TestCrossValidateWithOneSample() {
 	s.Equal([]float64{0.5}, CrossValidate([][]float64{{1}}, []bool{true}, []int{0}, 2))
 }
 
+func (s *ClassifierSuite) TestNestedFallsBackWithoutEnoughGroups() {
+	x := [][]float64{{0}, {1}, {0}, {1}}
+	y := []bool{false, true, false, true}
+	g := []int{0, 0, 1, 1}
+	s.Equal(CrossValidate(x, y, g, 2), NestedCrossValidate(x, y, g, 2))
+}
+
+func (s *ClassifierSuite) TestNestedCrossValidateSeparatesHeldOutGroups() {
+	var x [][]float64
+	var y []bool
+	var g []int
+	for i := range 8 {
+		x = append(x, []float64{float64(i), -1}, []float64{float64(i), 1})
+		y = append(y, false, true)
+		g = append(g, i, i)
+	}
+	first := NestedCrossValidate(x, y, g, 4)
+	s.Equal(first, NestedCrossValidate(x, y, g, 4))
+	var pos, neg []float64
+	for i, v := range first {
+		if y[i] {
+			pos = append(pos, v)
+		} else {
+			neg = append(neg, v)
+		}
+	}
+	s.Greater(AUC(pos, neg), 0.8)
+}
+
 func classifierSet(embed embedFunc, rate float64) ([][]float64, []bool, []int) {
 	const chunk = 10000
 	var x [][]float64

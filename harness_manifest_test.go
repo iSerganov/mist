@@ -16,10 +16,11 @@ import (
 	"time"
 
 	"github.com/iSerganov/mist/internal/codec"
+	"github.com/iSerganov/mist/internal/steganalysis"
 	"github.com/iSerganov/mist/internal/stego"
 )
 
-const harnessReportSchema = 2
+const harnessReportSchema = 3
 
 type runManifest struct {
 	Schema     int                `json:"schema"`
@@ -91,18 +92,23 @@ type protocolManifest struct {
 }
 
 type experimentManifest struct {
-	Formats         []string `json:"formats"`
-	Jobs            int      `json:"jobs"`
-	ChunkValues     int      `json:"chunk_values"`
-	BootstrapRounds int      `json:"bootstrap_rounds"`
-	Seed            uint64   `json:"seed"`
-	Folds           int      `json:"folds"`
-	PayloadBytes    int      `json:"payload_bytes"`
-	MinimalBytes    int      `json:"minimal_payload_bytes"`
-	CleanControls   []string `json:"clean_controls"`
-	ScoreUnit       string   `json:"score_unit"`
-	Classifier      string   `json:"classifier"`
-	Features        []string `json:"features"`
+	Formats           []string  `json:"formats"`
+	Jobs              int       `json:"jobs"`
+	ChunkValues       int       `json:"chunk_values"`
+	BootstrapRounds   int       `json:"bootstrap_rounds"`
+	Seed              uint64    `json:"seed"`
+	Folds             int       `json:"folds"`
+	PayloadBytes      int       `json:"payload_bytes"`
+	MinimalBytes      int       `json:"minimal_payload_bytes"`
+	CleanControls     []string  `json:"clean_controls"`
+	ScoreUnit         string    `json:"score_unit"`
+	Classifier        string    `json:"classifier"`
+	Features          []string  `json:"features"`
+	PermutationRounds int       `json:"permutation_rounds"`
+	RefitRounds       int       `json:"refit_rounds"`
+	NestedPenalties   []float64 `json:"nested_penalties"`
+	PowerTarget       float64   `json:"power_target_d"`
+	Power             float64   `json:"power"`
 }
 
 func harnessBinary(env, fallback string) string {
@@ -148,14 +154,19 @@ func makeRunManifest(
 			BootstrapRounds: harnessRounds, Seed: harnessSeed, Folds: harnessFolds,
 			PayloadBytes: 64, MinimalBytes: 1,
 			CleanControls: []string{"ffmpeg-default", "ffmpeg-matched-quality", "mist-clean"},
-			ScoreUnit:     "chunks and files grouped by public carrier id",
-			Classifier:    "L2-regularised logistic regression, z-scored features, carrier-grouped CV",
+			ScoreUnit:     "chunks grouped by lineage; files stay one per recording",
+			Classifier:    "L2-regularised logistic regression, z-scored on the training fold, nested lineage-grouped CV",
 			Features: []string{
 				"classical detector scores",
 				"histogram share at -3..3",
 				"first-order SPAM transitions",
 				"second-difference Markov transitions",
 			},
+			PermutationRounds: harnessPerms,
+			RefitRounds:       harnessRefits,
+			NestedPenalties:   steganalysis.NestedPenaltyGrid(),
+			PowerTarget:       harnessPowerTarget,
+			Power:             harnessPower,
 		},
 	}, nil
 }

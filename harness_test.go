@@ -30,10 +30,14 @@ import (
 )
 
 const (
-	harnessChunk  = 1 << 16
-	harnessRounds = 1000
-	harnessSeed   = 1
-	harnessFolds  = 5
+	harnessChunk       = 1 << 16
+	harnessRounds      = 1000
+	harnessSeed        = 1
+	harnessFolds       = 5
+	harnessPerms       = 199
+	harnessRefits      = 9
+	harnessPowerTarget = 0.55
+	harnessPower       = 0.9
 )
 
 var defaultHarnessFormats = []string{"ogg", "flac", "wav", "caf/alac", "wv", "tta", "aiff"}
@@ -217,6 +221,8 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	var keyStego, keyClean scored
 	var categories []string
 	var identities []scoreIdentity
+	var familyOf []int
+	lineageID := map[string]int{}
 	var transcode, stegoSDR, gap, added, drop []float64
 	for i, run := range runs {
 		if errs[i] != nil {
@@ -233,8 +239,18 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 		identities = append(identities, scoreIdentity{
 			Carrier: carriers[i].name, Category: carriers[i].category, Lineage: carriers[i].lineage,
 		})
-		keyStego.add(run.keyStego, group)
-		keyClean.add(run.keyClean, group)
+		lineage := carriers[i].lineage
+		if lineage == "" {
+			lineage = carriers[i].name
+		}
+		fam, ok := lineageID[lineage]
+		if !ok {
+			fam = len(lineageID)
+			lineageID[lineage] = fam
+		}
+		familyOf = append(familyOf, fam)
+		keyStego.add(run.keyStego, group, fam)
+		keyClean.add(run.keyClean, group, fam)
 		transcode = append(transcode, run.transcode)
 		stegoSDR = append(stegoSDR, run.stegoSDR)
 		gap = append(gap, run.transcode-run.stegoSDR)
@@ -249,13 +265,17 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	if fr.Measured == 0 {
 		return fr
 	}
-	fr.Detectors, fr.Raw.Operational = analyzeDetectors(stegoFeatures, clean, minimal, identities)
-	fr.Detectors = append(fr.Detectors, detectorFrom(keyAwareName, keyStego, keyClean, 0.5))
+	fr.Detectors, fr.Raw.Operational = analyzeDetectors(stegoFeatures, clean, minimal, identities, familyOf, true)
+	fr.Detectors = append(fr.Detectors, detectorFrom(keyAwareName, keyStego, keyClean, 0.5, true))
 	fr.Raw.Operational = append(fr.Raw.Operational, rawDetectorFrom(keyAwareName, keyStego, keyClean, scored{}, identities))
-	fr.Scaling = scaling(stegoFeatures, clean, minimal)
-	fr.Categories = byCategory(categories, stegoFeatures, clean, minimal)
+	adjustConfirmatory(fr.Detectors)
+	fr.PowerFamilies, fr.PowerReached = classifierPower(fr.Raw.Operational)
+	fr.Scaling = scaling(stegoFeatures, clean, minimal, familyOf)
+	fr.Categories = byCategory(categories, stegoFeatures, clean, minimal, familyOf)
 	fr.Pooled = pooled(stegoFeatures, clean, minimal)
-	fr.Embedding, fr.Raw.Embedding = analyzeDetectors(stegoFeatures, own, minimal, identities)
+	fr.Embedding, fr.Raw.Embedding = analyzeDetectors(stegoFeatures, own, minimal, identities, familyOf, false)
+	fr.LeaveLineage = leaveLineageFrom(fr.Raw.Operational)
+	fr.WorstCategory, fr.WorstDetector, fr.WorstFileAUC = worstCell(fr.Categories, fr.Detectors)
 	fr.Transcode = summarize(transcode, minOf)
 	fr.Stego = summarize(stegoSDR, minOf)
 	fr.Gap = summarize(gap, maxOf)
@@ -466,18 +486,34 @@ func featuresOf(v []int32) []chunk {
 	return out
 }
 
-// scored is a population of detector scores and the carrier each came
-// from, which the interval needs: chunks of one carrier are not independent.
+// scored is a population of detector scores. groups is the recording, which
+// perFile averages over. family is the lineage, which the interval and the
+// classifier treat as the independent sample. Chunks of one recording, and
+// recordings of one lineage, are not independent of each other.
 type scored struct {
 	vals   []float64
 	groups []int
+	family []int
 }
 
-func (s *scored) add(v float64, g int) {
-	s.vals, s.groups = append(s.vals, v), append(s.groups, g)
+func (s *scored) add(v float64, recording, family int) {
+	s.vals = append(s.vals, v)
+	s.groups = append(s.groups, recording)
+	s.family = append(s.family, family)
 }
 
-// perFile averages each carrier's chunk scores into one score for the file.
+func (s scored) familyAt(i int) int {
+	if i < len(s.family) {
+		return s.family[i]
+	}
+	if i < len(s.groups) {
+		return s.groups[i]
+	}
+	return 0
+}
+
+// perFile averages each recording's chunk scores into one score for the file.
+// Chapters stay separate files; they share a lineage through family.
 func (s scored) perFile() scored {
 	var out scored
 	at := map[int]int{}
@@ -487,7 +523,7 @@ func (s scored) perFile() scored {
 		if !ok {
 			j = len(out.vals)
 			at[s.groups[i]] = j
-			out.add(0, s.groups[i])
+			out.add(0, s.groups[i], s.familyAt(i))
 			n = append(n, 0)
 		}
 		out.vals[j] += v
@@ -499,37 +535,59 @@ func (s scored) perFile() scored {
 	return out
 }
 
-func column(carriers [][]chunk, k int) scored {
+func column(carriers [][]chunk, k int, familyOf []int) scored {
 	var out scored
 	for i, chunks := range carriers {
+		fam := i
+		if i < len(familyOf) {
+			fam = familyOf[i]
+		}
 		for _, c := range chunks {
-			out.add(c.features[k], i)
+			out.add(c.features[k], i, fam)
 		}
 	}
 	return out
 }
 
-func classify(pos, neg [][]chunk, pick func(chunk) []float64) (scored, scored) {
+// trained is the matrix a confirmatory refit has to see again: the same
+// rows, labels and lineage groups the reported scores came from.
+type trained struct {
+	x      [][]float64
+	y      []bool
+	groups []int
+}
+
+func classify(pos, neg [][]chunk, pick func(chunk) []float64, familyOf []int) (scored, scored, trained) {
 	var x [][]float64
 	var y []bool
-	var groups []int
+	var groups, recording []int
 	for i := range pos {
+		fam := i
+		if i < len(familyOf) {
+			fam = familyOf[i]
+		}
 		for _, c := range pos[i] {
-			x, y, groups = append(x, pick(c)), append(y, true), append(groups, i)
+			x = append(x, pick(c))
+			y = append(y, true)
+			groups = append(groups, fam)
+			recording = append(recording, i)
 		}
 		for _, c := range neg[i] {
-			x, y, groups = append(x, pick(c)), append(y, false), append(groups, i)
+			x = append(x, pick(c))
+			y = append(y, false)
+			groups = append(groups, fam)
+			recording = append(recording, i)
 		}
 	}
 	var ps, ns scored
-	for i, v := range steganalysis.CrossValidate(x, y, groups, harnessFolds) {
+	for i, v := range steganalysis.NestedCrossValidate(x, y, groups, harnessFolds) {
 		if y[i] {
-			ps.add(v, groups[i])
+			ps.add(v, recording[i], groups[i])
 		} else {
-			ns.add(v, groups[i])
+			ns.add(v, recording[i], groups[i])
 		}
 	}
-	return ps, ns
+	return ps, ns, trained{x: x, y: y, groups: groups}
 }
 
 // detectorScores is one detector's score for every chunk of the stego copy
@@ -537,6 +595,7 @@ func classify(pos, neg [][]chunk, pick func(chunk) []float64) (scored, scored) {
 type detectorScores struct {
 	name     string
 	pos, neg scored
+	model    trained
 }
 
 type scoreIdentity struct {
@@ -545,10 +604,10 @@ type scoreIdentity struct {
 	Lineage  string
 }
 
-func scoreAll(pos, neg [][]chunk) []detectorScores {
+func scoreAll(pos, neg [][]chunk, familyOf []int) []detectorScores {
 	var out []detectorScores
 	for k, d := range steganalysis.Detectors() {
-		out = append(out, detectorScores{d.Name, column(pos, k), column(neg, k)})
+		out = append(out, detectorScores{name: d.Name, pos: column(pos, k, familyOf), neg: column(neg, k, familyOf)})
 	}
 	for _, cl := range []struct {
 		name string
@@ -557,23 +616,27 @@ func scoreAll(pos, neg [][]chunk) []detectorScores {
 		{classifierName, func(c chunk) []float64 { return c.features }},
 		{markovName, func(c chunk) []float64 { return c.markov }},
 	} {
-		ps, ns := classify(pos, neg, cl.pick)
-		out = append(out, detectorScores{cl.name, ps, ns})
+		ps, ns, model := classify(pos, neg, cl.pick, familyOf)
+		out = append(out, detectorScores{name: cl.name, pos: ps, neg: ns, model: model})
 	}
 	return out
 }
 
-func detectors(pos, neg, minimal [][]chunk) []detectorResult {
-	out, _ := analyzeDetectors(pos, neg, minimal, nil)
+func detectors(pos, neg, minimal [][]chunk, familyOf []int) []detectorResult {
+	out, _ := analyzeDetectors(pos, neg, minimal, nil, familyOf, false)
 	return out
 }
 
-func analyzeDetectors(pos, neg, minimal [][]chunk, identities []scoreIdentity) ([]detectorResult, []rawDetectorScores) {
-	own := scoreAll(pos, minimal)
+func analyzeDetectors(pos, neg, minimal [][]chunk, identities []scoreIdentity, familyOf []int, confirm bool) ([]detectorResult, []rawDetectorScores) {
+	own := scoreAll(pos, minimal, familyOf)
 	var out []detectorResult
 	var raw []rawDetectorScores
-	for i, sc := range scoreAll(pos, neg) {
-		out = append(out, detectorFrom(sc.name, sc.pos, sc.neg, steganalysis.AUC(own[i].pos.vals, own[i].neg.vals)))
+	for i, sc := range scoreAll(pos, neg, familyOf) {
+		d := detectorFrom(sc.name, sc.pos, sc.neg, steganalysis.AUC(own[i].pos.vals, own[i].neg.vals), confirm)
+		if confirm && (sc.name == classifierName || sc.name == markovName) && len(sc.model.x) > 0 {
+			d.PermP = steganalysis.RefitPermutationP(sc.model.x, sc.model.y, sc.model.groups, harnessFolds, harnessRefits, harnessSeed)
+		}
+		out = append(out, d)
 		if identities != nil {
 			raw = append(raw, rawDetectorFrom(sc.name, sc.pos, sc.neg, own[i].neg, identities))
 		}
@@ -643,7 +706,7 @@ func pooled(pos, neg, minimal [][]chunk) []pooledRow {
 			continue
 		}
 		row := pooledRow{Files: k}
-		for _, sc := range scoreAll(pos, neg) {
+		for _, sc := range scoreAll(pos, neg, nil) {
 			p, n := sc.pos.perFile().vals, sc.neg.perFile().vals
 			row.Detectors = append(row.Detectors, pooledResult{Name: sc.name, AUC: pooledAUC(p, n, k)})
 		}
@@ -671,7 +734,7 @@ func pooledAUC(pos, neg []float64, k int) float64 {
 // byCategory scores every detector on each corpus category alone, so a kind
 // of audio that behaves unlike the rest does not average away. It returns
 // nothing when the corpus has one category.
-func byCategory(names []string, pos, neg, minimal [][]chunk) []categoryRow {
+func byCategory(names []string, pos, neg, minimal [][]chunk, familyOf []int) []categoryRow {
 	seen := map[string]bool{}
 	var order []string
 	for _, n := range names {
@@ -687,12 +750,18 @@ func byCategory(names []string, pos, neg, minimal [][]chunk) []categoryRow {
 	var out []categoryRow
 	for _, cat := range order {
 		var p, n, m [][]chunk
+		var pf []int
 		for i, name := range names {
 			if name == cat {
 				p, n, m = append(p, pos[i]), append(n, neg[i]), append(m, minimal[i])
+				fam := i
+				if i < len(familyOf) {
+					fam = familyOf[i]
+				}
+				pf = append(pf, fam)
 			}
 		}
-		out = append(out, categoryRow{Name: cat, Carriers: len(p), Detectors: detectors(p, n, m)})
+		out = append(out, categoryRow{Name: cat, Carriers: len(p), Detectors: detectors(p, n, m, pf)})
 	}
 	return out
 }
@@ -705,7 +774,7 @@ var scalingChunks = []int{40, 240}
 // detector that gains on longer audio (the square-root law) shows as rising
 // file AUC across the rows. A length no carrier exceeds is left out, because
 // it would repeat the whole-file row.
-func scaling(pos, neg, minimal [][]chunk) []scalingRow {
+func scaling(pos, neg, minimal [][]chunk, familyOf []int) []scalingRow {
 	longest := 0
 	for _, c := range pos {
 		longest = max(longest, len(c))
@@ -713,7 +782,7 @@ func scaling(pos, neg, minimal [][]chunk) []scalingRow {
 	var out []scalingRow
 	for _, n := range scalingChunks {
 		if n < longest {
-			out = append(out, scalingRow{Chunks: n, Detectors: detectors(prefix(pos, n), prefix(neg, n), prefix(minimal, n))})
+			out = append(out, scalingRow{Chunks: n, Detectors: detectors(prefix(pos, n), prefix(neg, n), prefix(minimal, n), familyOf)})
 		}
 	}
 	return out
@@ -727,15 +796,190 @@ func prefix(carriers [][]chunk, n int) [][]chunk {
 	return out
 }
 
-func detectorFrom(name string, pos, neg scored, invariance float64) detectorResult {
-	lo, hi := steganalysis.AUCInterval(pos.vals, neg.vals, pos.groups, neg.groups, harnessRounds, harnessSeed)
+func detectorFrom(name string, pos, neg scored, invariance float64, confirm bool) detectorResult {
+	lo, hi := steganalysis.AUCInterval(pos.vals, neg.vals, familyIDs(pos), familyIDs(neg), harnessRounds, harnessSeed)
 	fp, fn := pos.perFile(), neg.perFile()
-	flo, fhi := steganalysis.AUCInterval(fp.vals, fn.vals, fp.groups, fn.groups, harnessRounds, harnessSeed)
+	fileAUC := steganalysis.AUC(fp.vals, fn.vals)
+	flo, fhi := steganalysis.HierarchicalInterval(
+		fp.vals, fn.vals, familyIDs(fp), fp.groups, familyIDs(fn), fn.groups, harnessRounds, harnessSeed,
+	)
+	rlo, rhi := steganalysis.AUCInterval(fp.vals, fn.vals, fp.groups, fn.groups, harnessRounds, harnessSeed)
+	perm := -1.0
+	if confirm && name != classifierName && name != markovName {
+		perm = steganalysis.PairedPermutationP(fp.vals, fn.vals, familyIDs(fp), harnessPerms, harnessSeed)
+	}
 	return detectorResult{
 		Name: name, AUC: steganalysis.AUC(pos.vals, neg.vals), Lo: lo, Hi: hi,
-		FileAUC: steganalysis.AUC(fp.vals, fn.vals), FileLo: flo, FileHi: fhi,
+		FileAUC: fileAUC, FileLo: flo, FileHi: fhi,
+		Detectability: steganalysis.Detectability(fileAUC),
+		RecordLo:      rlo, RecordHi: rhi,
+		PermP: perm, HolmP: -1, FDRP: -1,
 		Invariance: invariance,
 	}
+}
+
+func familyIDs(s scored) []int {
+	out := make([]int, len(s.vals))
+	for i := range s.vals {
+		out[i] = s.familyAt(i)
+	}
+	return out
+}
+
+func confirmatoryDetector(name string) bool {
+	switch name {
+	case "hcf-com", classifierName, markovName, keyAwareName:
+		return true
+	default:
+		return false
+	}
+}
+
+func exploratoryDetector(name string) bool {
+	switch name {
+	case "chi-square", "spa", "rs":
+		return true
+	default:
+		return false
+	}
+}
+
+// adjustConfirmatory applies Holm to the preregistered family and
+// Benjamini-Hochberg to the exploratory classical detectors. A detector
+// whose permutation was not run stays at -1.
+func adjustConfirmatory(ds []detectorResult) {
+	apply := func(keep func(string) bool, adjust func([]float64) []float64, set func(*detectorResult, float64)) {
+		var idx []int
+		var p []float64
+		for i, d := range ds {
+			if keep(d.Name) && d.PermP >= 0 {
+				idx = append(idx, i)
+				p = append(p, d.PermP)
+			}
+		}
+		if len(p) == 0 {
+			return
+		}
+		adj := adjust(p)
+		for j, i := range idx {
+			set(&ds[i], adj[j])
+		}
+	}
+	apply(confirmatoryDetector, steganalysis.Holm, func(d *detectorResult, v float64) { d.HolmP = v })
+	apply(exploratoryDetector, steganalysis.BH, func(d *detectorResult, v float64) { d.FDRP = v })
+}
+
+func classifierPower(raw []rawDetectorScores) (families int, reached bool) {
+	for _, d := range raw {
+		if d.Name != classifierName {
+			continue
+		}
+		pos, neg, _ := pairByCarrier(d.Stego.Files, d.Clean.Files)
+		return steganalysis.FamiliesForPower(pos, neg, harnessPowerTarget, harnessPower, harnessSeed)
+	}
+	return 0, false
+}
+
+func pairByCarrier(stego, clean []rawScore) (pos, neg []float64, lineage []string) {
+	at := map[string]rawScore{}
+	for _, s := range clean {
+		at[s.Carrier] = s
+	}
+	for _, s := range stego {
+		c, ok := at[s.Carrier]
+		if !ok {
+			continue
+		}
+		pos = append(pos, s.Score)
+		neg = append(neg, c.Score)
+		lineage = append(lineage, s.Lineage)
+	}
+	return pos, neg, lineage
+}
+
+func leaveLineageFrom(raw []rawDetectorScores) []leaveLineageRow {
+	var stego, clean []rawScore
+	for _, d := range raw {
+		if d.Name == classifierName {
+			stego, clean = d.Stego.Files, d.Clean.Files
+			break
+		}
+	}
+	pos, neg, lin := pairByCarrier(stego, clean)
+	var order []string
+	groups := map[string][]int{}
+	for i, name := range lin {
+		if _, ok := groups[name]; !ok {
+			order = append(order, name)
+		}
+		groups[name] = append(groups[name], i)
+	}
+	var out []leaveLineageRow
+	for _, name := range order {
+		idx := groups[name]
+		if len(idx) < 2 {
+			continue
+		}
+		p, n := pickPairs(pos, neg, idx)
+		rest := complement(len(pos), idx)
+		row := leaveLineageRow{
+			Lineage: name, Carriers: len(idx),
+			FileAUC:       steganalysis.AUC(p, n),
+			Detectability: steganalysis.Detectability(steganalysis.AUC(p, n)),
+			RestCarriers:  len(rest),
+		}
+		if len(rest) >= 2 {
+			rp, rn := pickPairs(pos, neg, rest)
+			row.RestFileAUC = steganalysis.AUC(rp, rn)
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func pickPairs(pos, neg []float64, idx []int) (p, n []float64) {
+	for _, i := range idx {
+		p = append(p, pos[i])
+		n = append(n, neg[i])
+	}
+	return p, n
+}
+
+func complement(n int, idx []int) []int {
+	held := map[int]bool{}
+	for _, i := range idx {
+		held[i] = true
+	}
+	var out []int
+	for i := range n {
+		if !held[i] {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func worstCell(categories []categoryRow, detectors []detectorResult) (category, detector string, auc float64) {
+	best := -1.0
+	consider := func(cat string, d detectorResult) {
+		dv := steganalysis.Detectability(d.FileAUC)
+		if dv > best {
+			best = dv
+			category, detector, auc = cat, d.Name, d.FileAUC
+		}
+	}
+	if len(categories) == 0 {
+		for _, d := range detectors {
+			consider("aggregate", d)
+		}
+		return category, detector, auc
+	}
+	for _, c := range categories {
+		for _, d := range c.Detectors {
+			consider(c.Name, d)
+		}
+	}
+	return category, detector, auc
 }
 
 func perceptualTool() *quality.Tool {
@@ -774,4 +1018,72 @@ func perceptualDrop(ctx context.Context, tool quality.Tool, carrierExt, ext stri
 
 func commit() string {
 	return inspectGit().Describe
+}
+
+func (s *HarnessSuite) TestLineageIntervalPinsASharedFamily() {
+	var pos, neg scored
+	pos.add(1, 0, 0)
+	pos.add(1, 1, 0)
+	neg.add(0, 0, 0)
+	neg.add(0, 1, 0)
+	d := detectorFrom("hcf-com", pos, neg, 0.5, false)
+	s.Equal(1.0, d.FileAUC)
+	s.Equal(1.0, d.FileLo)
+	s.Equal(1.0, d.FileHi)
+	s.Equal(1.0, d.Detectability)
+	s.Equal(-1.0, d.PermP)
+	s.Equal(-1.0, d.HolmP)
+}
+
+func (s *HarnessSuite) TestConfirmatoryHolmUsesThePermutation() {
+	var pos, neg scored
+	for i := range 12 {
+		pos.add(1, i, i)
+		neg.add(0, i, i)
+	}
+	d := detectorFrom("hcf-com", pos, neg, 0.5, true)
+	s.Less(d.PermP, 0.05)
+	ds := []detectorResult{d}
+	adjustConfirmatory(ds)
+	s.Equal(d.PermP, ds[0].HolmP)
+	s.Equal(-1.0, ds[0].FDRP)
+}
+
+func (s *HarnessSuite) TestClassifyKeepsRecordingsInsideALineage() {
+	mk := func(y float64) chunk { return chunk{features: []float64{y}, markov: []float64{y}} }
+	var pos, neg [][]chunk
+	var family []int
+	for i := range 4 {
+		pos = append(pos, []chunk{mk(1), mk(1)})
+		neg = append(neg, []chunk{mk(-1), mk(-1)})
+		family = append(family, i)
+	}
+	ps, ns, model := classify(pos, neg, func(c chunk) []float64 { return c.features }, family)
+	s.Equal([]int{0, 0, 1, 1, 2, 2, 3, 3}, ps.groups)
+	s.Equal([]int{0, 0, 1, 1, 2, 2, 3, 3}, ps.family)
+	s.Len(ps.perFile().vals, 4)
+	s.Greater(steganalysis.AUC(ps.vals, ns.vals), 0.8)
+	s.Equal(family[0], model.groups[0])
+}
+
+func (s *HarnessSuite) TestLeaveLineageNeedsTwoCarriers() {
+	raw := []rawDetectorScores{{
+		Name: classifierName,
+		Stego: rawPopulation{Files: []rawScore{
+			{Carrier: "a", Lineage: "session", Score: 0.9},
+			{Carrier: "b", Lineage: "session", Score: 0.8},
+			{Carrier: "c", Lineage: "other", Score: 0.1},
+		}},
+		Clean: rawPopulation{Files: []rawScore{
+			{Carrier: "a", Lineage: "session", Score: 0.2},
+			{Carrier: "b", Lineage: "session", Score: 0.1},
+			{Carrier: "c", Lineage: "other", Score: 0.2},
+		}},
+	}}
+	rows := leaveLineageFrom(raw)
+	s.Require().Len(rows, 1)
+	s.Equal("session", rows[0].Lineage)
+	s.Equal(1.0, rows[0].FileAUC)
+	s.Equal(1, rows[0].RestCarriers)
+	s.Equal(0.0, rows[0].RestFileAUC)
 }

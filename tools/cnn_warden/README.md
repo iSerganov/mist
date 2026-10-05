@@ -11,10 +11,11 @@ values both its clean ffmpeg copy and its stego copy give the detectors
 (the first 16 chunks of 65,536 values). `train.py` cuts those into
 segments of 8,192 values, feeds a small 1-D CNN the clipped first and second
 differences and the value's parity, and trains it to tell stego from clean.
-It is scored like the other detectors: five folds split by carrier, one score
-per file (the mean over its segments), and a 95% interval bootstrapped by
-carrier. The result goes to `cnn.json`, which the next `make harness` run
-picks up and prints in the report.
+It is scored like the other detectors: five folds split by lineage, falling
+back to carriers when the export has one lineage, one score per file (the
+mean over its segments), and a 95% interval bootstrapped by carrier. The
+result goes to `cnn.json`, which the next `make harness` run picks up and
+prints in the report.
 
 ## Run
 
@@ -38,7 +39,7 @@ MIST_HARNESS_EXPORT="$HARNESS_OUT/export" make harness CORPUS="$CORPUS" CORPUS_M
 |---|---|---|
 | `--out` | required | `cnn.json` to write, in the harness output directory |
 | `--formats` | all | export subdirectories to score, such as `flac` or `ogg-vorbis` |
-| `--folds` | 5 | cross-validation folds, split by carrier |
+| `--folds` | 5 | cross-validation folds, split by lineage |
 | `--epochs` | 6 | training epochs per fold |
 | `--length` | 8192 | values per segment |
 | `--rounds` | 1000 | bootstrap rounds for the interval |

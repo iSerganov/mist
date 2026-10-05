@@ -201,11 +201,13 @@ the adversary of record, so its AUC is the one the exit criterion is judged by.
 full-batch gradient descent for a fixed number of steps. Training is
 deterministic.
 
-**Validation.** `CrossValidate` splits samples into folds **by group**; the
-harness uses the carrier as the group. Every carrier is scored by a model trained
-without it, so the classifier cannot win by recognising a track it has already
-seen. The out-of-fold scores then go through `AUC` and `AUCInterval` like any
-detector's.
+**Validation.** `CrossValidate` splits samples into folds **by group**. The
+harness reports `NestedCrossValidate`: outer folds are recording lineages, an
+inner grouped search chooses the L2 penalty from 0.001, 0.01 and 0.1, and one
+held-out lineage calibrates the probability. Fewer than four lineages falls
+back to `CrossValidate` at the fixed penalty. Standardisation is fit on the
+training rows of that fold only. The out-of-fold scores then go through `AUC`
+and `HierarchicalInterval`.
 
 **Limits.** A linear model on 60 hand-built features is a modest adversary. It
 matches HCF on synthetic ±1 embedding and beats it at higher rates, but a deep
@@ -273,13 +275,16 @@ $$
 its sign flipped. A value well below 0.5 is still a detection. For Mist the goal
 is **AUC ≈ 0.5 for every detector**.
 
-**`AUCInterval`** is a percentile cluster bootstrap. Every score carries a group,
-and the harness uses the carrier as the group. Each round redraws whole groups
-with replacement, recomputes the AUC from them, and the interval is the 2.5th
-and 97.5th percentiles. Chunks of one track are correlated, and clean and stego
-chunks of one track are paired, so resampling chunks one by one would make the
-interval far too narrow: its width would follow the number of chunks rather than
-the number of tracks.
+**`AUCInterval`** is a percentile cluster bootstrap. Every score carries a group.
+Each round redraws whole groups with replacement, recomputes the AUC from them,
+and the interval is the 2.5th and 97.5th percentiles. Chunks of one track are
+correlated, and clean and stego chunks of one track are paired, so resampling
+chunks one by one would make the interval far too narrow: its width would follow
+the number of chunks rather than the number of tracks. **`HierarchicalInterval`**
+draws lineages first and then the recordings inside a drawn lineage, and it
+reproduces `AUCInterval` for the same seed when each lineage is one recording.
+**`Detectability`** reports D = 0.5 + |AUC − 0.5|, so a reversed detector is
+still a detection.
 
 The AUC is a sum over pairs of groups: group c's positives against group d's
 negatives. The pairs with c = d compare a track's stego copy with its own clean

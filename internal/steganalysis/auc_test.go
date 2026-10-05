@@ -165,6 +165,32 @@ func (s *AUCSuite) TestAUCIntervalIsDeterministicPerSeed() {
 	s.Equal(hi1, hi2)
 }
 
+func (s *AUCSuite) TestDetectabilityFoldsReversedDetectors() {
+	s.Equal(0.5, Detectability(0.5))
+	s.Equal(0.9, Detectability(0.9))
+	s.Equal(0.9, Detectability(0.1))
+}
+
+func (s *AUCSuite) TestHierarchicalIntervalMatchesCarrierBootstrap() {
+	pos := []float64{0.3, 0.6, 0.45, 0.95, 0.7}
+	neg := []float64{0.1, 0.4, 0.35, 0.8, 0.65}
+	groups := []int{0, 0, 1, 2, 2}
+	wantLo, wantHi := AUCInterval(pos, neg, groups, groups, 200, 42)
+	lo, hi := HierarchicalInterval(pos, neg, groups, groups, groups, groups, 200, 42)
+	s.Equal(wantLo, lo)
+	s.Equal(wantHi, hi)
+}
+
+func (s *AUCSuite) TestHierarchicalIntervalPinsSeparatedFamilies() {
+	pos := []float64{3, 4, 5, 6}
+	neg := []float64{0, 1, 0, 1}
+	family := []int{0, 0, 1, 1}
+	recording := []int{0, 1, 2, 3}
+	lo, hi := HierarchicalInterval(pos, neg, family, recording, family, recording, 100, 3)
+	s.Equal(1.0, lo)
+	s.Equal(1.0, hi)
+}
+
 func (s *AUCSuite) TestAUCIntervalWithoutRoundsIsThePointEstimate() {
 	pos := []float64{0.3, 0.6, 0.45}
 	neg := []float64{0.1, 0.4, 0.5}

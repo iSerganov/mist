@@ -4,7 +4,8 @@
 Reads what `make harness MIST_HARNESS_EXPORT=dir` wrote, trains a small 1-D
 CNN to tell the stego copy of a carrier from its clean ffmpeg copy, and
 scores it the way the harness scores its own detectors: cross-validated by
-carrier, one score per file, a 95% interval bootstrapped by carrier.
+lineage, one score per file, a 95% interval bootstrapped by carrier. A
+single lineage falls back to carrier folds.
 """
 import argparse
 import json
@@ -25,8 +26,30 @@ def load(directory):
         clean = np.fromfile(f"{stem}.clean.i32", dtype="<i4")
         stego = np.fromfile(f"{stem}.stego.i32", dtype="<i4")
         identity = json.loads(meta.read_text())
-        carriers.append({"id": identity["name"], "clean": clean, "stego": stego})
+        carriers.append({
+            "id": identity["name"],
+            "lineage": identity.get("lineage") or identity["name"],
+            "clean": clean,
+            "stego": stego,
+        })
     return carriers
+
+
+def assign_folds(carriers, n_folds, rng):
+    """Keep every recording of one lineage in the same fold.
+
+    One lineage cannot be split, so the split falls back to carriers.
+    """
+    lineages = [c["lineage"] for c in carriers]
+    unique = list(dict.fromkeys(lineages))
+    if len(unique) < 2:
+        folds = np.arange(len(carriers)) % min(n_folds, len(carriers))
+        rng.shuffle(folds)
+        return folds
+    order = np.array(unique)
+    rng.shuffle(order)
+    fold_of = {name: i % min(n_folds, len(order)) for i, name in enumerate(order)}
+    return np.array([fold_of[name] for name in lineages])
 
 
 def segments(values, length):
@@ -96,8 +119,7 @@ def run(directory, args, rng):
     carriers = load(directory)
     if len(carriers) < 2:
         return None
-    folds = np.arange(len(carriers)) % min(args.folds, len(carriers))
-    rng.shuffle(folds)
+    folds = assign_folds(carriers, args.folds, rng)
     pos, neg = np.zeros(len(carriers)), np.zeros(len(carriers))
     for f in sorted(set(folds)):
         train_ids = [i for i in range(len(carriers)) if folds[i] != f]

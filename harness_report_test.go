@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/iSerganov/mist/internal/steganalysis"
 )
 
 type harnessReport struct {
@@ -26,25 +28,31 @@ type harnessReport struct {
 }
 
 type formatReport struct {
-	Format         string           `json:"format"`
-	Run            int              `json:"run"`
-	Error          string           `json:"error,omitempty"`
-	Measured       int              `json:"measured"`
-	Skipped        []skippedCarrier `json:"skipped,omitempty"`
-	Detectors      []detectorResult `json:"detectors,omitempty"`
-	Embedding      []detectorResult `json:"embedding_detectors,omitempty"`
-	Scaling        []scalingRow     `json:"scaling,omitempty"`
-	Categories     []categoryRow    `json:"categories,omitempty"`
-	Pooled         []pooledRow      `json:"pooled,omitempty"`
-	CNN            *cnnResult       `json:"cnn,omitempty"`
-	Raw            rawFormatScores  `json:"raw_scores,omitempty"`
-	Traces         []carrierTrace   `json:"traces,omitempty"`
-	Transcode      stat             `json:"transcode_sdr"`
-	Stego          stat             `json:"stego_sdr"`
-	Gap            stat             `json:"gap"`
-	Added          stat             `json:"added_sdr"`
-	PerceptualDrop *stat            `json:"perceptual_drop,omitempty"`
-	Carriers       []carrierResult  `json:"carriers,omitempty"`
+	Format         string            `json:"format"`
+	Run            int               `json:"run"`
+	Error          string            `json:"error,omitempty"`
+	Measured       int               `json:"measured"`
+	Skipped        []skippedCarrier  `json:"skipped,omitempty"`
+	Detectors      []detectorResult  `json:"detectors,omitempty"`
+	Embedding      []detectorResult  `json:"embedding_detectors,omitempty"`
+	Scaling        []scalingRow      `json:"scaling,omitempty"`
+	Categories     []categoryRow     `json:"categories,omitempty"`
+	Pooled         []pooledRow       `json:"pooled,omitempty"`
+	PowerFamilies  int               `json:"power_families"`
+	PowerReached   bool              `json:"power_reached"`
+	WorstCategory  string            `json:"worst_category,omitempty"`
+	WorstDetector  string            `json:"worst_detector,omitempty"`
+	WorstFileAUC   float64           `json:"worst_file_auc,omitempty"`
+	LeaveLineage   []leaveLineageRow `json:"leave_lineage,omitempty"`
+	CNN            *cnnResult        `json:"cnn,omitempty"`
+	Raw            rawFormatScores   `json:"raw_scores,omitempty"`
+	Traces         []carrierTrace    `json:"traces,omitempty"`
+	Transcode      stat              `json:"transcode_sdr"`
+	Stego          stat              `json:"stego_sdr"`
+	Gap            stat              `json:"gap"`
+	Added          stat              `json:"added_sdr"`
+	PerceptualDrop *stat             `json:"perceptual_drop,omitempty"`
+	Carriers       []carrierResult   `json:"carriers,omitempty"`
 }
 
 type rawFormatScores struct {
@@ -131,7 +139,7 @@ func (f formatReport) cnnTable(b *strings.Builder) {
 		return
 	}
 	elo, ehi := detectorResult{FileLo: f.CNN.Lo, FileHi: f.CNN.Hi}.epsilonRange()
-	fmt.Fprintf(b, "\n### A learned warden\n\nA small CNN trained on the first 16 chunks of each carrier, five folds split by carrier, one score per file (`tools/cnn_warden`).\n\n"+
+	fmt.Fprintf(b, "\n### A learned warden\n\nA small CNN trained on the first 16 chunks of each carrier, folds split by lineage (by carrier only when the export has one lineage), one score per file (`tools/cnn_warden`).\n\n"+
 		"| Detector | Carriers | File AUC (95%%) | Detector-implied benchmark KL lower bound (nats, 95%%) |\n|---|---|---|---|\n| cnn | %d | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) |\n",
 		f.CNN.Files, f.CNN.AUC, f.CNN.Lo, f.CNN.Hi, epsilon(f.CNN.AUC), elo, ehi)
 }
@@ -154,6 +162,18 @@ type categoryRow struct {
 	Detectors []detectorResult `json:"detectors"`
 }
 
+// leaveLineageRow is the classifier's file AUC inside one lineage and on
+// every other carrier. It is computed from scores already produced; the
+// model is not retrained.
+type leaveLineageRow struct {
+	Lineage       string  `json:"lineage"`
+	Carriers      int     `json:"carriers"`
+	FileAUC       float64 `json:"file_auc"`
+	Detectability float64 `json:"d_auc"`
+	RestFileAUC   float64 `json:"rest_file_auc"`
+	RestCarriers  int     `json:"rest_carriers"`
+}
+
 // carrierResult is one carrier's quality numbers, so a track that behaves
 // unlike the rest shows up instead of vanishing into the mean.
 type carrierResult struct {
@@ -171,14 +191,20 @@ type skippedCarrier struct {
 }
 
 type detectorResult struct {
-	Name       string  `json:"name"`
-	AUC        float64 `json:"auc"`
-	Lo         float64 `json:"auc_lo"`
-	Hi         float64 `json:"auc_hi"`
-	FileAUC    float64 `json:"file_auc"`
-	FileLo     float64 `json:"file_auc_lo"`
-	FileHi     float64 `json:"file_auc_hi"`
-	Invariance float64 `json:"payload_invariance"`
+	Name          string  `json:"name"`
+	AUC           float64 `json:"auc"`
+	Lo            float64 `json:"auc_lo"`
+	Hi            float64 `json:"auc_hi"`
+	FileAUC       float64 `json:"file_auc"`
+	FileLo        float64 `json:"file_auc_lo"`
+	FileHi        float64 `json:"file_auc_hi"`
+	Detectability float64 `json:"d_auc"`
+	RecordLo      float64 `json:"record_auc_lo"`
+	RecordHi      float64 `json:"record_auc_hi"`
+	PermP         float64 `json:"permutation_p"`
+	HolmP         float64 `json:"holm_p"`
+	FDRP          float64 `json:"bh_fdr"`
+	Invariance    float64 `json:"payload_invariance"`
 }
 
 // epsilon is the smallest Cachin ε that a detector reaching this AUC
@@ -502,11 +528,11 @@ func (r harnessReport) primaryManifest() runManifest {
 }
 
 func detectorTable(b *strings.Builder, ds []detectorResult, base *formatReport) {
-	b.WriteString("| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | Detector-implied benchmark KL lower bound (nats, 95%) | Verdict | Message size |")
+	b.WriteString("| Detector | Looks for | Chunk AUC (95%) | File AUC (95%) | D | Detector-implied benchmark KL lower bound (nats, 95%) | Adjusted p | Verdict | Message size |")
 	if base != nil {
 		b.WriteString(" AUC change |")
 	}
-	b.WriteString("\n|---|---|---|---|---|---|---|")
+	b.WriteString("\n|---|---|---|---|---|---|---|---|---|")
 	if base != nil {
 		b.WriteString("---|")
 	}
@@ -514,12 +540,23 @@ func detectorTable(b *strings.Builder, ds []detectorResult, base *formatReport) 
 		vl, vt := d.verdict()
 		il, it := d.invariance()
 		elo, ehi := d.epsilonRange()
-		fmt.Fprintf(b, "\n| %s | %s | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) | %s %s | %s %s (%.3f) |",
+		fmt.Fprintf(b, "\n| %s | %s | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) | %.3f | %.3f (%.3f–%.3f) | %s | %s %s | %s %s (%.3f) |",
 			d.Name, detectorTargets[d.Name], d.AUC, d.Lo, d.Hi, d.FileAUC, d.FileLo, d.FileHi,
-			epsilon(d.FileAUC), elo, ehi, vl.mark(), vt, il.mark(), it, d.Invariance)
+			d.Detectability, epsilon(d.FileAUC), elo, ehi, d.adjustedP(), vl.mark(), vt, il.mark(), it, d.Invariance)
 		if base != nil {
 			b.WriteString(" " + base.aucDelta(d) + " |")
 		}
+	}
+}
+
+func (d detectorResult) adjustedP() string {
+	switch {
+	case d.HolmP >= 0:
+		return fmt.Sprintf("Holm %.3f", d.HolmP)
+	case d.FDRP >= 0:
+		return fmt.Sprintf("BH %.3f", d.FDRP)
+	default:
+		return "—"
 	}
 }
 
@@ -567,6 +604,55 @@ func (f formatReport) categoryTable(b *strings.Builder) {
 		}
 	}
 	b.WriteString("\n")
+}
+
+func (f formatReport) recordingNote(b *strings.Builder) {
+	var notes []string
+	for _, d := range f.Detectors {
+		fileWidth := d.FileHi - d.FileLo
+		recordWidth := d.RecordHi - d.RecordLo
+		if math.Abs(fileWidth-recordWidth) > 0.01 {
+			notes = append(notes, fmt.Sprintf("%s %.3f–%.3f", d.Name, d.RecordLo, d.RecordHi))
+		}
+	}
+	if len(notes) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n\nRecording-cluster file interval, shown where its width differs from the lineage interval by more than 0.01: %s.", strings.Join(notes, "; "))
+}
+
+func (f formatReport) powerNote(b *strings.Builder) {
+	if f.PowerReached {
+		fmt.Fprintf(b, "\n\nPower: shifting this run's classifier file scores to D = %.2f, about %d independent lineages give 90%% power for a lineage-cluster interval to exclude 0.5. The figure is a simulation from this run's dispersion.", harnessPowerTarget, f.PowerFamilies)
+		return
+	}
+	if f.PowerFamilies == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n\nPower: shifting this run's classifier file scores to D = %.2f did not reach 90%% power by %d independent lineages. The search stopped there.", harnessPowerTarget, f.PowerFamilies)
+}
+
+func (f formatReport) worstNote(b *strings.Builder) {
+	if f.WorstDetector == "" {
+		return
+	}
+	fmt.Fprintf(b, "\n\nWorst cell: %s on %s, file AUC %.3f, D %.3f.",
+		f.WorstDetector, f.WorstCategory, f.WorstFileAUC, steganalysis.Detectability(f.WorstFileAUC))
+}
+
+func (f formatReport) leaveLineageTable(b *strings.Builder) {
+	if len(f.LeaveLineage) == 0 {
+		return
+	}
+	b.WriteString("\n### Leave-one-lineage\n\nClassifier file scores already computed for this run. A lineage is listed when it has at least two carriers. Rest is every other carrier, and is left blank below two.\n\n| Lineage | Carriers | Within file AUC | D | Rest carriers | Rest file AUC |\n|---|---|---|---|---|---|\n")
+	for _, row := range f.LeaveLineage {
+		rest := "—"
+		if row.RestCarriers >= 2 {
+			rest = fmt.Sprintf("%.3f", row.RestFileAUC)
+		}
+		fmt.Fprintf(b, "| %s | %d | %.3f | %.3f | %d | %s |\n",
+			row.Lineage, row.Carriers, row.FileAUC, row.Detectability, row.RestCarriers, rest)
+	}
 }
 
 // scalingTable shows file AUC by how much audio each carrier contributes. A
@@ -628,6 +714,9 @@ func (f formatReport) markdown(b *strings.Builder, base *formatReport) {
 
 	b.WriteString("\n### Can a detector tell?\n\nStego copy against the clean ffmpeg copy (for Ogg Vorbis, ffmpeg at the quality level Mist chose, so only the embedding differs).\n\n")
 	detectorTable(b, f.Detectors, base)
+	f.recordingNote(b)
+	f.powerNote(b)
+	f.worstNote(b)
 	dl, dt := f.detection()
 	fmt.Fprintf(b, "\n\n**Verdict:** %s %s.\n", dl.mark(), dt)
 	b.WriteString("\n### The embedding alone\n\nStego copy against Mist's own re-encode, so only the embedded changes differ.\n\n")
@@ -635,6 +724,7 @@ func (f formatReport) markdown(b *strings.Builder, base *formatReport) {
 	b.WriteString("\n")
 	f.scalingTable(b)
 	f.categoryTable(b)
+	f.leaveLineageTable(b)
 	f.pooledTable(b)
 	f.cnnTable(b)
 
@@ -687,11 +777,16 @@ detector is right, just with its sign flipped. Ogg Vorbis is scored on the resid
 formats on the decoded samples.
 
 Each carrier is cut into chunks of 65,536 values and every chunk is scored: that is the **chunk AUC**. The
-**file AUC** averages each carrier's chunk scores into one score per file, which is what a warden holding whole
-files would use; a bias too slight to show in one chunk can add up over a file. The **95% intervals** are
-bootstrapped by carrier: each round redraws whole carriers, with all their chunks, because chunks of one track are
-not independent. Their width reflects how many carriers there are, not how many chunks. The verdict is the worse
-of the chunk and file verdicts.
+**file AUC** averages each recording's chunk scores into one score per file. Chapters of one session stay
+separate files and share a lineage. The **95% file interval** redraws lineages first and then the recordings
+inside a drawn lineage. The chunk interval redraws whole lineages too, never single chunks. A recording-cluster
+interval is printed beside a detector only when its width differs from the lineage interval by more than 0.01.
+With one recording per lineage the two intervals match. Their width follows the number of lineages, not the
+number of chunks. The verdict is the worse of the chunk and file verdicts.
+
+**D** is 0.5 + |AUC − 0.5|. A detector that is perfectly wrong, AUC 0, has the same D as a detector that is
+perfectly right. The file interval and the verdict already treat an interval that sits entirely below 0.5 as
+detection; D puts that on one scale.
 
 The **detector-implied benchmark KL lower bound** applies Pinsker's inequality to the file AUC:
 |AUC − ½| is at most the total variation between the benchmark clean and stego populations, so
@@ -699,20 +794,33 @@ KL ≥ 2(AUC − ½)² nats. This is only weak attack evidence for this detector
 or upper bound for Cachin's ε; a detector at chance shows that this detector found no gap, not that KL is small.
 
 Chi-square, SPA and RS look for bits being overwritten, which Mist never does, so they are expected to sit at
-chance; a rise means the embedder has drifted. HCF-COM looks for ±1 changes, which is exactly what Mist does,
-so it is the classical detector that matters.
+chance; a rise means the embedder has drifted. They are exploratory: the report gives each a paired lineage
+label-swap p-value and a Benjamini-Hochberg adjustment across the three. HCF-COM looks for ±1 changes, which
+is exactly what Mist does, so it sits in the confirmatory family with the classifier, the Markov model and the
+key-aware warden. That family of four is adjusted with Holm. A dash means that row was not part of the
+confirmatory test (scaling, category and embedding-only tables).
 
-The **classifier** is the adversary of record. It is a logistic regression trained on this run's own clean and
-stego chunks, using every detector's score, the share of values at each of -3…3, and how each step between
-adjacent values follows the one before it. It is cross-validated by carrier: every carrier is scored by a model
-trained without it, so it cannot win by memorising a track. Its message-size check trains a second model to
-tell a 64-byte message from a 1-byte one.
+The **classifier** is the adversary of record. It is a logistic regression on this run's own clean and stego
+chunks, using every detector's score, the share of values at each of -3…3, and how each step between adjacent
+values follows the one before it. Outer folds are lineages. An inner grouped search picks the L2 penalty from
+0.001, 0.01 and 0.1, and a further held-out lineage calibrates the score. Fewer than four lineages falls back
+to the fixed-penalty cross-validation. Standardisation is fit on the training rows of that fold. The primary
+operational comparison repeats that whole fit under nine lineage label swaps; scaling and category rows do not.
+Nine refits make the smallest attainable p-value 0.1, so that row cannot by itself clear 0.05.
+Its message-size check trains a second model to tell a 64-byte message from a 1-byte one.
 
 **Markov** is the same kind of model, trained the same way, on one richer feature set only: how the second
 difference between samples, the waveform's curvature, changes from one sample to the next, with each value
 clipped to -3…3. That curvature is near zero wherever the audio is smooth, so ±1 changes stand out in it more
 than in the values or their steps. These are the rich-model features of audio steganalysis; a detector that
 learns its own features, a CNN trained on exported chunks, is the next step beyond them and is not run here.
+When it is run, its folds follow lineage as well.
+
+**Power** asks how many independent lineages this run's classifier dispersion would need before a shift to
+D = 0.55 pushed the lineage interval off 0.5 in 90% of simulations. It is not a guarantee about a future corpus.
+**Worst cell** is the highest D among category rows, or among the aggregate detectors when the corpus has one
+category. **Leave-one-lineage** restricts the classifier's existing file scores to each lineage that has two or
+more carriers, and to the carriers that remain. It does not retrain.
 
 **Message size** compares a 64-byte message with a 1-byte one. Mist changes the same amount of audio whatever
 the message, so this should read 0.5: anything else means the message length shows.
