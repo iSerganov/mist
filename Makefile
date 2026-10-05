@@ -25,12 +25,20 @@ test:
 test-quiet:
 	go test -race -count=1 ./...
 
-# make harness [CORPUS=dir] [FORMATS=ogg,flac|all] [BASELINE=harness-out/report.json] [JOBS=4]
+# make harness [CORPUS=dir] [FORMATS=ogg,flac|all] [BASELINE=harness-out/report.json] [JOBS=4] [MAX_SECONDS=300] [MERGE=a/report.json,b/report.json]
 # Detectability and quality report for local runs; writes $(HARNESS_OUT)/report.{md,json}.
 harness:
 	MIST_CORPUS="$(CORPUS)" MIST_HARNESS_FORMATS="$(FORMATS)" \
-		MIST_HARNESS_BASELINE="$(BASELINE)" MIST_HARNESS_OUT="$(HARNESS_OUT)" MIST_HARNESS_JOBS="$(JOBS)" \
+		MIST_HARNESS_BASELINE="$(BASELINE)" MIST_HARNESS_OUT="$(HARNESS_OUT)" MIST_HARNESS_JOBS="$(JOBS)" MIST_HARNESS_MAX_SECONDS="$(MAX_SECONDS)" MIST_HARNESS_MERGE="$(MERGE)" \
 		go test -tags harness -run TestHarnessSuite -count=1 -timeout 0 -v .
+
+# make cnn-warden [CORPUS=dir] [FORMATS=ogg,flac|all]
+# Harness run with the export on, a CNN warden trained on it (tools/cnn_warden),
+# then the harness again so the report shows the CNN's result.
+cnn-warden:
+	MIST_HARNESS_EXPORT="$(HARNESS_OUT)/export" $(MAKE) harness
+	python3 tools/cnn_warden/train.py "$(HARNESS_OUT)/export" --out "$(HARNESS_OUT)/cnn.json"
+	$(MAKE) harness
 
 lint:
 	golangci-lint run --timeout=5m
@@ -83,4 +91,4 @@ keys:
 clean:
 	rm -rf bin
 
-.PHONY: test test-quiet harness lint build embed catch formats keys clean
+.PHONY: test test-quiet harness cnn-warden lint build embed catch formats keys clean

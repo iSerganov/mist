@@ -19,6 +19,7 @@
 #include <libavutil/common.h>
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
+#include <libavutil/intreadwrite.h>
 #include <libavutil/mem.h>
 #include <libavutil/samplefmt.h>
 #include <libswresample/swresample.h>
@@ -138,6 +139,18 @@ static int copy_packet(const AVPacket *src, mist_av_packet *dst)
 	dst->pts = src->pts;
 	dst->dts = src->dts;
 	dst->duration = src->duration;
+	/*
+	 * The demuxer marks the encoder delay and padding of MP3, the pre-skip
+	 * of Opus and the granule trim of Ogg here, and libavcodec drops those
+	 * samples when the side data reaches it. Without it a carrier decodes
+	 * longer than the ffmpeg command line decodes it.
+	 */
+	size_t skip_size = 0;
+	const uint8_t *skip = av_packet_get_side_data(src, AV_PKT_DATA_SKIP_SAMPLES, &skip_size);
+	if (skip != NULL && skip_size >= 8) {
+		dst->skip_start = AV_RL32(skip);
+		dst->skip_end = AV_RL32(skip + 4);
+	}
 	return 0;
 }
 
@@ -825,6 +838,17 @@ int mist_av_decoder_send(mist_av_decoder *dec, const mist_av_packet *pkt)
 	avpkt->dts = pkt->dts;
 	avpkt->duration = pkt->duration;
 	avpkt->flags = pkt->flags;
+	if (pkt->skip_start != 0 || pkt->skip_end != 0) {
+		uint8_t *skip = av_packet_new_side_data(avpkt, AV_PKT_DATA_SKIP_SAMPLES, 10);
+		if (skip == NULL) {
+			av_packet_free(&avpkt);
+			return MIST_AV_ERR;
+		}
+		AV_WL32(skip, pkt->skip_start);
+		AV_WL32(skip + 4, pkt->skip_end);
+		skip[8] = 0;
+		skip[9] = 0;
+	}
 	int err = avcodec_send_packet(dec->ctx, avpkt);
 	av_packet_free(&avpkt);
 	return map_ret(err);

@@ -5,7 +5,9 @@ package mist
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -29,6 +31,10 @@ type formatReport struct {
 	Skipped        []skippedCarrier `json:"skipped,omitempty"`
 	Detectors      []detectorResult `json:"detectors,omitempty"`
 	Embedding      []detectorResult `json:"embedding_detectors,omitempty"`
+	Scaling        []scalingRow     `json:"scaling,omitempty"`
+	Categories     []categoryRow    `json:"categories,omitempty"`
+	Pooled         []pooledRow      `json:"pooled,omitempty"`
+	CNN            *cnnResult       `json:"cnn,omitempty"`
 	Traces         []carrierTrace   `json:"traces,omitempty"`
 	Transcode      stat             `json:"transcode_sdr"`
 	Stego          stat             `json:"stego_sdr"`
@@ -36,6 +42,74 @@ type formatReport struct {
 	Added          stat             `json:"added_sdr"`
 	PerceptualDrop *stat            `json:"perceptual_drop,omitempty"`
 	Carriers       []carrierResult  `json:"carriers,omitempty"`
+}
+
+// scalingRow is every detector's result on the first Chunks chunks of each
+// carrier.
+type scalingRow struct {
+	Chunks    int              `json:"chunks"`
+	Detectors []detectorResult `json:"detectors"`
+}
+
+// cnnResult is the external CNN warden's score for a format, read from the
+// cnn.json that tools/cnn_warden writes.
+type cnnResult struct {
+	Files  int     `json:"files"`
+	AUC    float64 `json:"auc"`
+	Lo     float64 `json:"lo"`
+	Hi     float64 `json:"hi"`
+	Epochs int     `json:"epochs"`
+}
+
+// attachCNN adds the CNN warden's results from dir/cnn.json, if the file
+// exists. The export directory names a format with "-" where the format
+// has "/".
+func (r *harnessReport) attachCNN(dir string) error {
+	raw, err := os.ReadFile(filepath.Join(dir, "cnn.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var byFormat map[string]cnnResult
+	if err := json.Unmarshal(raw, &byFormat); err != nil {
+		return fmt.Errorf("cnn.json: %w", err)
+	}
+	for i, f := range r.Formats {
+		if c, ok := byFormat[strings.ReplaceAll(f.Format, "/", "-")]; ok {
+			r.Formats[i].CNN = &c
+		}
+	}
+	return nil
+}
+
+func (f formatReport) cnnTable(b *strings.Builder) {
+	if f.CNN == nil {
+		return
+	}
+	elo, ehi := detectorResult{FileLo: f.CNN.Lo, FileHi: f.CNN.Hi}.epsilonRange()
+	fmt.Fprintf(b, "\n### A learned warden\n\nA small CNN trained on the first 16 chunks of each carrier, five folds split by carrier, one score per file (`tools/cnn_warden`).\n\n"+
+		"| Detector | Carriers | File AUC (95%%) | ε ≥ (nats, 95%%) |\n|---|---|---|---|\n| cnn | %d | %.3f (%.3f–%.3f) | %.3f (%.3f–%.3f) |\n",
+		f.CNN.Files, f.CNN.AUC, f.CNN.Lo, f.CNN.Hi, epsilon(f.CNN.AUC), elo, ehi)
+}
+
+// pooledRow is each detector's AUC when the warden pools Files files.
+type pooledRow struct {
+	Files     int            `json:"files"`
+	Detectors []pooledResult `json:"detectors"`
+}
+
+type pooledResult struct {
+	Name string  `json:"name"`
+	AUC  float64 `json:"auc"`
+}
+
+// categoryRow is every detector's result on one corpus category.
+type categoryRow struct {
+	Name      string           `json:"name"`
+	Carriers  int              `json:"carriers"`
+	Detectors []detectorResult `json:"detectors"`
 }
 
 // carrierResult is one carrier's quality numbers, so a track that behaves
@@ -116,12 +190,40 @@ func (n num) format(unit string) string {
 	return fmt.Sprintf("%.2f%s", float64(n), unit)
 }
 
+// summarize takes the mean and worst of the finite values. A bit-exact
+// re-encode has an infinite SDR, which says nothing about cost and would
+// turn every aggregate that includes it into infinity or NaN.
 func summarize(v []float64, worst func([]float64) float64) stat {
-	var sum float64
+	var finite []float64
 	for _, x := range v {
+		if !math.IsInf(x, 0) && !math.IsNaN(x) {
+			finite = append(finite, x)
+		}
+	}
+	if len(finite) == 0 {
+		return stat{Mean: num(math.NaN()), Worst: num(math.NaN())}
+	}
+	var sum float64
+	for _, x := range finite {
 		sum += x
 	}
-	return stat{Mean: num(sum / float64(len(v))), Worst: num(worst(v))}
+	return stat{Mean: num(sum / float64(len(finite))), Worst: num(worst(finite))}
+}
+
+// refreshStats recomputes the quality aggregates from the per-carrier
+// numbers, for a report read back from JSON.
+func (f *formatReport) refreshStats() {
+	pick := func(get func(carrierResult) num) []float64 {
+		var out []float64
+		for _, c := range f.Carriers {
+			out = append(out, float64(get(c)))
+		}
+		return out
+	}
+	f.Transcode = summarize(pick(func(c carrierResult) num { return c.Transcode }), minOf)
+	f.Stego = summarize(pick(func(c carrierResult) num { return c.Stego }), minOf)
+	f.Gap = summarize(pick(func(c carrierResult) num { return c.Gap }), maxOf)
+	f.Added = summarize(pick(func(c carrierResult) num { return c.Added }), minOf)
 }
 
 func minOf(v []float64) float64 { return slices.Min(v) }
@@ -142,6 +244,9 @@ func readReport(path string) (*harnessReport, error) {
 
 func (r harnessReport) write(dir string, baseline *harnessReport) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := r.attachCNN(dir); err != nil {
 		return "", err
 	}
 	js, err := json.MarshalIndent(r, "", "  ")
@@ -183,6 +288,7 @@ var detectorTargets = map[string]string{
 	"hcf-com":    "±1 changes, which is what Mist does",
 	"classifier": "anything it can learn from Mist's own output",
 	"markov":     "how the waveform's curvature changes from sample to sample",
+	"key-aware":  "the ephemeral key in the first frame's envelope, read with the public key alone",
 }
 
 func (f formatReport) fingerprint() (level, string) {
@@ -259,8 +365,8 @@ func (f formatReport) detection() (level, string) {
 func (f formatReport) quality() (level, string) {
 	gap := float64(f.Gap.Mean)
 	switch {
-	case float64(f.Stego.Worst) >= inaudibleSDR:
-		return pass, fmt.Sprintf("inaudible: the added error is at least %s below the music", f.Stego.Worst.format(" dB"))
+	case float64(f.Added.Worst) >= inaudibleSDR:
+		return pass, fmt.Sprintf("inaudible: the added error is at least %s below the music", f.Added.Worst.format(" dB"))
 	case gap <= gapTarget:
 		return pass, fmt.Sprintf("Mist's own error sits %s below the music; embedding costs %s, within the %.1f dB target",
 			f.Added.Mean.format(" dB"), f.Gap.Mean.format(" dB"), gapTarget)
@@ -332,6 +438,80 @@ func detectorTable(b *strings.Builder, ds []detectorResult, base *formatReport) 
 	}
 }
 
+// pooledTable shows AUC by how many files the warden pools. A detector whose
+// AUC climbs from left to right gains from collecting files, which the
+// square-root law predicts at a fixed embedding rate.
+func (f formatReport) pooledTable(b *strings.Builder) {
+	if len(f.Pooled) == 0 {
+		return
+	}
+	b.WriteString("\n### Does detection grow with the number of files?\n\nAUC when the warden averages a detector's score over k files drawn at random from the corpus, stego against clean. Draws overlap, so there is no interval.\n\n| Detector |")
+	rule := "|---|"
+	for _, r := range f.Pooled {
+		fmt.Fprintf(b, " %d file(s) |", r.Files)
+		rule += "---|"
+	}
+	b.WriteString("\n" + rule)
+	for k, d := range f.Pooled[0].Detectors {
+		fmt.Fprintf(b, "\n| %s |", d.Name)
+		for _, r := range f.Pooled {
+			fmt.Fprintf(b, " %.3f |", r.Detectors[k].AUC)
+		}
+	}
+	b.WriteString("\n")
+}
+
+// categoryTable shows file AUC per corpus category. A category with few
+// carriers has a wide interval, so the count sits in the header.
+func (f formatReport) categoryTable(b *strings.Builder) {
+	if len(f.Categories) == 0 {
+		return
+	}
+	b.WriteString("\n### By kind of audio\n\nFile AUC (95%) against the clean ffmpeg copy, per corpus folder. The count is carriers; few carriers means a wide interval.\n\n| Detector |")
+	rule := "|---|"
+	for _, c := range f.Categories {
+		fmt.Fprintf(b, " %s (%d) |", c.Name, c.Carriers)
+		rule += "---|"
+	}
+	b.WriteString("\n" + rule)
+	for k, d := range f.Categories[0].Detectors {
+		fmt.Fprintf(b, "\n| %s |", d.Name)
+		for _, c := range f.Categories {
+			r := c.Detectors[k]
+			fmt.Fprintf(b, " %.3f (%.3f–%.3f) |", r.FileAUC, r.FileLo, r.FileHi)
+		}
+	}
+	b.WriteString("\n")
+}
+
+// scalingTable shows file AUC by how much audio each carrier contributes. A
+// detector whose AUC climbs from left to right is gaining from length, as the
+// square-root law predicts at a fixed embedding rate.
+func (f formatReport) scalingTable(b *strings.Builder) {
+	if len(f.Scaling) == 0 {
+		return
+	}
+	b.WriteString("\n### Does detection grow with audio?\n\nFile AUC (95%) against the clean ffmpeg copy on the first chunks of each carrier. A chunk is 65,536 values, about 0.74 s of 44.1 kHz stereo.\n\n| Detector |")
+	rule := "|---|"
+	for _, r := range f.Scaling {
+		fmt.Fprintf(b, " First %d chunks |", r.Chunks)
+		rule += "---|"
+	}
+	b.WriteString(" Whole file |\n" + rule + "---|")
+	for k, whole := range f.Detectors {
+		if k >= len(f.Scaling[0].Detectors) {
+			break
+		}
+		fmt.Fprintf(b, "\n| %s |", whole.Name)
+		for _, r := range f.Scaling {
+			d := r.Detectors[k]
+			fmt.Fprintf(b, " %.3f (%.3f–%.3f) |", d.FileAUC, d.FileLo, d.FileHi)
+		}
+		fmt.Fprintf(b, " %.3f (%.3f–%.3f) |", whole.FileAUC, whole.FileLo, whole.FileHi)
+	}
+	b.WriteString("\n")
+}
+
 func (f formatReport) markdown(b *strings.Builder, base *formatReport) {
 	fmt.Fprintf(b, "\n## %s\n\n", f.Format)
 	if f.Error != "" {
@@ -350,6 +530,7 @@ func (f formatReport) markdown(b *strings.Builder, base *formatReport) {
 	}
 	fl, ft := f.fingerprint()
 	b.WriteString("\n### Does it look like a plain ffmpeg encode?\n\n" +
+		"The ffmpeg column is ffmpeg at its own defaults. Ogg Vorbis keeps the source's quality, so it differs from ffmpeg's default q3 whenever the carrier maps to another level.\n\n" +
 		"| Carrier | Source samples | Samples (ffmpeg / Mist) | Zero tail (ffmpeg / Mist) | Sample format (ffmpeg / Mist) | Nominal kbps (ffmpeg / Mist) | Differs in |\n" +
 		"|---|---|---|---|---|---|---|")
 	for _, t := range f.Traces {
@@ -360,13 +541,17 @@ func (f formatReport) markdown(b *strings.Builder, base *formatReport) {
 	}
 	fmt.Fprintf(b, "\n\n**Verdict:** %s %s.\n", fl.mark(), ft)
 
-	b.WriteString("\n### Can a detector tell?\n\nStego copy against the clean ffmpeg copy.\n\n")
+	b.WriteString("\n### Can a detector tell?\n\nStego copy against the clean ffmpeg copy (for Ogg Vorbis, ffmpeg at the quality level Mist chose, so only the embedding differs).\n\n")
 	detectorTable(b, f.Detectors, base)
 	dl, dt := f.detection()
 	fmt.Fprintf(b, "\n\n**Verdict:** %s %s.\n", dl.mark(), dt)
 	b.WriteString("\n### The embedding alone\n\nStego copy against Mist's own re-encode, so only the embedded changes differ.\n\n")
 	detectorTable(b, f.Embedding, nil)
 	b.WriteString("\n")
+	f.scalingTable(b)
+	f.categoryTable(b)
+	f.pooledTable(b)
+	f.cnnTable(b)
 
 	b.WriteString("\n### How much does it cost in sound?\n\n| Measure | Mean | Worst | What it means |\n|---|---|---|---|\n")
 	fmt.Fprintf(b, "| Plain re-encode SDR | %s | %s | Loss of Mist's own re-encode, with nothing embedded |\n",

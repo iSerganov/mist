@@ -537,6 +537,8 @@ func cPacket(p Packet) (C.mist_av_packet, func()) {
 	cp.pts = C.int64_t(p.PTS)
 	cp.dts = C.int64_t(p.DTS)
 	cp.duration = C.int64_t(p.Duration)
+	cp.skip_start = C.uint32_t(p.SkipStart)
+	cp.skip_end = C.uint32_t(p.SkipEnd)
 	if len(p.Data) == 0 {
 		return cp, func() {}
 	}
@@ -556,6 +558,8 @@ func goPacket(p C.mist_av_packet) Packet {
 		PTS:         int64(p.pts),
 		DTS:         int64(p.dts),
 		Duration:    int64(p.duration),
+		SkipStart:   uint32(p.skip_start),
+		SkipEnd:     uint32(p.skip_end),
 	}
 }
 

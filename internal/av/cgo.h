@@ -102,6 +102,10 @@ typedef struct mist_av_packet {
 	int64_t  pts;
 	int64_t  dts;
 	int64_t  duration;
+	/* AV_PKT_DATA_SKIP_SAMPLES: samples a decoder drops from the start and
+	 * the end of what this packet decodes to. */
+	uint32_t skip_start;
+	uint32_t skip_end;
 } mist_av_packet;
 
 typedef struct mist_av_frame {

@@ -128,17 +128,20 @@ func (s *CLISuite) TestEmbedAcceptsAnyDecodableInput() {
 	tests := []struct {
 		title string
 		name  string
+		extra []string
 	}{
-		{"flac decodes to integer samples", "in.flac"},
-		{"wav is packed s16", "in.wav"},
-		{"opus", "in.opus"},
-		{"mp3", "in.mp3"},
+		{"flac decodes to integer samples", "in.flac", nil},
+		{"wav is packed s16", "in.wav", nil},
+		{"opus", "in.opus", nil},
+		// A 128 kbps MP3 re-encodes at a Vorbis level too low to hold an envelope in 18 s of noise.
+		{"mp3", "in.mp3", []string{"-b:a", "320k"}},
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
 			in := filepath.Join(dir, tc.name)
 			cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-				"-f", "lavfi", "-i", "anoisesrc=d=9:c=pink:a=0.5", "-ac", "2", in)
+				"-f", "lavfi", "-i", "anoisesrc=d=18:c=pink:a=0.5", "-ac", "2")
+			cmd.Args = append(cmd.Args, append(tc.extra, in)...)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				s.T().Skipf("ffmpeg cannot write %s: %s", tc.name, out)
 			}
@@ -307,7 +310,7 @@ func (s *CLISuite) TestRejectsMissingFlags() {
 func (s *CLISuite) TestEmbedThenCatch() {
 	s.requireLibav()
 	dir := s.T().TempDir()
-	in := s.carrier(dir, 9*time.Second)
+	in := s.carrier(dir, 18*time.Second)
 	stego := filepath.Join(dir, "out.ogg")
 
 	s.Require().NoError(s.run("embed", "--input", in, "--data", "the eagle lands at dawn", "--output", stego))

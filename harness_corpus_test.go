@@ -3,24 +3,32 @@
 package mist
 
 import (
+	"bytes"
+	"fmt"
 	"io/fs"
 	"math"
 	"math/rand/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 const harnessSeconds = 16
 
 type harnessCarrier struct {
-	name string
-	load func() ([]byte, error)
+	name     string
+	category string
+	load     func() ([]byte, error)
 }
+
+// rootCategory names the carriers that sit directly in the corpus directory.
+const rootCategory = "(top level)"
 
 type signal func(t float64, rng *rand.Rand) float64
 
-func loadCarriers(dir string) ([]harnessCarrier, error) {
+func loadCarriers(dir string, maxSeconds int) ([]harnessCarrier, error) {
 	if dir == "" {
 		return syntheticCarriers(), nil
 	}
@@ -33,10 +41,35 @@ func loadCarriers(dir string) ([]harnessCarrier, error) {
 		if err != nil {
 			return err
 		}
-		out = append(out, harnessCarrier{name: rel, load: func() ([]byte, error) { return os.ReadFile(path) }})
+		category := rootCategory
+		if dir, _, nested := strings.Cut(filepath.ToSlash(rel), "/"); nested {
+			category = dir
+		}
+		out = append(out, harnessCarrier{name: rel, category: category, load: func() ([]byte, error) { return readCarrier(path, maxSeconds) }})
 		return nil
 	})
 	return out, err
+}
+
+// readCarrier reads path whole, or its first maxSeconds seconds when that is
+// set, cut by ffmpeg without re-encoding so the carrier keeps its codec. It
+// keeps hour-long tracks from filling memory, since every carrier is held
+// decoded several times over.
+func readCarrier(path string, maxSeconds int) ([]byte, error) {
+	if maxSeconds <= 0 {
+		return os.ReadFile(path)
+	}
+	dir, err := os.MkdirTemp("", "mist-cut-*")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	out := filepath.Join(dir, "cut"+filepath.Ext(path))
+	args := []string{"-nostdin", "-loglevel", "error", "-i", path, "-map", "0:a:0", "-t", strconv.Itoa(maxSeconds), "-c", "copy", out}
+	if msg, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ffmpeg cut: %v: %s", err, bytes.TrimSpace(msg))
+	}
+	return os.ReadFile(out)
 }
 
 func syntheticCarriers() []harnessCarrier {

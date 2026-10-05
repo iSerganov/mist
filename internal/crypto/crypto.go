@@ -113,7 +113,7 @@ func Seal(plaintext, recipientPub []byte) (*wire.Envelope, error) {
 // SealDerived is Seal plus the HKDF split so Embed can seed positions
 // from the same ephemeral that Listen will re-derive from the envelope.
 func SealDerived(plaintext, recipientPub []byte) (*wire.Envelope, Derived, error) {
-	ephPub, ephPriv, err := GenerateX25519()
+	ephRep, ephPriv, err := generateEphemeral()
 	if err != nil {
 		return nil, Derived{}, err
 	}
@@ -133,9 +133,9 @@ func SealDerived(plaintext, recipientPub []byte) (*wire.Envelope, Derived, error
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		return nil, Derived{}, fmt.Errorf("crypto: nonce: %w", err)
 	}
-	ct := aead.Seal(nil, nonce[:], plaintext, ephPub)
+	ct := aead.Seal(nil, nonce[:], plaintext, ephRep)
 	env := &wire.Envelope{Body: ct, MaskedLen: maskLength(keys.Length, lengthBytes(uint32(len(ct))))}
-	copy(env.EphemeralPub[:], ephPub)
+	copy(env.EphemeralPub[:], ephRep)
 	env.Nonce = nonce
 	return env, keys, nil
 }
@@ -171,7 +171,7 @@ func Open(env *wire.Envelope, recipientPriv []byte) ([]byte, error) {
 	if env == nil {
 		return nil, ErrOpen
 	}
-	shared, err := SharedSecret(recipientPriv, env.EphemeralPub[:])
+	shared, err := SharedSecret(recipientPriv, publicFromRepresentative(env.EphemeralPub[:]))
 	if err != nil {
 		return nil, ErrOpen
 	}

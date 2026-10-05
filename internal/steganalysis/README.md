@@ -245,6 +245,20 @@ tree, on chunks the harness exports.
 
 ---
 
+## Public-key structure — what a warden with the recipient key can read
+
+The other detectors look at audio. This one looks at 32 bytes. A warden who
+knows the recipient's public key can derive each frame's position seed, recover
+the frame's bits exactly as the catcher does, and read the envelope's leading
+ephemeral key without decrypting anything. `HonestX25519` tests those bytes for
+what an honest X25519 key always has: the top bit clear, and a point in the
+prime-order subgroup, so ℓ times it is infinity. A uniformly random string
+passes both about 1 time in 32. Sent in the clear, the key made Mist detectable
+with AUC 1.000; Mist now sends an Elligator 2 representative, which is uniform,
+and the same test scores 0.500. The harness's `key-aware` row runs it.
+
+---
+
 ## AUC and its interval
 
 **AUC** is the probability that a randomly chosen stego score exceeds a randomly

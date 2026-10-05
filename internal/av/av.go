@@ -109,6 +109,11 @@ type Packet struct {
 	PTS         int64
 	DTS         int64
 	Duration    int64
+	// SkipStart and SkipEnd are the samples a decoder drops from the start
+	// and the end of this packet's output: MP3 encoder delay and padding,
+	// Opus pre-skip, the part of an Ogg page past its granule position.
+	SkipStart uint32
+	SkipEnd   uint32
 }
 
 // Frame is a decoded AVFrame of PCM samples.

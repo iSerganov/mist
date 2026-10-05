@@ -19,11 +19,9 @@ import (
 // every encode, whether or not a real payload is present. It is a protocol
 // constant: changing it is a breaking change for Listen.
 //
-// Every changed value is damage, so this is kept just high enough to be
-// useful: roughly 130 bytes per 8-second Vorbis frame. At this rate the
-// trellis code changes about 0.3% of the eligible values, 0.14 changes
-// per bit, where writing each bit into a value of its own changed 1%.
-const Density = 0.02
+// Detectability grows with it, and with the amount of audio a warden pools:
+// on 84 carriers Ogg Vorbis scored file AUC 0.58 at 2% and 0.52 at 1%.
+const Density = 0.01
 
 // maxFlipCost bounds how far one flip may move a residue's spectral
 // vector, as a squared distance in dequantized residue units. A flip past

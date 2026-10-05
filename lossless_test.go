@@ -47,7 +47,9 @@ func (s *LosslessSuite) TestRoundTripPerFormat() {
 		{"tta", "tta", ""},
 		{"aiff", "aiff", ""},
 		{"caf", "caf", ""},
-		{"alac by codec", "caf", "alac"},
+		// Not caf: its muxer records the padding of a full last frame, so even
+		// ffmpeg's own ALAC in a caf decodes 1912 samples short here.
+		{"alac by codec", "m4a", "alac"},
 	}
 	carriers := map[string][]byte{
 		"whole frames":  s.pcmCarrier(20 * time.Second),

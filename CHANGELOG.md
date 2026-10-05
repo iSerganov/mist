@@ -17,12 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this:
   - Payload bits are carried by a syndrome-trellis code over the eligible
     values instead of one bit per keyed position with LSB matching. The
-    rate stays at 2%, so capacity is unchanged, but about 0.14 values
-    change per bit instead of 0.5.
+    rate is 1%, half of 0.2's 2%, so capacity halves, but about 0.14 values
+    change per bit instead of 0.5. Detectability grows with the rate: on 84
+    carriers Ogg Vorbis scored file AUC 0.58 at 2% and 0.52 at 1%, and
+    pooling files no longer raised it.
   - Positions are ordered by a ChaCha20 keystream instead of
     HMAC-SHA256 counters.
   - Lossless output leaves digital silence and the end padding untouched,
     so those samples are no longer part of the carrier.
+  - The envelope carries an Elligator 2 representative of the ephemeral
+    X25519 key instead of the key. A bare key has its top bit clear and lies
+    in the prime-order subgroup, and the position seed comes from the public
+    key, so a warden holding only that key could read the first frame's
+    bits and test those 32 bytes: the harness's new key-aware warden scored
+    AUC 1.000 on every carrier. It now scores 0.500.
 - Ogg Vorbis embedding now prices each change by how far it moves the
   residue's spectral vector and avoids the costly ones. On 13 dense music
   tracks its cost beyond a plain re-encode drops from 1.4 dB of SDR to
@@ -71,9 +79,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rich-model features of audio steganalysis. ±1 changes stand out more in
   smooth audio's curvature than in the values the first classifier sees.
   `steganalysis.Markov` computes the features.
+- A key-aware warden in the harness, `key-aware`, for the adversary the
+  design assumes: one who knows the recipient's public key, recovers the first
+  frame's bits and tests the envelope's leading 32 bytes for the structure of
+  an X25519 public key (`steganalysis.HonestX25519`).
+- The harness reports detection per corpus folder, against the number of
+  chunks scored and against the number of files a warden pools, and runs
+  an external CNN warden (`make cnn-warden`, `tools/cnn_warden`) whose
+  result appears in the report.
+- For Ogg Vorbis the harness runs the detectors against ffmpeg encoded at
+  the quality level Mist chose, not at ffmpeg's default q3. Against the
+  default, a carrier that maps to another level differs in nominal bitrate
+  and length, and every detector that read those scored AUC 1.000; at the
+  same level the embedding alone leaves a faint signal (file AUC 0.43 to
+  0.54 on 13 tracks). The table of plain properties still compares with
+  ffmpeg's default, so that difference stays visible.
 
 ### Fixed
 
+- A carrier decoded from MP3, AAC, Opus or Ogg Vorbis keeps no more of its
+  encoder delay, padding or pre-skip than ffmpeg keeps. Mist used to decode
+  the whole stream, so on 41 of 84 carriers its output ran a few hundred
+  samples longer than a plain ffmpeg encode; the demuxer's skip-samples
+  side data now reaches the decoder, which trims as the ffmpeg command line
+  does.
 - The harness's 95% intervals now contain the AUC they are built around.
   The carrier bootstrap counted a carrier drawn twice against its own clean
   copy four times over, so on paired data the whole interval drifted off

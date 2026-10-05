@@ -35,6 +35,8 @@ type Payload struct {
 // while an observer holding only the (public) recipient key sees noise.
 // Body holds that ciphertext followed by constant-density filler.
 type Envelope struct {
+	// EphemeralPub is the Elligator 2 representative of the ephemeral X25519
+	// key, not the key: a key sent in the clear is a presence test.
 	EphemeralPub [EphemeralPubSize]byte
 	MaskedLen    [LengthSize]byte
 	Nonce        [NonceSize]byte

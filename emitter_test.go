@@ -68,7 +68,7 @@ func (s *EmitterSuite) TestApplyRecoverSamePackets() {
 	defer func() { _ = enc.Close() }()
 	info := enc.(*av.Encoder).Info()
 	s.Require().NoError(c.Load(info.Extradata))
-	pcm := testSine(44100, 2, 8192, 440)
+	pcm := testSine(44100, 2, 16384, 440)
 	pkts, err := enc.Encode(pcm)
 	s.Require().NoError(err)
 	fl, err := enc.Flush()
@@ -85,7 +85,7 @@ func (s *EmitterSuite) TestApplyRecoverSamePackets() {
 		nRes += len(r)
 		nElig += len(r)
 	}
-	nbits := int(float64(nElig) * 0.10)
+	nbits := int(float64(nElig) * stego.Density)
 	s.T().Logf("packets=%d residues=%d eligible=%d nbits=%d (%d bytes)", len(pkts), nRes, nElig, nbits, nbits/8)
 	s.T().Logf("capacity bytes=%d first_val=%d", nbits/8, func() int32 {
 		for _, pkt := range pkts {
@@ -388,14 +388,24 @@ func (s *EmitterSuite) TestEmbedVorbisFromRawPCMWhateverTheShape() {
 	tests := []struct {
 		title    string
 		rate, ch int
+		fits     bool
 	}{
-		{"mono 44.1 kHz WAV", 44100, 1},
-		{"mono 22.05 kHz WAV", 22050, 1},
-		{"stereo 22.05 kHz WAV", 22050, 2},
+		{"mono 44.1 kHz WAV", 44100, 1, true},
+		// Capacity is per 8 s frame, so length does not help: at this rate a
+		// mono 22.05 kHz frame has too few residues for an envelope.
+		{"mono 22.05 kHz WAV", 22050, 1, false},
+		{"stereo 22.05 kHz WAV", 22050, 2, true},
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
-			carrier := wav(tc.rate, tc.ch, tc.rate*20)
+			carrier := wav(tc.rate, tc.ch, tc.rate*40)
+			if !tc.fits {
+				em, err := NewEmitter(pub)
+				s.Require().NoError(err)
+				_, err = em.EmbedReader(context.Background(), bytes.NewReader(carrier), Text("hello mist"))
+				s.ErrorIs(err, ErrNoCapacity)
+				return
+			}
 			raw := s.stego(pub, Text("hello mist"), carrier)
 			got := s.extract(priv, raw)
 			s.Require().NotEmpty(got)
