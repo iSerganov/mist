@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 
@@ -92,13 +93,16 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo
 	if err != nil {
 		return nil, err
 	}
-	enc, pcm, err := openEncoder(e.target, pcm, info)
+	enc, err := openEncoder(e.target, pcm, info)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = enc.Close() }()
 
 	if e.target.Lossless {
+		if err := enc.Snap(pcm.Planes); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+		}
 		if err := e.embedSamples(ctx, pcm, av.SampleScale(enc.Info().SampleFmt), plain); err != nil {
 			return nil, err
 		}
@@ -109,25 +113,88 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo
 	})
 }
 
-func openEncoder(target av.Format, pcm codec.PCM, info av.AudioInfo) (*av.Encoder, codec.PCM, error) {
-	want := target.Info(pcm.SampleRate, pcm.Channels, targetBitrate(target, info.Params(), pcm.Channels))
+// openEncoder opens target for this carrier. A lossless encoder is given
+// no rate at all: it decides its own size.
+func openEncoder(target av.Format, pcm codec.PCM, info av.AudioInfo) (*av.Encoder, error) {
+	want := target.Info(pcm.SampleRate, pcm.Channels, info)
+	if !target.Lossless {
+		return openVorbis(want, info)
+	}
 	enc, err := av.NewEncoder(want)
-	// libvorbis refuses rates outside a window that depends on the sample
-	// rate as well as the channel count, and libav reports only EINVAL, so
-	// the only way to find the edge is to step down until it opens. Any
-	// other failure would fail at every rate.
-	refused := err
-	for errors.Is(err, av.ErrInvalid) && want.Bitrate > floorBitrate {
-		want.Bitrate = max(want.Bitrate/4*3, floorBitrate)
-		enc, err = av.NewEncoder(want)
-	}
 	if err != nil {
-		return nil, pcm, fmt.Errorf("%w: encoder: %v", ErrCarrier, refused)
+		return nil, fmt.Errorf("%w: encoder: %v", ErrCarrier, err)
 	}
-	if target.Lossless {
-		pcm = padToWindow(pcm, enc.Window())
+	return enc, nil
+}
+
+// Vorbis quality levels, as libvorbis and ffmpeg's -q:a number them.
+const (
+	minQuality      = -1
+	maxQuality      = 10
+	losslessQuality = 8
+)
+
+// efficiency is how many kbps of Vorbis match one kbps of a source codec
+// in quality. A codec not listed counts as Vorbis's equal.
+var efficiency = map[string]float64{
+	"mp3":  0.75,
+	"aac":  1.0,
+	"opus": 1.3,
+}
+
+// openVorbis opens libvorbis in VBR mode at the whole quality level whose
+// nominal rate is nearest to what keeps the carrier's quality (the higher
+// one on a tie), so the stream header reads like `ffmpeg -q:a N` rather
+// than an odd ABR target. A lossless source, or one that reports no rate,
+// is written at q8.
+// libvorbis owns the nominal rate of each level for a given sample rate
+// and channel count, so each is opened and asked rather than tabled here.
+func openVorbis(want, src av.AudioInfo) (*av.Encoder, error) {
+	target := float64(src.Bitrate) * efficiencyOf(src.CodecName)
+	keepLevel := src.Bitrate <= 0 || av.Lossless(src.NativeCodecID)
+	var best *av.Encoder
+	bestGap, refused := math.Inf(1), error(nil)
+	for q := minQuality; q <= maxQuality; q++ {
+		want.VBR, want.Quality = true, q
+		enc, err := av.NewEncoder(want)
+		if err != nil {
+			refused = err
+			continue
+		}
+		gap := math.Abs(float64(q - losslessQuality))
+		if !keepLevel {
+			gap = math.Abs(float64(nominalRate(enc)) - target)
+		}
+		if gap <= bestGap {
+			if best != nil {
+				_ = best.Close()
+			}
+			best, bestGap = enc, gap
+			continue
+		}
+		_ = enc.Close()
 	}
-	return enc, pcm, nil
+	if best == nil {
+		return nil, fmt.Errorf("%w: encoder: %v", ErrCarrier, refused)
+	}
+	return best, nil
+}
+
+func efficiencyOf(codecName string) float64 {
+	if f, ok := efficiency[codecName]; ok {
+		return f
+	}
+	return 1
+}
+
+// nominalRate is the bitrate libvorbis wrote into the stream header, 0 if
+// the header does not parse.
+func nominalRate(enc *av.Encoder) int32 {
+	vc := vorbis.New()
+	if vc.Load(enc.Info().Extradata) != nil {
+		return 0
+	}
+	return vc.Setup().BitrateNom
 }
 
 // encodeAndMux runs the carrier through the encoder and writes the result.
@@ -294,36 +361,6 @@ func (e *Emitter) embedGroup(vc *vorbis.Codec, g frame.Group, plainChunk []byte)
 		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
 	return out, nil
-}
-
-// Bitrate bounds for a lossy re-encode, per channel: libvorbis tops out
-// at about 250 kbps a channel (500 stereo), so a mono carrier given the
-// stereo bounds is refused by the encoder.
-const (
-	minBitrate     = 96_000
-	maxBitrate     = 250_000
-	unknownBitrate = 128_000
-	floorBitrate   = 32_000
-)
-
-// targetBitrate picks the encode rate for a carrier of the given params.
-// A lossless encoder decides its own size from the audio, and forcing a
-// rate on it only makes it complain, so it is asked for none.
-//
-// A lossy target is given headroom above the source instead of matching
-// it: Mist always re-encodes, and a second pass at the source's own rate
-// compounds the loss. A lossless source reports its raw PCM rate — 1411
-// kbps for CD audio — which is no target at all, so it is capped.
-func targetBitrate(f av.Format, params codec.Params, channels int) int64 {
-	n := int64(max(channels, 1))
-	switch {
-	case f.Lossless:
-		return 0
-	case params.Bitrate <= 0:
-		return unknownBitrate * n
-	default:
-		return min(max(params.Bitrate*3/2, minBitrate*n), maxBitrate*n)
-	}
 }
 
 // noCapacity reports that no frame had room, the one embed failure that

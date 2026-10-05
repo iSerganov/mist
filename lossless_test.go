@@ -29,10 +29,12 @@ func (s *LosslessSuite) requireFormat(name string) {
 }
 
 // Every lossless codec embeds in PCM samples, so one carrier has to come
-// back out of all of them unchanged. Both carriers matter: the long one
-// puts the message in a whole frame, the short one in the trailing
-// partial frame, where the encoder's own padding is what would break the
-// two sides' agreement about where a sample sits.
+// back out of all of them unchanged, and exactly as long as it went in:
+// padding the tail is a trace an ordinary encode does not leave. Both
+// carriers matter: the long one puts the message in a whole frame, the
+// short one in the trailing partial frame, where any padding would break
+// the two sides' agreement about where a sample sits. The 24-bit carrier
+// lands on a 24-bit grid wherever the encoder keeps that depth.
 func (s *LosslessSuite) TestRoundTripPerFormat() {
 	tests := []struct {
 		title  string
@@ -45,11 +47,14 @@ func (s *LosslessSuite) TestRoundTripPerFormat() {
 		{"tta", "tta", ""},
 		{"aiff", "aiff", ""},
 		{"caf", "caf", ""},
-		{"alac by codec", "caf", "alac"},
+		// Not caf: its muxer records the padding of a full last frame, so even
+		// ffmpeg's own ALAC in a caf decodes 1912 samples short here.
+		{"alac by codec", "m4a", "alac"},
 	}
 	carriers := map[string][]byte{
 		"whole frames":  s.pcmCarrier(20 * time.Second),
 		"partial frame": s.pcmCarrier(2 * time.Second),
+		"24-bit":        wav24(testRate, 2, 20*testRate),
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
@@ -62,12 +67,48 @@ func (s *LosslessSuite) TestRoundTripPerFormat() {
 					out := s.stego(pub, Text("meet me at the pier"), carrier,
 						WithFormat(tc.format), WithCodec(tc.codec))
 					res := s.extract(priv, out)
+					src, _, err := decodeCarrier(bytes.NewReader(carrier))
+					s.Require().NoError(err)
+					got, _, err := decodeCarrier(bytes.NewReader(out))
+					s.Require().NoError(err)
 
+					s.Equal(src.NbSamples, got.NbSamples)
 					s.Require().NotEmpty(res)
 					s.Equal("meet me at the pier", string(res[0].Payload.Data))
 					s.Equal(PayloadText, res[0].Payload.Type)
 				})
 			}
+		})
+	}
+}
+
+// The output keeps the carrier's depth where the encoder can, as a plain
+// ffmpeg encode does, rather than cutting every carrier down to 16 bits.
+func (s *LosslessSuite) TestOutputDepthFollowsTheCarrier() {
+	tests := []struct {
+		title    string
+		carrier  []byte
+		wantFmt  codec.SampleFormat
+		wantBits int
+	}{
+		{"16-bit carrier", wav(testRate, 2, 10*testRate), codec.SampleFmtS16, 16},
+		{"24-bit carrier", wav24(testRate, 2, 10*testRate), codec.SampleFmtS32, 24},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			s.requireFormat("flac")
+			pub, priv, err := GenerateKeyPair()
+			s.Require().NoError(err)
+
+			out := s.stego(pub, Text("deep"), tc.carrier, WithFormat("flac"))
+			_, info, err := decodeCarrier(bytes.NewReader(out))
+			s.Require().NoError(err)
+
+			s.Equal(tc.wantFmt, info.SampleFmt)
+			s.Equal(tc.wantBits, info.Bits)
+			res := s.extract(priv, out)
+			s.Require().NotEmpty(res)
+			s.Equal("deep", string(res[0].Payload.Data))
 		})
 	}
 }

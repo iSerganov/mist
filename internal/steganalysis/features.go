@@ -14,7 +14,7 @@ func Features(v []int32) []float64 {
 		out = append(out, d.Score(v))
 	}
 	out = append(out, centre(v)...)
-	return append(out, transitions(v)...)
+	return append(out, transitions(diff(v))...)
 }
 
 func centre(v []int32) []float64 {
@@ -30,12 +30,14 @@ func centre(v []int32) []float64 {
 	return out
 }
 
-func transitions(v []int32) []float64 {
+// transitions is the probability of each value of d given the one before
+// it, both truncated to ±3. A row that never occurs stays zero.
+func transitions(d []int32) []float64 {
 	const side = 2*spamT + 1
 	counts := make([]float64, side*side)
 	var rows [side]float64
-	for i := 0; i+2 < len(v); i++ {
-		a, b := truncate(v[i+1]-v[i]), truncate(v[i+2]-v[i+1])
+	for i := 0; i+1 < len(d); i++ {
+		a, b := truncate(d[i]), truncate(d[i+1])
 		counts[a*side+b]++
 		rows[a]++
 	}

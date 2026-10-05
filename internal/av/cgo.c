@@ -1,5 +1,5 @@
 /*
- * Real libavformat / libavcodec / libavutil implementation.
+ * Real libavformat / libavcodec / libavutil / libswresample implementation.
  * Custom AVIO uses integer handles owned by Go (see io.go); C never stores
  * a Go pointer. Packet and frame payloads are copied with av_malloc so the
  * Go side can C.GoBytes and then mist_av_*_unref. Codec IDs stay Mist-local.
@@ -7,7 +7,6 @@
 #include "cgo.h"
 
 #include <errno.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,8 +19,12 @@
 #include <libavutil/common.h>
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
+#include <libavutil/intreadwrite.h>
+#include <libavutil/avstring.h>
 #include <libavutil/mem.h>
 #include <libavutil/samplefmt.h>
+#include <libavcodec/version.h>
+#include <libswresample/swresample.h>
 
 extern int     mist_av_go_read(int id, uint8_t *buf, int buf_size);
 extern int     mist_av_go_write(int id, uint8_t *buf, int buf_size);
@@ -55,6 +58,7 @@ struct mist_av_decoder {
 
 struct mist_av_encoder {
 	AVCodecContext *ctx;
+	SwrContext     *swr;
 };
 
 static void set_err(char *errbuf, int errlen, const char *msg)
@@ -137,6 +141,18 @@ static int copy_packet(const AVPacket *src, mist_av_packet *dst)
 	dst->pts = src->pts;
 	dst->dts = src->dts;
 	dst->duration = src->duration;
+	/*
+	 * The demuxer marks the encoder delay and padding of MP3, the pre-skip
+	 * of Opus and the granule trim of Ogg here, and libavcodec drops those
+	 * samples when the side data reaches it. Without it a carrier decodes
+	 * longer than the ffmpeg command line decodes it.
+	 */
+	size_t skip_size = 0;
+	const uint8_t *skip = av_packet_get_side_data(src, AV_PKT_DATA_SKIP_SAMPLES, &skip_size);
+	if (skip != NULL && skip_size >= 8) {
+		dst->skip_start = AV_RL32(skip);
+		dst->skip_end = AV_RL32(skip + 4);
+	}
 	return 0;
 }
 
@@ -332,6 +348,7 @@ static int fill_info_from_par(const AVCodecParameters *par, int64_t duration_us,
 	info->sample_rate = par->sample_rate;
 	info->channels = par->ch_layout.nb_channels;
 	info->sample_fmt = par->format;
+	info->bits = par->bits_per_raw_sample;
 	info->bitrate = par->bit_rate;
 	info->duration_us = duration_us;
 	if (par->extradata_size > 0 && par->extradata != NULL) {
@@ -358,7 +375,9 @@ static int apply_info_to_par(AVCodecParameters *par, const mist_av_audio_info *i
 	 * bits into its header and refuses to be read back without them.
 	 */
 	par->bits_per_coded_sample = av_get_bits_per_sample(par->codec_id);
-	if (info->sample_fmt >= 0) {
+	if (info->bits > 0) {
+		par->bits_per_raw_sample = info->bits;
+	} else if (info->sample_fmt >= 0) {
 		par->bits_per_raw_sample = av_get_bytes_per_sample(info->sample_fmt) * 8;
 	}
 	av_channel_layout_default(&par->ch_layout, info->channels > 0 ? info->channels : 2);
@@ -470,6 +489,12 @@ mist_av_io *mist_av_io_new(int handle, int writable)
 		av_free(io);
 		return NULL;
 	}
+	/*
+	 * A seek callback is not enough. avio_alloc_context leaves seekable
+	 * clear, and the FLAC muxer will not rewrite STREAMINFO unless the
+	 * flag is set. The callback reports the size, so the IO is seekable.
+	 */
+	io->avio->seekable = AVIO_SEEKABLE_NORMAL;
 	return io;
 }
 
@@ -648,6 +673,19 @@ static mist_av_muxer *muxer_alloc(const char *url, const mist_av_audio_info *inf
 		av_free(m);
 		return NULL;
 	}
+	/*
+	 * ffmpeg's CLI writes "Lavc<version> <codec>" into the stream metadata
+	 * (set_encoder_id). Ogg and FLAC copy that into the comment header.
+	 * A raw PCM muxer instead records its own Lavf ident, and putting the
+	 * Lavc string there makes the file unlike `ffmpeg` on WAV.
+	 */
+	const AVCodec *enc = avcodec_find_encoder(st->codecpar->codec_id);
+	if (enc != NULL && enc->name != NULL && strncmp(enc->name, "pcm_", 4) != 0) {
+		char *tag = av_asprintf("%s %s", LIBAVCODEC_IDENT, enc->name);
+		if (tag != NULL) {
+			av_dict_set(&st->metadata, "encoder", tag, AV_DICT_DONT_STRDUP_VAL);
+		}
+	}
 	if (io != NULL) {
 		m->fmt->pb = io->avio;
 		m->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
@@ -821,6 +859,17 @@ int mist_av_decoder_send(mist_av_decoder *dec, const mist_av_packet *pkt)
 	avpkt->dts = pkt->dts;
 	avpkt->duration = pkt->duration;
 	avpkt->flags = pkt->flags;
+	if (pkt->skip_start != 0 || pkt->skip_end != 0) {
+		uint8_t *skip = av_packet_new_side_data(avpkt, AV_PKT_DATA_SKIP_SAMPLES, 10);
+		if (skip == NULL) {
+			av_packet_free(&avpkt);
+			return MIST_AV_ERR;
+		}
+		AV_WL32(skip, pkt->skip_start);
+		AV_WL32(skip + 4, pkt->skip_end);
+		skip[8] = 0;
+		skip[9] = 0;
+	}
 	int err = avcodec_send_packet(dec->ctx, avpkt);
 	av_packet_free(&avpkt);
 	return map_ret(err);
@@ -874,21 +923,6 @@ void mist_av_decoder_close(mist_av_decoder *dec)
 	av_free(dec);
 }
 
-/*
- * Sample formats in the order Mist wants them. Stego bits sit in the LSB
- * of the integer grid the encoder quantizes to, so a narrow grid is a
- * shallower carrier: s16 first keeps a lossless target at CD depth rather
- * than the u8 some encoders (wavpack) happen to list first. Vorbis offers
- * only fltp and lands there whatever this list says.
- */
-static const enum AVSampleFormat fmt_pref[] = {
-	AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_S16P,
-	AV_SAMPLE_FMT_S32, AV_SAMPLE_FMT_S32P,
-	AV_SAMPLE_FMT_FLT, AV_SAMPLE_FMT_FLTP,
-	AV_SAMPLE_FMT_DBL, AV_SAMPLE_FMT_DBLP,
-	AV_SAMPLE_FMT_U8,  AV_SAMPLE_FMT_U8P,
-};
-
 // supported_fmts fills *out with codec's supported sample formats and
 // returns 1, or returns 0 if the query itself failed. avcodec_get_supported_
 // config leaves *out NULL on success too, meaning every format is
@@ -906,25 +940,63 @@ static int supported_fmts(const AVCodec *codec, AVCodecContext *ctx, const enum 
 #endif
 }
 
-static enum AVSampleFormat pick_sample_fmt(const AVCodec *codec, AVCodecContext *ctx)
+/*
+ * fmt_score is libavfilter's get_fmt_score, the rule the ffmpeg command
+ * line picks an encoder's sample format by: the lowest score against the
+ * source's format wins. Losing bytes costs ten times what gaining them
+ * does, so a 24-bit or float source goes to s32 wherever the encoder
+ * takes it, and only a 16-bit source stays at s16.
+ */
+static int fmt_score(enum AVSampleFormat dst, enum AVSampleFormat src)
+{
+	int score = av_sample_fmt_is_planar(dst) != av_sample_fmt_is_planar(src);
+	int db = av_get_bytes_per_sample(dst), sb = av_get_bytes_per_sample(src);
+	score += db < sb ? 100 * (sb - db) : 10 * (db - sb);
+	if (av_get_packed_sample_fmt(dst) == AV_SAMPLE_FMT_S32 && av_get_packed_sample_fmt(src) == AV_SAMPLE_FMT_FLT) {
+		score += 20;
+	}
+	if (av_get_packed_sample_fmt(dst) == AV_SAMPLE_FMT_FLT && av_get_packed_sample_fmt(src) == AV_SAMPLE_FMT_S32) {
+		score += 2;
+	}
+	return score;
+}
+
+static enum AVSampleFormat pick_sample_fmt(const AVCodec *codec, AVCodecContext *ctx, enum AVSampleFormat src)
 {
 	const enum AVSampleFormat *have = NULL;
+	if (src < 0 || src >= AV_SAMPLE_FMT_NB) {
+		src = AV_SAMPLE_FMT_FLTP;
+	}
 	if (!supported_fmts(codec, ctx, &have)) {
 		return AV_SAMPLE_FMT_FLTP;
 	}
 	if (have == NULL) {
-		// Query succeeded and reports no constraint: every format the
-		// encoder could want is open, so lead with fmt_pref's own choice.
-		return fmt_pref[0];
+		// Query succeeded and reports no constraint: the source's own
+		// format needs no conversion at all.
+		return src;
 	}
-	for (size_t i = 0; i < sizeof(fmt_pref) / sizeof(fmt_pref[0]); i++) {
-		for (int j = 0; have[j] != AV_SAMPLE_FMT_NONE; j++) {
-			if (have[j] == fmt_pref[i]) {
-				return fmt_pref[i];
-			}
-		}
+	// Same walk as libavfilter's pick_format, ties included: a later
+	// format with an equal score replaces the earlier one.
+	enum AVSampleFormat best = AV_SAMPLE_FMT_NONE;
+	for (int i = 0; have[i] != AV_SAMPLE_FMT_NONE; i++) {
+		best = fmt_score(best, src) < fmt_score(have[i], src) ? best : have[i];
 	}
-	return have[0] != AV_SAMPLE_FMT_NONE ? have[0] : AV_SAMPLE_FMT_FLTP;
+	return best != AV_SAMPLE_FMT_NONE ? best : AV_SAMPLE_FMT_FLTP;
+}
+
+/* Largest power of two no greater than a tenth of a second, which is the
+ * FLAC block size the ffmpeg command line writes. */
+static int flac_cli_blocksize(int rate)
+{
+	int target = rate / 10;
+	int block = 16;
+	if (target < block) {
+		return block;
+	}
+	while ((block << 1) <= target && (block << 1) <= 65535) {
+		block <<= 1;
+	}
+	return block;
 }
 
 mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errbuf, int errlen, int *invalid)
@@ -951,19 +1023,47 @@ mist_av_encoder *mist_av_encoder_open(const mist_av_audio_info *info, char *errb
 		return NULL;
 	}
 	e->ctx->sample_rate = info->sample_rate > 0 ? info->sample_rate : 44100;
-	e->ctx->sample_fmt = pick_sample_fmt(codec, e->ctx);
+	e->ctx->sample_fmt = pick_sample_fmt(codec, e->ctx, info->sample_fmt);
+	/* The ffmpeg command line's depth: the source's, capped at the format's. */
+	e->ctx->bits_per_raw_sample = FFMIN(info->bits, av_get_bytes_per_sample(e->ctx->sample_fmt) * 8);
 	/* A lossless encoder ignores bit_rate; forcing one makes it complain. */
-	if (info->bitrate > 0) {
+	if (info->vbr) {
+		e->ctx->flags |= AV_CODEC_FLAG_QSCALE;
+		e->ctx->global_quality = info->quality * FF_QP2LAMBDA;
+	} else if (info->bitrate > 0) {
 		e->ctx->bit_rate = info->bitrate;
 	}
 	av_channel_layout_default(&e->ctx->ch_layout, info->channels > 0 ? info->channels : 2);
 	e->ctx->time_base = (AVRational){1, e->ctx->sample_rate};
+	/*
+	 * flacenc keeps a frame size it was already given. The ffmpeg CLI's
+	 * filter supplies a power-of-two frame near a tenth of a second, so a
+	 * plain `ffmpeg -c:a flac` file uses that. Leaving this at 0 selects
+	 * the encoder's own 105 ms block (4608 samples at 44.1 kHz) instead.
+	 */
+	if (codec->id == AV_CODEC_ID_FLAC && e->ctx->frame_size <= 0) {
+		e->ctx->frame_size = flac_cli_blocksize(e->ctx->sample_rate);
+	}
 	int err = avcodec_open2(e->ctx, codec, NULL);
 	if (err < 0) {
 		set_averr(errbuf, errlen, err, "open encoder");
 		*invalid = err == AVERROR(EINVAL);
-		avcodec_free_context(&e->ctx);
-		av_free(e);
+		mist_av_encoder_close(e);
+		return NULL;
+	}
+	/*
+	 * Float planes reach the encoder's format through libswresample, the
+	 * converter the ffmpeg command line inserts, so samples that are off
+	 * the integer grid round the way a plain encode rounds them.
+	 */
+	err = swr_alloc_set_opts2(&e->swr, &e->ctx->ch_layout, e->ctx->sample_fmt, e->ctx->sample_rate,
+	                          &e->ctx->ch_layout, AV_SAMPLE_FMT_FLTP, e->ctx->sample_rate, 0, NULL);
+	if (err >= 0) {
+		err = swr_init(e->swr);
+	}
+	if (err < 0) {
+		set_averr(errbuf, errlen, err, "open resampler");
+		mist_av_encoder_close(e);
 		return NULL;
 	}
 	return e;
@@ -981,7 +1081,12 @@ int mist_av_encoder_info(mist_av_encoder *enc, mist_av_audio_info *info)
 	info->sample_rate = enc->ctx->sample_rate;
 	info->channels = enc->ctx->ch_layout.nb_channels;
 	info->sample_fmt = enc->ctx->sample_fmt;
+	info->bits = enc->ctx->bits_per_raw_sample;
 	info->bitrate = enc->ctx->bit_rate;
+	if (enc->ctx->flags & AV_CODEC_FLAG_QSCALE) {
+		info->vbr = 1;
+		info->quality = enc->ctx->global_quality / FF_QP2LAMBDA;
+	}
 	if (enc->ctx->extradata_size > 0 && enc->ctx->extradata != NULL) {
 		info->extradata = av_malloc((size_t)enc->ctx->extradata_size);
 		if (info->extradata == NULL) {
@@ -994,38 +1099,60 @@ int mist_av_encoder_info(mist_av_encoder *enc, mist_av_audio_info *info)
 	return MIST_AV_OK;
 }
 
-/*
- * store_sample writes one float sample in the encoder's own format. The
- * scale factors are powers of two and match the decode side in sample.go
- * exactly, which is what lets a bit placed in a sample's LSB survive the
- * encode/decode round trip of a lossless codec.
- */
-static void store_sample(uint8_t *dst, int i, int fmt, float v)
+/* in_planes points swr's input at planes, repeating the last for missing channels. */
+static const uint8_t **in_planes(int ch, float **planes, int nplanes)
 {
-	switch (fmt) {
-	case AV_SAMPLE_FMT_U8:
-	case AV_SAMPLE_FMT_U8P:
-		dst[i] = (uint8_t)(av_clip(lrintf(v * 128.0f), -128, 127) + 128);
-		break;
-	case AV_SAMPLE_FMT_S16:
-	case AV_SAMPLE_FMT_S16P:
-		((int16_t *)dst)[i] = (int16_t)av_clip(lrintf(v * 32768.0f), -32768, 32767);
-		break;
-	case AV_SAMPLE_FMT_S32:
-	case AV_SAMPLE_FMT_S32P:
-		((int32_t *)dst)[i] = (int32_t)av_clipl_int32(llrint((double)v * 2147483648.0));
-		break;
-	case AV_SAMPLE_FMT_FLT:
-	case AV_SAMPLE_FMT_FLTP:
-		((float *)dst)[i] = v;
-		break;
-	case AV_SAMPLE_FMT_DBL:
-	case AV_SAMPLE_FMT_DBLP:
-		((double *)dst)[i] = (double)v;
-		break;
-	default:
-		break;
+	const uint8_t **in = av_calloc((size_t)ch, sizeof(*in));
+	if (in == NULL) {
+		return NULL;
 	}
+	for (int c = 0; c < ch; c++) {
+		in[c] = (const uint8_t *)planes[c < nplanes ? c : nplanes - 1];
+	}
+	return in;
+}
+
+int mist_av_encoder_convert(mist_av_encoder *enc, float **planes, int nplanes, int nb_samples, int32_t **out)
+{
+	if (enc == NULL || enc->ctx == NULL || planes == NULL || nplanes <= 0 || out == NULL) {
+		return MIST_AV_ERR;
+	}
+	int ch = enc->ctx->ch_layout.nb_channels;
+	enum AVSampleFormat fmt = enc->ctx->sample_fmt;
+	uint8_t **buf = NULL;
+	if (av_samples_alloc_array_and_samples(&buf, NULL, ch, nb_samples, fmt, 0) < 0) {
+		return MIST_AV_ERR;
+	}
+	int rc = MIST_AV_ERR;
+	const uint8_t **in = in_planes(ch, planes, nplanes);
+	if (in != NULL && swr_convert(enc->swr, buf, nb_samples, in, nb_samples) == nb_samples) {
+		int planar = av_sample_fmt_is_planar(fmt);
+		rc = MIST_AV_OK;
+		for (int c = 0; c < ch && rc == MIST_AV_OK; c++) {
+			for (int i = 0; i < nb_samples; i++) {
+				int at = planar ? i : i * ch + c;
+				const uint8_t *p = buf[planar ? c : 0];
+				switch (av_get_packed_sample_fmt(fmt)) {
+				case AV_SAMPLE_FMT_U8:
+					out[c][i] = (int32_t)p[at] - 128;
+					break;
+				case AV_SAMPLE_FMT_S16:
+					out[c][i] = ((const int16_t *)p)[at];
+					break;
+				case AV_SAMPLE_FMT_S32:
+					out[c][i] = ((const int32_t *)p)[at];
+					break;
+				default:
+					rc = MIST_AV_UNIMPLEMENTED;
+					break;
+				}
+			}
+		}
+	}
+	av_free(in);
+	av_freep(&buf[0]);
+	av_freep(&buf);
+	return rc;
 }
 
 int mist_av_encoder_send_flt(mist_av_encoder *enc, float **planes, int nplanes, int nb_samples, int64_t pts)
@@ -1047,18 +1174,17 @@ int mist_av_encoder_send_flt(mist_av_encoder *enc, float **planes, int nplanes, 
 		av_frame_free(&fr);
 		return MIST_AV_ERR;
 	}
-	int ch = enc->ctx->ch_layout.nb_channels;
-	int fmt = enc->ctx->sample_fmt;
-	int planar = av_sample_fmt_is_planar(fmt);
-	for (int c = 0; c < ch; c++) {
-		const float *src = planes[c < nplanes ? c : nplanes - 1];
-		for (int i = 0; i < nb_samples; i++) {
-			if (planar) {
-				store_sample(fr->extended_data[c], i, fmt, src[i]);
-			} else {
-				store_sample(fr->extended_data[0], i * ch + c, fmt, src[i]);
-			}
-		}
+	const uint8_t **in = in_planes(enc->ctx->ch_layout.nb_channels, planes, nplanes);
+	if (in == NULL) {
+		av_frame_free(&fr);
+		return MIST_AV_ERR;
+	}
+	/* Input and output rates match, so every sample comes straight out. */
+	err = swr_convert(enc->swr, fr->extended_data, nb_samples, in, nb_samples);
+	av_free(in);
+	if (err != nb_samples) {
+		av_frame_free(&fr);
+		return MIST_AV_ERR;
 	}
 	err = avcodec_send_frame(enc->ctx, fr);
 	av_frame_free(&fr);
@@ -1097,6 +1223,7 @@ void mist_av_encoder_close(mist_av_encoder *enc)
 	if (enc == NULL) {
 		return;
 	}
+	swr_free(&enc->swr);
 	avcodec_free_context(&enc->ctx);
 	av_free(enc);
 }

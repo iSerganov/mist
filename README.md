@@ -61,7 +61,9 @@ read in an afternoon. Contributions and design discussion are very welcome.
 shape of `age` or NaCl's `box`: a freshly generated ephemeral X25519 key agrees a
 secret with the recipient's public key, HKDF-SHA256 splits that secret into an
 AEAD key, a position-selection key and a length mask, and ChaCha20-Poly1305 seals
-the payload. Because that sender key is ephemeral and generated per message, a
+the payload. The sender key travels as an Elligator 2 representative, which is
+uniformly random bytes, because a bare X25519 key has a structure anyone can
+test for. Because that sender key is ephemeral and generated per message, a
 sender needs no long-term identity at all. An optional Ed25519 signature can be
 added when you *do* want the recipient to know who sent it.
 
@@ -110,7 +112,7 @@ frame of a longer message's span — loses the message.
 brew install ffmpeg pkg-config
 
 # Debian / Ubuntu
-sudo apt-get install pkg-config libavformat-dev libavcodec-dev libavutil-dev libvorbis-dev
+sudo apt-get install pkg-config libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libvorbis-dev
 ```
 
 Building with `CGO_ENABLED=0` still type-checks against a pure-Go stub, which
@@ -176,7 +178,7 @@ A lossless output is worth preferring when you have the disk space: it is far
 roomier and very nearly transparent. Measured against the carrier, a FLAC stego
 file scores about 85 dB SDR where the Vorbis path scores about 26 dB — a
 lossless encode adds no loss of its own, and the only change is one step in the
-last bit of two percent of the samples. Run `mist formats` to see every target
+last bit of one percent of the samples. Run `mist formats` to see every target
 your FFmpeg build can write. An unwritable one — a lossy format other than
 Vorbis, or an extension FFmpeg does not know — fails immediately, before the
 carrier is even read.
@@ -463,12 +465,17 @@ For the real number ahead of time, without producing any output, use
 ### Audio quality
 
 Mist always decodes and re-encodes, so some loss is unavoidable for a lossy
-*output* — but the embedding itself should be inaudible. For Vorbis, the encode
-bitrate is derived from the carrier's own rate with headroom above it, rather
-than fixed, and the payload is written only above 6 kHz at a low density.
+*output* — but the embedding itself should be inaudible. For Vorbis, Mist keeps
+the carrier's quality: it encodes in VBR at the `-q:a` level whose nominal rate is
+nearest the source's bitrate scaled by how efficient its codec is (MP3 ×0.75, AAC
+×1, Opus ×1.3, Vorbis ×1), and at q8 for a lossless source. A 192 kbps MP3
+becomes q5 (160 kbps nominal). The payload is written only above 6 kHz at a low
+density. Lossless output keeps the carrier's depth as `ffmpeg` would: a 24-bit or
+float source is written at 24 bits wherever the codec allows it.
 
 Measured on a 128 kbps MP3, against a plain FFmpeg transcode of the same
-decoded audio (signal-to-distortion, higher is better):
+decoded audio (signal-to-distortion, higher is better), under the earlier rate
+rule (source ×1.5 ABR); the table has not been re-measured since:
 
 | | SDR |
 |---|---|
@@ -480,7 +487,7 @@ So the message costs under 0.2 dB — the re-encode itself dominates, and that i
 the price of the format, not of the steganography.
 
 A lossless output removes even that. There is no transcode underneath, and the
-only change is one step in the last bit of two percent of the samples:
+only change is one step in the last bit of one percent of the samples:
 
 | | SDR |
 |---|---|
@@ -543,8 +550,6 @@ Known gaps, all recorded in [CLAUDE.md](CLAUDE.md):
 - `FrameCapacity()` over-estimates and describes the Vorbis path only, as above.
 - `Embed` over `http(s)` buffers a finite file rather than streaming a live source,
   and the lossless path buffers the whole carrier before encoding.
-- Lossless embedding quantizes to 16 bits wherever the encoder offers that depth,
-  so a 24-bit master comes back at CD depth.
 - A listener that joins mid-frame cannot align to that frame; it says so once and
   resumes cleanly from the next one.
 - A scan goroutine parked in a blocking libav read outlives its context until the
@@ -568,14 +573,51 @@ a subkey derived from the ECDH shared secret rather than stored in the clear.
 Explicitly **not** goals in Phase 1: surviving a digital-to-analog-to-digital
 round trip, surviving re-encoding by a different encoder, embedding into
 pre-existing files produced elsewhere, and deniability under coercion
-(undetectability and deniability are different guarantees). "Undetectable" also
-remains a design target rather than a proven property. `make harness` (see
-[Development](#development)) measures it: four classical detectors and a trained
-classifier try to tell Mist's output from a plain re-encode of the same carrier.
-On 13 metal tracks, FLAC, WAV and Ogg Vorbis output all sit at chance on every
-one of them, and a lossless output leaves digital silence untouched. That is a
-warden without the original: one who holds the carrier Mist started from can
-re-encode it and compare, and will find the changes.
+(undetectability and deniability are different guarantees).
+
+**What is and is not claimed.** Mist is not proven undetectable. The measure
+used is Cachin's: the system is ε-secure when the relative entropy between
+innocent files and Mist's output is at most ε, and by Pinsker's inequality a
+detector with AUC *a* proves ε ≥ 2(a − 0.5)². `make harness` can only produce
+such lower bounds, from the detectors it runs, so an AUC at chance means those
+detectors found nothing, not that nothing exists. The square-root law also
+applies: at a fixed 1% rate, detectability grows with the amount of audio a
+warden collects, and the harness pools at most six files.
+
+**What the harness measured** on 84 carriers in five kinds of audio (MP3 and Opus
+decodes, 16-bit and 24-bit FLAC, and a few WAVs), the first five minutes of each,
+against a plain `ffmpeg` encode of the same carrier. File-level AUC, with 95%
+intervals bootstrapped by carrier:
+
+- **Over the whole corpus** no detector reaches more than 0.55 on FLAC or WAV. The
+  largest is the classifier on FLAC, 0.548 (0.523–0.577), an ε lower bound of 0.005
+  (up to 0.012). The warden who knows the public key sits at chance, 0.512
+  (0.494–0.535); it scored 1.000 until the ephemeral key was sent as an Elligator 2
+  representative.
+- **Within one kind of audio** the picture is worse. Trained and scored on a single
+  folder, the classifier separates FLAC from 24-bit live recordings (9 carriers)
+  with AUC between 0.89 and 1.00, Opus-sourced carriers at 0.98 and MP3-sourced
+  ones at 0.94. Chunk by chunk the signal is faint (AUC about 0.51); it shows once
+  a file's chunks are averaged. A warden who knows what kind of audio to expect
+  can do this, so the whole-corpus numbers understate what a targeted one sees.
+- **Ogg Vorbis** is detected more clearly: HCF-COM reaches 0.584 (0.543–0.631),
+  ε ≥ 0.014 (up to 0.034), and a warden who pools files does better, 0.60, 0.69
+  and 0.78 for 1, 3 and 6 files. That is the square-root law at work. Ogg keeps the
+  source's quality, so it also differs from ffmpeg's default q3 (all MP3-sourced
+  carriers map to q8, 256 kbps against 112); a warden can read the level from the
+  header.
+- **A small CNN** trained across the whole corpus finds nothing in FLAC (0.501,
+  0.496–0.508) or WAV (0.503) but does find Ogg Vorbis: 0.612 (0.559–0.677), an
+  ε lower bound of 0.025 (up to 0.063).
+- **Length.** Mist used to keep the decoder delay and padding of an MP3 or Opus
+  carrier, so its output ran a few hundred samples longer than ffmpeg's encode on
+  41 of the 84 carriers. It now drops them the way ffmpeg does.
+
+**Known-cover attack.** A warden who has the original carrier, or can get it
+(public music), re-encodes it and diffs. The embedded ±1 changes are exactly the
+difference that finds, in both domains, with certainty. No embedding that changes
+the file prevents this, and the harness cannot measure it. Do not embed into audio
+that is publicly available.
 
 ## Development
 
@@ -590,18 +632,35 @@ make test                        # verbose: -v -race -cover, full tracebacks
 make test LOG=trace              # ...and libav logging turned all the way up
 make test-quiet                  # same run, results only
 make lint                        # golangci-lint run --timeout=5m
-make harness CORPUS=~/music      # detectability and quality report -> harness-out/
+make harness CORPUS="$CORPUS" CORPUS_MANIFEST=testdata/harness/corpus.example.json
+make cnn-warden CORPUS="$CORPUS" CORPUS_MANIFEST=testdata/harness/corpus.example.json
 ```
 
 `make harness` re-encodes every file in `CORPUS` (or a built-in synthetic set
-when it is empty) twice per output format, once plainly and once with a hidden
-message. Then it reports how well four classical detectors and a
-cross-validated classifier tell the two apart, and how much embedding costs in
-SDR. `FORMATS=ogg,flac` or `FORMATS=all` picks the targets (default: Ogg Vorbis
-and the verified lossless set), `JOBS=` sets how many carriers run at once, and
-`BASELINE=` points at an earlier `report.json` to show what changed. It writes
-`report.md`, ready to paste into a pull request, and `report.json`. It is
-build-tagged, so `make test` and CI never run it.
+when it is empty) per output format three ways: with the `ffmpeg` command line
+at its own defaults, which is the clean file a warden would compare against;
+with Mist's own encoder and nothing embedded; and with a hidden message. It
+first checks that Mist's output matches the ffmpeg copy on length, trailing
+digital zeros, sample format and nominal bitrate. Then it reports how well four
+classical detectors, two cross-validated classifiers — one on general
+features, one on second-difference Markov features — and a warden who knows the
+recipient's public key tell the stego copy from each clean one, and how much
+embedding costs in SDR. Point `CORPUS_MANIFEST` at a JSON file of public
+ids, categories and lineage groups (see `testdata/harness/corpus.example.json`)
+so reports never contain local filenames. Without a manifest, carriers are
+renamed `carrier-0001` and grouped as `external`. After `make cnn-warden`, the
+report also includes a small CNN
+([tools/cnn_warden](tools/cnn_warden/README.md)). `ffmpeg` is taken from
+`FFMPEG` / `MIST_FFMPEG` (default: `ffmpeg` on `PATH`). `FORMATS=ogg,flac` or
+`FORMATS=all` picks the targets (default: Ogg Vorbis and the verified lossless
+set), `JOBS=` sets how many carriers run at once, `MAX_SECONDS=` cuts each
+carrier to its first seconds (every carrier is held decoded several times, so
+hour-long tracks need it), `HARNESS_OUT=` chooses the output directory,
+`BASELINE=` points at an earlier `report.json` to show what changed, and
+`MERGE=` joins the `report.json` files of separate runs (one per format, run
+side by side) into one report. It writes `report.md`, `report.json`,
+`manifest.json` and `scores.json`. It is build-tagged, so `make test` and CI
+never run it.
 
 `make test` is deliberately loud: every test and subtest is named, `t.Log`
 output is shown, coverage is reported per package, `GOTRACEBACK=all` dumps

@@ -17,12 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this:
   - Payload bits are carried by a syndrome-trellis code over the eligible
     values instead of one bit per keyed position with LSB matching. The
-    rate stays at 2%, so capacity is unchanged, but about 0.14 values
-    change per bit instead of 0.5.
+    rate is 1%, half of 0.2's 2%, so capacity halves, but about 0.14 values
+    change per bit instead of 0.5. Detectability grows with the rate: on 84
+    carriers Ogg Vorbis scored file AUC 0.58 at 2% and 0.52 at 1%, and
+    pooling files no longer raised it.
   - Positions are ordered by a ChaCha20 keystream instead of
     HMAC-SHA256 counters.
   - Lossless output leaves digital silence and the end padding untouched,
     so those samples are no longer part of the carrier.
+  - The envelope carries an Elligator 2 representative of the ephemeral
+    X25519 key instead of the key. A bare key has its top bit clear and lies
+    in the prime-order subgroup, and the position seed comes from the public
+    key, so a warden holding only that key could read the first frame's
+    bits and test those 32 bytes: the harness's new key-aware warden scored
+    AUC 1.000 on every carrier. It now scores 0.500.
 - Ogg Vorbis embedding now prices each change by how far it moves the
   residue's spectral vector and avoids the costly ones. On 13 dense music
   tracks its cost beyond a plain re-encode drops from 1.4 dB of SDR to
@@ -32,21 +40,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every change.
 - Lossless capacity, as `EstimateCapacity` and `mist estimate` report it,
   no longer counts silent stretches of the carrier.
+- Lossless output keeps the carrier's depth the way `ffmpeg` does, instead
+  of always writing 16 bits: a 24-bit or float source is written at 24 bits
+  wherever the codec allows it (FLAC, ALAC, TTA, WavPack), and a 16-bit
+  source stays 16-bit. Samples are converted by libswresample, as `ffmpeg`
+  converts them, so apart from the embedded ±1 changes the output matches
+  a plain `ffmpeg` encode sample for sample. Building now needs
+  libswresample (`libswresample-dev` on Debian/Ubuntu).
+- Ogg Vorbis output is encoded in VBR at the quality level that matches the
+  carrier's quality, instead of an ABR target at 1.5 times the source rate:
+  the source rate is scaled by codec efficiency (MP3 ×0.75, AAC ×1,
+  Opus ×1.3) and rounded to the nearest `-q:a` level, and a lossless source
+  is written at q8. The stream header then reads like an ordinary
+  `ffmpeg -q:a N` encode. Vorbis capacity drops with the rate: a 128 kbps
+  MP3 carrier holds about a third of what it did.
+- FLAC output now writes the sample count and MD5 into STREAMINFO after the
+  encoder is flushed, and uses the same block size as `ffmpeg -c:a flac`:
+  the largest power of two within a tenth of a second, rather than the
+  encoder's own 105 ms block. Ogg Vorbis comments carry the same `Lavc`
+  encoder tag the ffmpeg command line writes. Payload framing is unchanged,
+  so a file embedded before this still extracts.
 
 ### Added
 
+- The harness confirmatory family is frozen at six wardens: HCF-COM, the
+  logistic classifier, the Markov model, the key-aware warden, a rich-model
+  logistic, and a public-key selection-channel score. Fisher, stump and
+  random-subspace fits of the rich vector, plus the CNN waveform,
+  spectrogram and hybrid nets, are baselines with a positive control each.
+  Report schema is 6. This does not change an embedded file.
+- The harness fingerprint verdict compares Mist with the canonical ffmpeg
+  workflow: Vorbis at the `-q:a` level Mist chose, and a lossless codec at
+  ffmpeg's defaults. Default ffmpeg stays a labeled second comparison, so a
+  nominal-rate gap against ffmpeg's default quality is not a failed verdict.
+  An audio-blind classifier scores file metadata only, separately for
+  canonical against Mist-clean and for Mist-clean against stego. Its pass is
+  a file interval that includes 0.5.
+- Corpus manifests can mark a sealed split. A harness run scores one split and
+  records hashes of the carriers it did not score. `make corpus` writes a
+  generated development set and a source-disjoint sealed holdout outside the
+  repository.
 - `make harness`: a local report on detectability and audio quality per
   output format, run on a music corpus or a built-in synthetic set. It
   measures four classical detectors (chi-square, SPA, RS, HCF-COM) and a
   cross-validated classifier, plus SDR against a plain re-encode, per
   carrier and on average.
+- The harness compares Mist's output with the same carrier encoded by the
+  `ffmpeg` command line at its own defaults, which is the clean file a
+  warden would actually have. A new table sets the two side by side on
+  length, trailing digital zeros, sample format and nominal bitrate, where
+  any difference gives Mist away without statistics. The detectors run
+  against that ffmpeg copy, and again against Mist's own re-encode to
+  isolate the embedding. The harness now needs `ffmpeg` on `PATH`, and the
+  synthetic corpus gains a 24-bit carrier.
+- The harness scores detection per file as well as per chunk, and its 95%
+  intervals are bootstrapped by carrier instead of by chunk, so they reflect
+  how many tracks were measured. Each detector also reports the lower bound
+  on Cachin's ε that its file-level AUC proves.
+- A second classifier in the harness, **markov**, trained on how the second
+  difference between samples changes from one sample to the next, the
+  rich-model features of audio steganalysis. ±1 changes stand out more in
+  smooth audio's curvature than in the values the first classifier sees.
+  `steganalysis.Markov` computes the features.
+- A key-aware warden in the harness, `key-aware`, for the adversary the
+  design assumes: one who knows the recipient's public key, recovers the first
+  frame's bits and tests the envelope's leading 32 bytes for the structure of
+  an X25519 public key (`steganalysis.HonestX25519`).
+- The harness reports detection per corpus folder, against the number of
+  chunks scored and against the number of files a warden pools, and runs
+  an external CNN warden (`make cnn-warden`, `tools/cnn_warden`) whose
+  result appears in the report.
+- For Ogg Vorbis the harness runs the detectors against ffmpeg encoded at
+  the quality level Mist chose, not at ffmpeg's default q3. Against the
+  default, a carrier that maps to another level differs in nominal bitrate
+  and length, and every detector that read those scored AUC 1.000; at the
+  same level the embedding alone leaves a faint signal (file AUC 0.43 to
+  0.54 on 13 tracks). The table of plain properties still compares with
+  ffmpeg's default, so that difference stays visible.
 
 ### Fixed
 
+- A carrier decoded from MP3, AAC, Opus or Ogg Vorbis keeps no more of its
+  encoder delay, padding or pre-skip than ffmpeg keeps. Mist used to decode
+  the whole stream, so on 41 of 84 carriers its output ran a few hundred
+  samples longer than a plain ffmpeg encode; the demuxer's skip-samples
+  side data now reaches the decoder, which trims as the ffmpeg command line
+  does.
+- The harness's 95% intervals now contain the AUC they are built around.
+  The carrier bootstrap counted a carrier drawn twice against its own clean
+  copy four times over, so on paired data the whole interval drifted off
+  the estimate, and the ε bounds with it.
+- Output is now exactly as long as the carrier. Mist used to zero-pad the
+  carrier to a whole number of encoder blocks, so every lossless output
+  ended in up to one block of digital zeros. A plain encode leaves no such
+  padding, so it gave Mist away without any statistics.
 - Ogg Vorbis output from a mono carrier with a high source bitrate, such
   as a mono WAV, or from a 22 kHz mono carrier, no longer fails to open
-  the encoder. Bitrate bounds now scale with the channel count, and the
-  rate steps down until libvorbis accepts it.
+  the encoder.
 
 ## [0.2.0] - 2026-09-21
 

@@ -1,4 +1,5 @@
-// Package av is the cgo boundary to libavformat, libavcodec, and libavutil.
+// Package av is the cgo boundary to libavformat, libavcodec, libavutil and
+// libswresample.
 //
 // This package knows nothing about steganography. It demuxes Ogg, muxes
 // Vorbis packets, decodes to PCM, and encodes from PCM. Residue access
@@ -20,7 +21,9 @@ import (
 // NativeCodecID is libav's own AVCodecID for the stream, carried verbatim
 // so any format the installed FFmpeg can decode is usable; CodecID stays
 // Mist-local and is CodecIDNone for everything else. CodecName is libav's
-// display name, for error messages.
+// display name, for error messages. Bits is bits_per_raw_sample, 0 when
+// the stream does not say. VBR asks an encoder for constant Quality on its
+// own scale (libvorbis -1..10), as ffmpeg's -q:a does, instead of Bitrate.
 type AudioInfo struct {
 	CodecID       int
 	NativeCodecID int
@@ -29,7 +32,10 @@ type AudioInfo struct {
 	SampleRate    int
 	Channels      int
 	SampleFmt     codec.SampleFormat
+	Bits          int
 	Bitrate       int64
+	VBR           bool
+	Quality       int
 	DurationUs    int64
 	Extradata     []byte
 	FrameSize     int
@@ -47,14 +53,17 @@ type Format struct {
 	Lossless  bool
 }
 
-// Info returns the encoder parameters for writing f.
-func (f Format) Info(rate, channels int, bitrate int64) AudioInfo {
+// Info returns the encoder parameters for writing f from src. The
+// encoder takes src's sample format and depth as its starting point, the
+// way the ffmpeg command line does, and settles on what it can write.
+func (f Format) Info(rate, channels int, src AudioInfo) AudioInfo {
 	return AudioInfo{
 		NativeCodecID: f.CodecID,
 		Container:     f.Container,
 		SampleRate:    rate,
 		Channels:      channels,
-		Bitrate:       bitrate,
+		SampleFmt:     src.SampleFmt,
+		Bits:          src.Bits,
 	}
 }
 
@@ -100,6 +109,11 @@ type Packet struct {
 	PTS         int64
 	DTS         int64
 	Duration    int64
+	// SkipStart and SkipEnd are the samples a decoder drops from the start
+	// and the end of this packet's output: MP3 encoder delay and padding,
+	// Opus pre-skip, the part of an Ogg page past its granule position.
+	SkipStart uint32
+	SkipEnd   uint32
 }
 
 // Frame is a decoded AVFrame of PCM samples.
@@ -162,5 +176,18 @@ func (m *Muxer) Info() AudioInfo { return m.info }
 // was written at want the demuxer's own probed AudioInfo, not this.
 func (d *Decoder) Info() AudioInfo { return d.info }
 
-// Info returns the encoder parameters.
-func (e *Encoder) Info() AudioInfo { return e.info }
+// Info returns the encoder parameters. It re-reads them: a FLAC encoder
+// writes the MD5 and the total sample count into its extradata only once
+// it has been flushed, and the muxer copies that blob into STREAMINFO.
+func (e *Encoder) Info() AudioInfo {
+	if e == nil {
+		return AudioInfo{}
+	}
+	if e.handle != nil {
+		container := e.info.Container
+		if err := avEncInfo(e); err == nil {
+			e.info.Container = container
+		}
+	}
+	return e.info
+}

@@ -26,9 +26,16 @@ func TestToolSuite(t *testing.T) {
 	suite.Run(t, &ToolSuite{})
 }
 
-func (s *ToolSuite) SetupSubTest() {
+func (s *ToolSuite) SetupTest() { s.resetBins() }
+
+func (s *ToolSuite) SetupSubTest() { s.resetBins() }
+
+func (s *ToolSuite) resetBins() {
 	s.bin = s.T().TempDir()
 	s.T().Setenv("PATH", s.bin)
+	s.T().Setenv("MIST_FFMPEG", "")
+	s.T().Setenv("MIST_VISQOL", "")
+	s.T().Setenv("MIST_PEAQ", "")
 	data := s.T().TempDir()
 	s.ref, s.deg = filepath.Join(data, "ref.flac"), filepath.Join(data, "deg.ogg")
 	s.Require().NoError(os.WriteFile(s.ref, []byte("ref"), 0o600))
@@ -109,4 +116,20 @@ func (s *ToolSuite) TestAvailable() {
 			s.Equal(tc.want, PEAQ().Available())
 		})
 	}
+}
+
+func (s *ToolSuite) TestConfiguredBinaryPaths() {
+	ffmpeg := filepath.Join(s.bin, "custom-ffmpeg")
+	visqol := filepath.Join(s.bin, "custom-visqol")
+	s.Require().NoError(os.WriteFile(ffmpeg, []byte("#!/bin/sh\n"+fakeFFmpeg+"\n"), 0o700))
+	s.Require().NoError(os.WriteFile(visqol, []byte("#!/bin/sh\n"+requireWavs+`echo "MOS-LQO: 4.5"`+"\n"), 0o700))
+	s.T().Setenv("MIST_FFMPEG", ffmpeg)
+	s.T().Setenv("MIST_VISQOL", visqol)
+
+	tool := ViSQOL()
+	s.Equal(ffmpeg, tool.ffmpeg)
+	s.Equal(visqol, tool.bin)
+	score, err := tool.Score(context.Background(), s.ref, s.deg)
+	s.Require().NoError(err)
+	s.Equal(4.5, score)
 }

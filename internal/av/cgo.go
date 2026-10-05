@@ -9,10 +9,7 @@ package av
 // condition, not a hard failure.
 
 /*
-#cgo pkg-config: libavformat libavcodec libavutil
-// store_sample calls lrintf, and pkg-config's libav flags do not pull in libm,
-// so GNU ld drops it and the link fails with "DSO missing from command line".
-#cgo LDFLAGS: -lm
+#cgo pkg-config: libavformat libavcodec libavutil libswresample
 #include "cgo.h"
 #include <stdlib.h>
 #include <string.h>
@@ -359,6 +356,47 @@ func avEncSend(e *Encoder, f Frame) error {
 	return mapCErr(rc, "encode send")
 }
 
+func avEncConvert(e *Encoder, planes [][]float32, n int) ([][]int32, error) {
+	if e == nil || e.handle == nil {
+		return nil, ErrClosed
+	}
+	arr, np, free := cFloatPlanes(planes)
+	if arr == nil {
+		return nil, fmt.Errorf("%w: out of memory", ErrWrite)
+	}
+	defer free()
+	ch := max(e.info.Channels, 1)
+	out := C.malloc(C.size_t(ch) * C.size_t(unsafe.Sizeof(uintptr(0))))
+	if out == nil {
+		return nil, fmt.Errorf("%w: out of memory", ErrWrite)
+	}
+	defer C.free(out)
+	ptrs := unsafe.Slice((**C.int32_t)(out), ch)
+	for c := range ptrs {
+		ptrs[c] = (*C.int32_t)(C.malloc(C.size_t(n) * 4))
+		defer C.free(unsafe.Pointer(ptrs[c]))
+		if ptrs[c] == nil {
+			return nil, fmt.Errorf("%w: out of memory", ErrWrite)
+		}
+	}
+	rc := C.mist_av_encoder_convert((*C.mist_av_encoder)(e.handle), (**C.float)(arr), C.int(np), C.int(n), (**C.int32_t)(out))
+	if err := mapCErr(rc, "convert"); err != nil {
+		return nil, err
+	}
+	res := make([][]int32, ch)
+	for c, p := range ptrs {
+		res[c] = append([]int32(nil), unsafe.Slice((*int32)(unsafe.Pointer(p)), n)...)
+	}
+	return res, nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // cFloatPlanes copies planar PCM into C heaps so the send call never
 // passes a Go pointer that itself points at Go memory (cgo forbids that).
 func cFloatPlanes(planes [][]float32) (unsafe.Pointer, int, func()) {
@@ -450,7 +488,10 @@ func cAudioInfo(a AudioInfo) (C.mist_av_audio_info, func()) {
 		sample_rate:     C.int(a.SampleRate),
 		channels:        C.int(a.Channels),
 		sample_fmt:      C.int(a.SampleFmt),
+		bits:            C.int(a.Bits),
 		bitrate:         C.int64_t(a.Bitrate),
+		vbr:             C.int(boolInt(a.VBR)),
+		quality:         C.int(a.Quality),
 		duration_us:     C.int64_t(a.DurationUs),
 	}
 	for i, b := range []byte(a.Container) {
@@ -480,7 +521,10 @@ func goAudioInfo(a C.mist_av_audio_info) AudioInfo {
 		SampleRate:    int(a.sample_rate),
 		Channels:      int(a.channels),
 		SampleFmt:     codecSampleFmt(int(a.sample_fmt)),
+		Bits:          int(a.bits),
 		Bitrate:       int64(a.bitrate),
+		VBR:           a.vbr != 0,
+		Quality:       int(a.quality),
 		DurationUs:    int64(a.duration_us),
 		Extradata:     extra,
 		FrameSize:     int(a.frame_size),
@@ -495,6 +539,8 @@ func cPacket(p Packet) (C.mist_av_packet, func()) {
 	cp.pts = C.int64_t(p.PTS)
 	cp.dts = C.int64_t(p.DTS)
 	cp.duration = C.int64_t(p.Duration)
+	cp.skip_start = C.uint32_t(p.SkipStart)
+	cp.skip_end = C.uint32_t(p.SkipEnd)
 	if len(p.Data) == 0 {
 		return cp, func() {}
 	}
@@ -514,6 +560,8 @@ func goPacket(p C.mist_av_packet) Packet {
 		PTS:         int64(p.pts),
 		DTS:         int64(p.dts),
 		Duration:    int64(p.duration),
+		SkipStart:   uint32(p.skip_start),
+		SkipEnd:     uint32(p.skip_end),
 	}
 }
 

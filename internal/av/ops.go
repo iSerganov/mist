@@ -153,6 +153,31 @@ func (e *Encoder) Receive() (Packet, error) { return avEncReceive(e) }
 // Close releases the encoder.
 func (e *Encoder) Close() error { return avEncClose(e) }
 
+// Snap moves every sample in planes, in place, to the value the encoder
+// will store for it, on SampleScale's grid. libswresample converts them
+// exactly as it will when they are sent, rounding the way a plain ffmpeg
+// encode rounds on this platform; an encoder that writes float has no grid
+// to snap to and is left alone.
+func (e *Encoder) Snap(planes [][]float32) error {
+	f := e.info.SampleFmt
+	if _, ok := gridShift(f); !ok {
+		return nil
+	}
+	for off := 0; len(planes) > 0 && off < len(planes[0]); off += snapChunk {
+		n := min(snapChunk, len(planes[0])-off)
+		chunk := make([][]float32, len(planes))
+		for c, p := range planes {
+			chunk[c] = p[off : off+n]
+		}
+		ints, err := avEncConvert(e, chunk, n)
+		if err != nil {
+			return err
+		}
+		snapTo(chunk, ints, f)
+	}
+	return nil
+}
+
 // ToCodecPacket copies an av packet into the codec-layer view.
 func ToCodecPacket(p Packet) codec.Packet {
 	return codec.Packet{

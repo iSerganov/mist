@@ -22,6 +22,9 @@ stream, returns `0`.
 | [`RS`](#rs-analysis--fridrich-goljan--du) | LSB replacement, any rate | estimated embedding rate p | smooth, correlated signals |
 | [`HCF`](#hcf-centre-of-mass--harmsen--pearlman) | ±1 embedding (LSB matching) | 1 − normalised HCF centre of mass | peaked histograms |
 | [`CrossValidate`](#logistic-classifier--the-adversary-of-record) | anything learnable from Mist's own output | out-of-fold probability of stego | whatever the training data holds |
+| [`Markov`](#second-difference-markov-features--liu-sung--qiao) + `CrossValidate` | ±1 embedding in smooth audio | out-of-fold probability of stego | smooth, correlated signals |
+| [`Rich`](#frozen-wardens) + `CrossValidate` | the same ±1 changes, on a wider summary | out-of-fold probability of stego | low-amplitude and smooth signals |
+| [`ParityGap`](#frozen-wardens) | LSB bias at positions a public key implies | absolute gap in LSB rate | a warden who knows the recipient key |
 
 **Why the first three matter to Mist even though it does not use LSB replacement.**
 Mist embeds by LSB *matching* (±1). On lossless outputs that is literal ±1 on
@@ -200,11 +203,13 @@ the adversary of record, so its AUC is the one the exit criterion is judged by.
 full-batch gradient descent for a fixed number of steps. Training is
 deterministic.
 
-**Validation.** `CrossValidate` splits samples into folds **by group**; the
-harness uses the carrier as the group. Every carrier is scored by a model trained
-without it, so the classifier cannot win by recognising a track it has already
-seen. The out-of-fold scores then go through `AUC` and `AUCInterval` like any
-detector's.
+**Validation.** `CrossValidate` splits samples into folds **by group**. The
+harness reports `NestedCrossValidate`: outer folds are recording lineages, an
+inner grouped search chooses the L2 penalty from 0.001, 0.01 and 0.1, and one
+held-out lineage calibrates the probability. Fewer than four lineages falls
+back to `CrossValidate` at the fixed penalty. Standardisation is fit on the
+training rows of that fold only. The out-of-fold scores then go through `AUC`
+and `HierarchicalInterval`.
 
 **Limits.** A linear model on 60 hand-built features is a modest adversary. It
 matches HCF on synthetic ±1 embedding and beats it at higher rates, but a deep
@@ -213,6 +218,48 @@ than the classical detectors'.
 
 > T. Pevný, P. Bas, J. Fridrich. *Steganalysis by Subtractive Pixel Adjacency
 > Matrix.* IEEE Trans. Information Forensics and Security 5(2), 2010.
+
+---
+
+## Second-difference Markov features — Liu, Sung & Qiao
+
+**Idea.** The second difference `v[i+2] − 2v[i+1] + v[i]` is the waveform's
+curvature. Audio is smooth at the sampling rate, so the curvature sits near zero
+and changes slowly from sample to sample. A +1 change to one sample moves three
+consecutive second differences by +1, −2, +1 (a −1 change by the opposite),
+which breaks that slow drift more visibly than it disturbs the values or their
+first differences.
+
+**Features.** `Markov` truncates each second difference to ±3, giving 7 bins,
+and returns the 7 × 7 probabilities of one bin given the bin before it, row by
+row: 49 values. A row that never occurs stays zero. It reuses the transition
+code behind `Features`' first-order SPAM features, one difference further down.
+
+**Use.** The harness trains a second cross-validated logistic model, **markov**,
+on these 49 features alone, next to the general classifier, so a report shows
+whether the richer model sees anything the first-order features miss.
+
+**Limits.** Still hand-built features and a linear model. A detector that learns
+its own features — a CNN on raw chunks, the current state of the art — would be
+stronger. It is deliberately not part of this package; it would run outside the
+tree, on chunks the harness exports.
+
+> Q. Liu, A. H. Sung, M. Qiao. *Derivative-Based Audio Steganalysis.* ACM Trans.
+> Multimedia Computing, Communications and Applications 7(3), 2011.
+
+---
+
+## Public-key structure — what a warden with the recipient key can read
+
+The other detectors look at audio. This one looks at 32 bytes. A warden who
+knows the recipient's public key can derive each frame's position seed, recover
+the frame's bits exactly as the catcher does, and read the envelope's leading
+ephemeral key without decrypting anything. `HonestX25519` tests those bytes for
+what an honest X25519 key always has: the top bit clear, and a point in the
+prime-order subgroup, so ℓ times it is infinity. A uniformly random string
+passes both about 1 time in 32. Sent in the clear, the key made Mist detectable
+with AUC 1.000; Mist now sends an Elligator 2 representative, which is uniform,
+and the same test scores 0.500. The harness's `key-aware` row runs it.
 
 ---
 
@@ -230,11 +277,66 @@ $$
 its sign flipped. A value well below 0.5 is still a detection. For Mist the goal
 is **AUC ≈ 0.5 for every detector**.
 
-**`AUCInterval`** is a percentile bootstrap. It resamples each population with
-replacement, recomputes the AUC, and reports the 2.5th and 97.5th percentiles.
-It is deterministic for a given seed, so reports can be compared run to run.
-With fewer than one round it returns the AUC itself as both bounds.
+**`AUCInterval`** is a percentile cluster bootstrap. Every score carries a group.
+Each round redraws whole groups with replacement, recomputes the AUC from them,
+and the interval is the 2.5th and 97.5th percentiles. Chunks of one track are
+correlated, and clean and stego chunks of one track are paired, so resampling
+chunks one by one would make the interval far too narrow: its width would follow
+the number of chunks rather than the number of tracks. **`HierarchicalInterval`**
+draws lineages first and then the recordings inside a drawn lineage, and it
+reproduces `AUCInterval` for the same seed when each lineage is one recording.
+**`Detectability`** reports D = 0.5 + |AUC − 0.5|, so a reversed detector is
+still a detection.
+
+The AUC is a sum over pairs of groups: group c's positives against group d's
+negatives. The pairs with c = d compare a track's stego copy with its own clean
+copy, which is a different kind of comparison from one across tracks, and in the
+data they make up a fraction 1/n of the n² pairs. A round therefore weights a
+group drawn k times by k against itself, never pairs one draw of a group with a
+second draw of the same group, and weights two different groups drawn k and k′
+times by k·k′·n/(n−1), so on average a round mixes the two kinds as the data
+does. Pooling the drawn scores and taking their AUC instead counts a group drawn
+twice against itself four times: with stego always a hair above its own clean
+copy, the whole interval drifted above the estimate it was meant to bracket. The
+per-pair counts are computed once, so a round costs n² multiplications rather
+than a sort of every score. It is deterministic for a given seed, so reports
+can be compared run to run. With fewer than one round it returns the AUC itself
+as both bounds.
+
+**From AUC to ε.** Cachin calls a scheme ε-secure when the relative entropy
+D(P_C ‖ P_S) between clean and stego files is at most ε. Any detector's
+|AUC − ½| is at most the total variation δ between the two, and Pinsker's
+inequality gives δ ≤ √(ε/2), so a measured AUC proves ε ≥ 2(AUC − ½)² nats. This
+is only ever a detector-implied lower bound on the *benchmark* KL: an AUC at
+chance says this detector found nothing, not that ε is small. Bind every
+number to the harness `manifest.json` (commit, corpus, independent groups,
+libav versions). The harness writes those artefacts under `HARNESS_OUT`;
+this package itself never reads a filesystem path.
 
 > J. A. Hanley, B. J. McNeil. *The Meaning and Use of the Area under a Receiver
 > Operating Characteristic (ROC) Curve.* Radiology 143, 1982.
 > B. Efron, R. Tibshirani. *An Introduction to the Bootstrap.* Chapman & Hall, 1993.
+> C. Cachin. *An Information-Theoretic Model for Steganography.* Information and
+> Computation 192(1), 2004.
+
+## Frozen wardens
+
+`Rich` is a fixed summary, not a full spatial rich model: prediction errors of
+orders 1–8, differences of orders 1–4, an order-8 LPC residual energy, two
+decimation phases, parity, order-2 and order-3 co-occurrence symmetrized under
+sign flip and time reversal, a two-number order-4 summary, spectral flatness,
+eight log-spaced bands, a phase difference and a group-delay proxy. `RichPlanar`
+is the same vector when channels are stored one plane after another. The
+harness trains a logistic model on it. `TrainFLD`, `TrainStumps` and
+`TrainSubspace` are the linear, depth-1 boosted and random-subspace baselines
+on that same vector. They are not extra Holm rows.
+
+`ParityGap` is the selection-channel score. `ChangedFraction` needs the cover
+as well as the stego file, so it is an oracle and not an operational warden.
+`PlausibleLength` and `DeadTail` are the controls for an unmasked length and a
+payload with no filler. `HonestX25519` remains the control for a raw ephemeral
+public key.
+
+Vorbis packet, codebook and Huffman conditioning is not in `Rich`. The harness
+passes a flat `[]int32`. A model that needs that structure has to be given it
+explicitly; this package does not invent it.

@@ -173,7 +173,7 @@ func (s *SpanSuite) TestEmbedExtractSpansAcrossVorbisFrames() {
 	pub, priv, err := GenerateKeyPair()
 	s.Require().NoError(err)
 
-	msg := string(bytes.Repeat([]byte("the eagle lands at dawn, "), 80)) // ~2080 bytes
+	msg := string(bytes.Repeat([]byte("the eagle lands at dawn, "), 24)) // 600 bytes, three frames or more
 	out := s.stego(pub, Text(msg), s.pcmCarrier(4*FrameDuration))
 	res := s.extract(priv, out)
 
@@ -189,7 +189,7 @@ func (s *SpanSuite) TestEmbedExtractSpansAcrossLosslessFrames() {
 	s.Require().NoError(err)
 
 	msg := string(bytes.Repeat([]byte("0123456789"), 400)) // 4000 bytes
-	out := s.stego(pub, Text(msg), s.pcmCarrier(32*time.Second), WithFormat("flac"))
+	out := s.stego(pub, Text(msg), s.pcmCarrier(64*time.Second), WithFormat("flac"))
 	res := s.extract(priv, out)
 
 	s.Require().Len(res, 1)

@@ -24,6 +24,8 @@ func avNewDecoder(AudioInfo) (*Decoder, error) { return nil, errUnimplemented }
 
 func avNewEncoder(AudioInfo) (*Encoder, error) { return nil, errUnimplemented }
 
+func avEncInfo(*Encoder) error { return errUnimplemented }
+
 func avDemuxRead(*Demuxer) (Packet, error) { return Packet{}, errUnimplemented }
 
 func avDemuxClose(*Demuxer) error { return nil }
@@ -45,5 +47,7 @@ func avDecClose(*Decoder) error { return nil }
 func avEncSend(*Encoder, Frame) error { return errUnimplemented }
 
 func avEncReceive(*Encoder) (Packet, error) { return Packet{}, errUnimplemented }
+
+func avEncConvert(*Encoder, [][]float32, int) ([][]int32, error) { return nil, errUnimplemented }
 
 func avEncClose(*Encoder) error { return nil }

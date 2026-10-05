@@ -15,9 +15,7 @@ const defaultWindow = 4096
 
 // Window is the sample count the encoder takes per send. A codec that
 // accepts any length still goes through defaultWindow, so a whole carrier
-// never crosses the cgo boundary in one allocation. Encode zero-pads the
-// final send out to this, which callers who care where a sample ends up
-// have to account for.
+// never crosses the cgo boundary in one allocation.
 func (e *Encoder) Window() int {
 	if e == nil || e.info.FrameSize <= 0 {
 		return defaultWindow
@@ -26,7 +24,9 @@ func (e *Encoder) Window() int {
 }
 
 // Encode implements codec.Encoder: it splits pcm into encoder-sized
-// windows, sends each, and returns whatever packets came back.
+// windows, sends each, and returns whatever packets came back. pcm must
+// be the whole stream: its short last window is sent as it is, and libav
+// accepts a short frame only as the last one.
 func (e *Encoder) Encode(pcm codec.PCM) ([]codec.Packet, error) {
 	if e == nil || e.handle == nil {
 		return nil, ErrClosed
@@ -118,8 +118,10 @@ func drainEnc(e *Encoder) ([]codec.Packet, error) {
 	}
 }
 
-// splitPCM cuts p into encoder-sized windows. libvorbis rejects any
-// nb_samples other than frame_size, so a short tail is zero-padded.
+// splitPCM cuts p into encoder-sized windows and leaves the last one
+// short. Zero-padding it here would write samples the carrier never had,
+// which an ordinary encode does not do; libav pads the final frame itself
+// for an encoder that needs it, exactly as the ffmpeg command line does.
 func splitPCM(p codec.PCM, fs int) []codec.PCM {
 	if fs <= 0 || p.NbSamples <= 0 {
 		return nil
@@ -127,13 +129,14 @@ func splitPCM(p codec.PCM, fs int) []codec.PCM {
 	planes := pcmPlanes(p)
 	var out []codec.PCM
 	for off := 0; off < p.NbSamples; off += fs {
+		n := min(fs, p.NbSamples-off)
 		chunk := make([][]float32, len(planes))
 		for i, pl := range planes {
-			if off+fs <= len(pl) {
-				chunk[i] = pl[off : off+fs]
+			if off+n <= len(pl) {
+				chunk[i] = pl[off : off+n]
 				continue
 			}
-			sl := make([]float32, fs)
+			sl := make([]float32, n)
 			if off < len(pl) {
 				copy(sl, pl[off:])
 			}
@@ -141,7 +144,7 @@ func splitPCM(p codec.PCM, fs int) []codec.PCM {
 		}
 		out = append(out, codec.PCM{
 			Planes:     chunk,
-			NbSamples:  fs,
+			NbSamples:  n,
 			Channels:   p.Channels,
 			SampleRate: p.SampleRate,
 			Format:     codec.SampleFmtFLTP,

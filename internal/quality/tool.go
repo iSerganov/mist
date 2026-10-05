@@ -14,18 +14,20 @@ import (
 // files are resampled to 48 kHz 16-bit WAV with the ffmpeg CLI first,
 // which is the rate ViSQOL's audio mode and PEAQ are defined at.
 type Tool struct {
-	Name  string
-	bin   string
-	args  func(ref, deg string) []string
-	score *regexp.Regexp
+	Name   string
+	bin    string
+	ffmpeg string
+	args   func(ref, deg string) []string
+	score  *regexp.Regexp
 }
 
 // ViSQOL scores with Google's ViSQOL in audio mode; the score is MOS-LQO,
 // from 1 (bad) to 5 (transparent).
 func ViSQOL() Tool {
 	return Tool{
-		Name: "visqol",
-		bin:  "visqol",
+		Name:   "visqol",
+		bin:    configuredBinary("MIST_VISQOL", "visqol"),
+		ffmpeg: configuredBinary("MIST_FFMPEG", "ffmpeg"),
 		args: func(ref, deg string) []string {
 			return []string{"--reference_file", ref, "--degraded_file", deg}
 		},
@@ -37,8 +39,9 @@ func ViSQOL() Tool {
 // Difference Grade, from -4 (very annoying) to 0 (imperceptible).
 func PEAQ() Tool {
 	return Tool{
-		Name: "peaq",
-		bin:  "peaq",
+		Name:   "peaq",
+		bin:    configuredBinary("MIST_PEAQ", "peaq"),
+		ffmpeg: configuredBinary("MIST_FFMPEG", "ffmpeg"),
 		args: func(ref, deg string) []string {
 			return []string{ref, deg}
 		},
@@ -46,10 +49,17 @@ func PEAQ() Tool {
 	}
 }
 
-// Available reports whether the tool and ffmpeg are both on PATH.
+func configuredBinary(env, fallback string) string {
+	if path := os.Getenv(env); path != "" {
+		return path
+	}
+	return fallback
+}
+
+// Available reports whether the configured tool and ffmpeg are executable.
 func (t Tool) Available() bool {
 	_, errTool := exec.LookPath(t.bin)
-	_, errFFmpeg := exec.LookPath("ffmpeg")
+	_, errFFmpeg := exec.LookPath(t.ffmpeg)
 	return errTool == nil && errFFmpeg == nil
 }
 
@@ -65,10 +75,10 @@ func (t Tool) Score(ctx context.Context, ref, deg string) (float64, error) {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	refWav, degWav := filepath.Join(dir, "ref.wav"), filepath.Join(dir, "deg.wav")
-	if err := resample(ctx, ref, refWav); err != nil {
+	if err := resample(ctx, t.ffmpeg, ref, refWav); err != nil {
 		return 0, err
 	}
-	if err := resample(ctx, deg, degWav); err != nil {
+	if err := resample(ctx, t.ffmpeg, deg, degWav); err != nil {
 		return 0, err
 	}
 	out, err := exec.CommandContext(ctx, t.bin, t.args(refWav, degWav)...).CombinedOutput()
@@ -82,8 +92,8 @@ func (t Tool) Score(ctx context.Context, ref, deg string) (float64, error) {
 	return strconv.ParseFloat(string(m[1]), 64)
 }
 
-func resample(ctx context.Context, src, dst string) error {
-	out, err := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-y",
+func resample(ctx context.Context, ffmpeg, src, dst string) error {
+	out, err := exec.CommandContext(ctx, ffmpeg, "-nostdin", "-v", "error", "-y",
 		"-i", src, "-ar", "48000", "-c:a", "pcm_s16le", dst).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("quality: ffmpeg: %w: %s", err, out)
