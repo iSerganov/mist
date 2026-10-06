@@ -26,6 +26,9 @@ PYTHON ?= python3
 CNN_WARDEN ?= tools/cnn_warden/train.py
 CNN_EXPORT ?= $(HARNESS_OUT)/export
 CNN_OUT ?= $(HARNESS_OUT)/cnn.json
+CALIBRATION ?= calibration.json
+DIR ?= .
+REFERENCE ?=
 
 # libav's own verbosity during a test run, on top of Go's -v:
 # quiet | error | warning | info | verbose | debug | trace
@@ -71,6 +74,15 @@ cnn-warden:
 	"$(PYTHON)" "$(CNN_WARDEN)" "$(CNN_EXPORT)" --out "$(CNN_OUT)"
 	$(MAKE) harness
 
+# make calibrate [CORPUS=dir] [CORPUS_MANIFEST=...] [FORMATS=ogg,flac,wav]
+#   [CALIBRATION=calibration.json]
+# A harness run that also writes the reference `mist analyze` reads a single
+# file against: every detector's file scores on clean and stego copies, and
+# the trained wardens refit on all of them. It is embedded at build time, so
+# rebuild the CLI afterwards.
+calibrate:
+	MIST_HARNESS_CALIBRATION="$(abspath $(CALIBRATION))" $(MAKE) harness
+
 lint:
 	golangci-lint run --timeout=5m
 
@@ -97,6 +109,11 @@ estimate: build
 	./$(BIN) estimate --input "$(INPUT)" \
 		$(if $(OUTPUT),--output "$(OUTPUT)") $(if $(CODEC),--out-codec "$(CODEC)")
 
+# make analyze [DIR=folder] [REFERENCE=original]
+# Interactive: pick a file in DIR and see how a warden would score it.
+analyze: build
+	./$(BIN) analyze "$(DIR)" $(if $(REFERENCE),--reference "$(REFERENCE)")
+
 # make catch INPUT=out.ogg KEY=keys/mist.key [TIMEOUT=30s]
 catch: build
 	@test -n "$(INPUT)" || { echo "usage: make catch INPUT=<file|url> KEY=<private key> [TIMEOUT=30s]"; exit 2; }
@@ -122,4 +139,4 @@ keys:
 clean:
 	rm -rf bin
 
-.PHONY: test test-quiet harness cnn-warden lint build embed catch formats keys clean
+.PHONY: test test-quiet harness calibrate cnn-warden lint build embed estimate analyze catch formats keys clean

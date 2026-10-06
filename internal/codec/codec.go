@@ -46,6 +46,16 @@ const (
 	SampleFmtDBLP SampleFormat = 9
 )
 
+var sampleFormatNames = [...]string{"u8", "s16", "s32", "flt", "dbl", "u8p", "s16p", "s32p", "fltp", "dblp"}
+
+// String is libav's own name for the format, as ffprobe prints it.
+func (f SampleFormat) String() string {
+	if i := int(f); i >= 0 && i < len(sampleFormatNames) {
+		return sampleFormatNames[i]
+	}
+	return "unknown"
+}
+
 // DefaultVorbis is the Phase 1 encode target.
 var DefaultVorbis = Params{
 	ID:         IDVorbis,

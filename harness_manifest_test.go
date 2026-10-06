@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iSerganov/mist/internal/codec"
 	"github.com/iSerganov/mist/internal/steganalysis"
 	"github.com/iSerganov/mist/internal/stego"
 )
@@ -178,7 +177,7 @@ func makeRunManifest(
 			Randomness:    "fresh cryptographic randomness per output; exact stego bytes are intentionally nondeterministic",
 		},
 		Experiment: experimentManifest{
-			Formats: formats, Jobs: jobs, ChunkValues: harnessChunk,
+			Formats: formats, Jobs: jobs, ChunkValues: chunkValues,
 			BootstrapRounds: harnessRounds, Seed: harnessSeed, Folds: harnessFolds,
 			PayloadBytes: 64, MinimalBytes: 1,
 			CleanControls: []string{
@@ -229,7 +228,7 @@ func describeCorpus(carriers []harnessCarrier, corpus corpusDescription, maxSeco
 			Recipe: carrier.recipe,
 			SHA256: hex.EncodeToString(sum[:]), Bytes: len(data), Codec: info.CodecName,
 			Container: info.Container, SampleRate: info.SampleRate, Channels: info.Channels,
-			SampleFmt: sampleFormatName(info.SampleFmt), Bits: info.Bits, Samples: pcm.NbSamples,
+			SampleFmt: info.SampleFmt.String(), Bits: info.Bits, Samples: pcm.NbSamples,
 		}
 		if info.SampleRate > 0 {
 			entry.DurationSeconds = float64(pcm.NbSamples) / float64(info.SampleRate)
@@ -254,14 +253,6 @@ func describeCorpus(carriers []harnessCarrier, corpus corpusDescription, maxSeco
 	}
 	out.HeldOutGroups = len(heldGroups)
 	return out, nil
-}
-
-func sampleFormatName(format codec.SampleFormat) string {
-	i := int(format)
-	if i >= 0 && i < len(sampleFmtNames) {
-		return sampleFmtNames[i]
-	}
-	return "unknown"
 }
 
 func inspectGit() gitManifest {

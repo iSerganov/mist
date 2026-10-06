@@ -29,6 +29,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Lavf string ffmpeg writes. Lossless samples are quantized one decoded
   frame at a time, the way ffmpeg's resampler sees them, so a WAV no
   longer ends in a run of digital zeros the ffmpeg encode does not have.
+- The harness now shares its decoding, chunking, container traces and
+  ffmpeg reference encodes with `analyze`, so a calibration and the
+  analysis read against it always measure the same thing. Its reports are
+  unchanged.
+- The CLI depends on Bubble Tea v2 for the interactive screen.
+
+### Added
+
+- `mist analyze [folder]`: an interactive terminal browser for asking how a
+  warden would read an audio file. It walks a folder and its subfolders,
+  lists every audio file with what libav reports about it, and analyzes
+  the one picked. Every format is accepted. The report answers two separate
+  questions.
+  - **Does it carry a Mist message?** Every stage of the harness that one
+    file supports runs against it, and each score is read against a
+    calibration run built into the binary. The answer is a probability,
+    where 50% means no evidence either way. Mist is built to keep these
+    detectors at chance, so most files land near it. A format Mist cannot
+    write, such as MP3 or AAC, is 0%.
+  - **Did any other tool hide data in it?** These checks look outside the
+    audio samples:
+    - bytes after the end of the audio
+    - unknown chunks and atoms
+    - padding that is not empty
+    - files appended to cover art, and tags that read like encoded binary
+    - MP3 header bits that change between frames
+    - encrypted-looking MP3 ancillary data
+    - LSB replacement in lossless digital silence
+
+    They report a level (none, low, medium, high) with its reasons, not a
+    probability, because there is no corpus of other tools' output to
+    calibrate against. On 1,851 real files (radio captures, streamed AAC
+    segments, rips and editor exports) they flagged two as high, both
+    with genuinely unexplained data after the audio.
+- `--reference`, or `r` in the list, compares the file with its original.
+  The original is encoded through Mist with nothing embedded and diffed
+  value by value. A clean file made from it matches exactly, and a Mist
+  file differs in about 0.13% of its values, each sample by exactly ±1,
+  which settles the Mist question at 1% or 99%.
+- `mist.Probe` reads the stream facts ffprobe shows without decoding the
+  file. `mist.Analyze` is the analysis behind the command, for use as a
+  library.
+- `make calibrate` runs the harness and also writes `calibration.json`,
+  the reference `analyze` reads a file against. `make analyze DIR=`
+  starts the browser.
 
 ## [1.0.0]
 
