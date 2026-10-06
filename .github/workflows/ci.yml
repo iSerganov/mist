@@ -43,8 +43,14 @@ jobs:
           go-version-file: go.mod
       - name: Build
         run: go build ./...
-      - name: Test (race + coverage)
-        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+      # Coverage is a separate step. -race forces -covermode=atomic, and that
+      # pair is what turns the trellis and warden loops into multi-minute
+      # packages. The race run is the correctness check.
+      - name: Test (race)
+        run: go test -race -count=1 ./...
+      - name: Coverage
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: Generate coverage badge data
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         run: |

@@ -17,9 +17,12 @@ type codebook struct {
 	// least damaging substitute for a stego flip is a lookup rather than a
 	// decode. Built once at parse time and never mutated after.
 	vecs [][]float64
-	// flips holds each used entry's flip cost, or -1 where no entry of the
-	// same code length and opposite parity exists. Built with vecs.
+	// flips holds each used entry's squared vector distance to its nearest
+	// legal substitute, or -1 where no entry of the same code length and
+	// opposite parity exists. ranks is that distance divided by the
+	// entry's energy and raised when few substitutes exist. Built with vecs.
 	flips []float64
+	ranks []float64
 }
 
 // vector returns entry's dequantized vector, or nil for a codebook with no
@@ -49,29 +52,56 @@ func (cb *codebook) buildVectors() {
 // has nothing to measure, so each legal flip there costs one unit.
 func (cb *codebook) buildFlips() {
 	cb.flips = make([]float64, cb.entries)
+	cb.ranks = make([]float64, cb.entries)
 	for i := range cb.flips {
 		cb.flips[i] = -1
 	}
 	for _, e := range cb.used {
-		if cb.vecs == nil {
-			if cb.hasSibling(e) {
-				cb.flips[e] = 1
-			}
+		raw, rank, ok := cb.priceFlip(e)
+		if !ok {
 			continue
 		}
-		if best, d := cb.closest(e, e&1^1, cb.lens[e]); best >= 0 {
-			cb.flips[e] = d
-		}
+		cb.flips[e] = raw
+		cb.ranks[e] = rank
 	}
 }
 
-func (cb *codebook) hasSibling(entry int) bool {
+// priceFlip reports the nearest legal substitute's squared distance and
+// the rank used to choose among residues. A legal substitute keeps the
+// codeword length and flips the parity. No such entry is not a rank of
+// infinity: the symbol stays out of the carrier, because adding it would
+// change the positions the receiver walks.
+func (cb *codebook) priceFlip(entry int) (raw, rank float64, ok bool) {
+	if entry < 0 || entry >= len(cb.lens) {
+		return 0, 0, false
+	}
+	bit, length := entry&1^1, cb.lens[entry]
+	n := 0
+	best := math.Inf(1)
+	ref := cb.vector(entry)
 	for _, e := range cb.used {
-		if cb.lens[e] == cb.lens[entry] && e&1 != entry&1 {
-			return true
+		if e&1 != bit || cb.lens[e] != length {
+			continue
+		}
+		n++
+		if ref == nil {
+			continue
+		}
+		if d := vecDistance(ref, cb.vector(e)); d < best {
+			best = d
 		}
 	}
-	return false
+	if n == 0 {
+		return 0, 0, false
+	}
+	if ref == nil || math.IsInf(best, 1) {
+		return 1, 1, true
+	}
+	var energy float64
+	for _, x := range ref {
+		energy += x * x
+	}
+	return best, (best / (energy + 1)) * (1 + 1/float64(n)), true
 }
 
 // flipCost reports entry's flip cost and whether it can be flipped at all.
@@ -80,6 +110,13 @@ func (cb *codebook) flipCost(entry int) (float64, bool) {
 		return 0, false
 	}
 	return cb.flips[entry], true
+}
+
+func (cb *codebook) rankCost(entry int) (float64, bool) {
+	if entry < 0 || entry >= len(cb.ranks) || entry >= len(cb.flips) || cb.flips[entry] < 0 {
+		return 0, false
+	}
+	return cb.ranks[entry], true
 }
 
 type hNode struct {

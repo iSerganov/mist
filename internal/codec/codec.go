@@ -92,7 +92,13 @@ type Residue struct {
 	// FlipCost is the squared distance between this symbol's dequantized
 	// vector and that of the entry a flip would substitute for it: how
 	// much spectrum one embedded change moves. Zero when Unflippable.
+	// A distance past the sender's wet threshold is avoided outright.
 	FlipCost float64
+	// RankCost is FlipCost divided by the entry's own energy and raised
+	// when few same-length substitutes exist, so a loud, well-supported
+	// residue is cheaper to change than a quiet one with the same vector
+	// error. Zero means "use FlipCost".
+	RankCost float64
 }
 
 // Codec converts between PCM and a compressed bitstream and, when the

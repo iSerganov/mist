@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0]
+
+### Changed
+
+- Lossless embedding now spends its changes on noisy, poorly predicted
+  samples. Each eligible sample is priced by how much a ±1 grows the local
+  first and second difference, discounted by the neighbourhood's own
+  residual, with extra cost for stereo disturbance, clipping, and sitting
+  next to a silent run. The price has a floor and a capped ratio, and a
+  dither from the position key, so the cheap samples are neither free nor
+  a pure function of the waveform. The ±1 direction still follows the
+  frame histogram, tilted by that residual. The receiver's sample list is
+  unchanged, so a file embedded before this still extracts.
+- Vorbis changes are ranked by vector error divided by the residue's own
+  energy, and cost more when few same-length substitutes exist. A flip
+  whose raw vector error exceeds the wet threshold is still avoided, and
+  the substitute is still the nearest legal vector. The packet parse is
+  reused between the residue read and the rewrite.
+
 ## [1.0.0]
 
 ### Changed

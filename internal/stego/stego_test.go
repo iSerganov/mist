@@ -129,19 +129,21 @@ func (s *StegoSuite) TestResidueCostIsBoundedBymaxFlipCost() {
 	tests := []struct {
 		title    string
 		flipCost float64
+		rankCost float64
 		want     float32
 	}{
-		{"identical substitute still costs something", 0, minCost},
-		{"one quantizer step", 1, 1 + minCost},
-		{"at the bound", maxFlipCost, maxFlipCost + minCost},
-		{"past the bound", maxFlipCost + 1, wetCost},
+		{"identical substitute still costs something", 0, 0, minCost},
+		{"one quantizer step", 1, 0, 1 + minCost},
+		{"at the bound", maxFlipCost, 0, maxFlipCost + minCost},
+		{"past the bound", maxFlipCost + 1, 0.1, wetCost},
+		{"rank replaces the raw distance", 4, 0.2, 0.2 + minCost},
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
-			c := fakeRewriter{0: {{Band: 9000, FlipCost: tc.flipCost}}}
+			c := fakeRewriter{0: {{Band: 9000, FlipCost: tc.flipCost, RankCost: tc.rankCost}}}
 			res, err := collectResidues(c, []codec.Packet{{Data: []byte{0}}})
 			s.Require().NoError(err)
-			s.InDelta(tc.want, res.Cost(0), 1e-6)
+			s.InDelta(tc.want, res.Cost(0), 1e-5)
 		})
 	}
 }

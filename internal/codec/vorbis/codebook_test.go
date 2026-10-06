@@ -55,6 +55,17 @@ func (s *CodebookSuite) TestFlipCostIsTheDistanceToTheSubstitute() {
 	}
 }
 
+func (s *CodebookSuite) TestRankFallsWithEnergyAndSupport() {
+	cb := flipBook()
+	quiet, ok := cb.rankCost(0)
+	s.True(ok)
+	loud, ok := cb.rankCost(2)
+	s.True(ok)
+	s.Greater(quiet, loud, "the same neighbourhood should cost less on a louder entry")
+	_, ok = cb.rankCost(4)
+	s.False(ok)
+}
+
 func (s *CodebookSuite) TestBookWithoutVectorsCostsOneUnitPerLegalFlip() {
 	cb := &codebook{dim: 1, entries: 3, lens: []uint8{2, 2, 3}, used: []int{0, 1, 2}}
 	cb.buildFlips()

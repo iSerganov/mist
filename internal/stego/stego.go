@@ -187,9 +187,13 @@ func (r *residues) At(i int) int32 { return r.views[r.eligible[i]].Value }
 // substituted. Past maxFlipCost it jumps to wetCost, so the code routes
 // around the flip whenever it can.
 func (r *residues) Cost(i int) float32 {
-	d := r.all[r.eligible[i]].FlipCost
-	if d > maxFlipCost {
+	res := r.all[r.eligible[i]]
+	if res.FlipCost > maxFlipCost {
 		return wetCost
+	}
+	d := res.RankCost
+	if d <= 0 {
+		d = res.FlipCost
 	}
 	return float32(d) + minCost
 }

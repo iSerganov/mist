@@ -8,6 +8,7 @@
 package vorbis
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/iSerganov/mist/internal/av"
@@ -27,7 +28,9 @@ const (
 
 // Codec implements codec.Codec for Vorbis.
 type Codec struct {
-	setup *Setup
+	setup      *Setup
+	parsed     *packetState
+	parsedData []byte
 }
 
 // New returns the Vorbis codec.
@@ -96,7 +99,7 @@ func (c *Codec) Residues(pkt codec.Packet) ([]codec.Residue, error) {
 	if c == nil || c.setup == nil || c.setup.tables == nil {
 		return nil, fmt.Errorf("%w: codebooks not parsed", ErrBadSetup)
 	}
-	st, err := decodeAudio(c.setup, pkt.Data)
+	st, err := c.decodeCached(pkt.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -113,10 +116,13 @@ func (c *Codec) Rewrite(pkt codec.Packet, res []codec.Residue) (codec.Packet, er
 	if len(pkt.Data) == 0 || pkt.Data[0]&1 == 1 {
 		return codec.Packet{}, ErrBadPacket
 	}
-	st, err := decodeAudio(c.setup, pkt.Data)
+	st, err := c.decodeCached(pkt.Data)
 	if err != nil {
 		return codec.Packet{}, err
 	}
+	// Drop the cache before the programs are rewritten, so a later read of
+	// the same bytes cannot observe the substitute entries.
+	c.parsed, c.parsedData = nil, nil
 	orig := entryValues(st.progs)
 	applyResidues(st, res)
 	sanitizePrograms(c.setup.tables.books, st.progs, orig)
@@ -127,6 +133,19 @@ func (c *Codec) Rewrite(pkt codec.Packet, res []codec.Residue) (codec.Packet, er
 	out := pkt
 	out.Data = data
 	return out, nil
+}
+
+func (c *Codec) decodeCached(data []byte) (*packetState, error) {
+	if c.parsed != nil && bytes.Equal(c.parsedData, data) {
+		return c.parsed, nil
+	}
+	st, err := decodeAudio(c.setup, data)
+	if err != nil {
+		return nil, err
+	}
+	c.parsed = st
+	c.parsedData = append([]byte(nil), data...)
+	return st, nil
 }
 
 func paramsToInfo(p codec.Params) av.AudioInfo {
@@ -150,4 +169,3 @@ func paramsToInfo(p codec.Params) av.AudioInfo {
 		Extradata:  p.Extradata,
 	}
 }
-

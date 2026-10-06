@@ -118,9 +118,12 @@ func residuesFrom(st *packetState, rate int, books []*codebook) []codec.Residue 
 			if st.n > 0 && rate > 0 && spec >= 0 {
 				hz = spec * rate / (st.n * 2)
 			}
-			cost, ok := 0.0, false
+			cost, rank, ok := 0.0, 0.0, false
 			if s.book >= 0 && s.book < len(books) {
 				cost, ok = books[s.book].flipCost(s.entry)
+				if ok {
+					rank, _ = books[s.book].rankCost(s.entry)
+				}
 			}
 			out = append(out, codec.Residue{
 				Channel:     ch,
@@ -129,6 +132,7 @@ func residuesFrom(st *packetState, rate int, books []*codebook) []codec.Residue 
 				Value:       int32(s.entry),
 				Unflippable: !ok,
 				FlipCost:    cost,
+				RankCost:    rank,
 			})
 		}
 	}

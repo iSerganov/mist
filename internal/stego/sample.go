@@ -86,8 +86,9 @@ const (
 // only when the quiet run that would make stays short and clear of the
 // window's edges. Silent samples themselves are never touched.
 type sampleCover struct {
-	s    Samples
-	elig []int
+	s      Samples
+	elig   []int
+	posKey []byte
 	// hist is the frame's histogram before embedding, which step steers by.
 	hist map[int32]int
 }
@@ -128,14 +129,30 @@ func newSampleCover(s Samples) *sampleCover {
 
 func (s Samples) quiet(i int) bool { return abs32(s.At(i)) <= silenceFloor }
 
-func (c *sampleCover) Len() int         { return len(c.elig) }
-func (c *sampleCover) At(i int) int32   { return c.s.At(c.elig[i]) }
-func (c *sampleCover) Cost(int) float32 { return 1 }
+func (c *sampleCover) Len() int       { return len(c.elig) }
+func (c *sampleCover) At(i int) int32 { return c.s.At(c.elig[i]) }
+
+func (c *sampleCover) Cost(i int) float32 {
+	p := c.elig[i]
+	v := c.s.At(p)
+	return regularizeCost(c.positionCost(p, v, c.mayStep(p, v)), c.posKey, p)
+}
+
+func (c *sampleCover) mayStep(p int, v int32) bool {
+	return abs32(v) != silenceFloor+1 || c.mayQuiet(p)
+}
 
 func (c *sampleCover) Flip(i int) {
 	p := c.elig[i]
 	v := c.s.At(p)
-	c.s.Set(p, c.step(v, abs32(v) != silenceFloor+1 || c.mayQuiet(p)))
+	to := c.choose(p, v, c.mayStep(p, v))
+	if h := c.hist[v]; h > 1 {
+		c.hist[v] = h - 1
+	} else {
+		delete(c.hist, v)
+	}
+	c.hist[to]++
+	c.s.Set(p, to)
 }
 
 // mayQuiet reports whether sample p could become quiet without making a
@@ -208,7 +225,9 @@ func ApplySamples(s Samples, posKey []byte, bits Bits) error {
 	for i := range s.Len() {
 		s.Set(i, s.At(i))
 	}
-	return place(newSampleCover(s), posKey, bits)
+	cover := newSampleCover(s)
+	cover.posKey = posKey
+	return place(cover, posKey, bits)
 }
 
 // RecoverSamples reads the constant-density bit string from one frame.
