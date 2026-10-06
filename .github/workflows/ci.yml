@@ -14,10 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install libav
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libvorbis-dev
+      - uses: ./.github/actions/ffmpeg
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -34,10 +31,7 @@ jobs:
       contents: write # needed to publish the coverage badge to the 'badges' branch
     steps:
       - uses: actions/checkout@v6
-      - name: Install libav
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libvorbis-dev
+      - uses: ./.github/actions/ffmpeg
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod

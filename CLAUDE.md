@@ -208,7 +208,7 @@ The muxer sets `bits_per_coded_sample` for raw-PCM containers and `bits_per_raw_
 
 Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `Close`. No finalizers. Ogg custom IO must be `io.Seeker`.
 
-`CGO_ENABLED=1` needs system FFmpeg with libvorbis (`pkg-config` must find the four libs). CI installs `libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libvorbis-dev` on both lint and test.
+`CGO_ENABLED=1` needs system FFmpeg with libvorbis (`pkg-config` must find the four libs). CI builds FFmpeg 9.0.2 from source with libvorbis (`.github/actions/ffmpeg`, cached per runner image) on both lint and test, because Ubuntu's packaged FFmpeg is too old to match local results.
 
 ## CLI (`cmd/mist`)
 
