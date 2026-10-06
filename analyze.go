@@ -406,7 +406,7 @@ func (a *analyzer) plainFFmpeg(ffmpeg string, source []byte, ext string, info av
 	if target.Lossless {
 		return trace.Encode(a.ctx, ffmpeg, source, ext, target.Container, target.CodecName)
 	}
-	pcm, srcInfo, err := decodeCarrier(bytes.NewReader(source))
+	pcm, srcInfo, _, err := decodeCarrier(bytes.NewReader(source))
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +422,7 @@ func (a *analyzer) plainFFmpeg(ffmpeg string, source []byte, ext string, info av
 // deterministic, so a clean file made from the same original matches
 // exactly, and a Mist file differs by sparse changes at most at Mist's rate.
 func (a *analyzer) knownCover(refRaw []byte, suspect values) error {
-	refPCM, refInfo, err := decodeCarrier(bytes.NewReader(refRaw))
+	refPCM, refInfo, _, err := decodeCarrier(bytes.NewReader(refRaw))
 	if err != nil {
 		return fmt.Errorf("reference: %w", err)
 	}
@@ -518,7 +518,7 @@ func (v values) lossless() bool { return av.Lossless(v.info.NativeCodecID) }
 func (v values) mistDomain() bool { return v.lossless() || v.info.CodecID == av.CodecIDVorbis }
 
 func decodeValues(raw []byte) (values, error) {
-	pcm, info, err := decodeCarrier(bytes.NewReader(raw))
+	pcm, info, _, err := decodeCarrier(bytes.NewReader(raw))
 	if err != nil {
 		return values{}, err
 	}
@@ -624,11 +624,11 @@ func plainEncode(target av.Format, pcm codec.PCM, info av.AudioInfo) ([]byte, er
 	}
 	defer func() { _ = enc.Close() }()
 	if target.Lossless {
-		if err := enc.Snap(pcm.Planes); err != nil {
+		if err := enc.Snap(pcm.Planes, pcm.Frames); err != nil {
 			return nil, err
 		}
 	}
-	rc, err := encodeAndMux(enc, pcm, nil)
+	rc, err := encodeAndMux(enc, pcm, av.Metadata{}, nil)
 	if err != nil {
 		return nil, err
 	}
