@@ -28,6 +28,8 @@ WithCodec(name string) EmitterOption     // encoder override; ffmpeg's -c:a
 WithMaxRetries(n int) CatcherOption
 WithBackoff(d time.Duration) CatcherOption
 WithLogger(*slog.Logger) CatcherOption   // diagnostics only; never decrypt failures
+Probe(source string) (Source, error)      // libav's stream facts, no decode
+Analyze(ctx, source string, AnalyzeOptions) (Analysis, error)  // single-file warden: Mist probability + other-tool Suspicion
 ```
 
 `Listen` / `Embed` `source` is a path, `file://` URL, or `http(s)://` URL. Finite files close the channel on EOF; live streams run until `ctx` is cancelled. Distinguish with `ctx.Err()` after range. A `Listen` called with an already-cancelled context returns a closed channel and no error. `Catcher` and `Emitter` copy keys at construction; do not add setters. Embed methods return `io.ReadCloser` (no `mist.Reader` type); the caller must Close it.
@@ -35,6 +37,41 @@ WithLogger(*slog.Logger) CatcherOption   // diagnostics only; never decrypt fail
 Do not add `ErrNoMessage`. Failed AEAD / partial frame / empty frame are the same silent skip. Exposing "something was there but I could not decrypt" is a side channel. `ErrNoCapacity` is the opposite case and *must* be loud: it means the Emitter embedded into no frame at all, so the caller would otherwise get a silent no-op file. Telling the sender its own request failed leaks nothing to a warden.
 
 A demuxer read already in flight cannot be interrupted, so `Listen` relays the scan through a second channel (`relay`): the channel the caller ranges over closes as soon as `ctx` does, while the scan goroutine ends when its blocked read finally returns. `ListenReader` buffers a non-seekable reader whole (`asSeeker`), so live sources belong in `Listen`, not `ListenReader`.
+
+**Analysis.** `Analyze` is the harness turned on one file. It runs the stages a
+single file supports, in the harness's order, and reads each detector's per-file
+score against `calibration.json`. That file is embedded with `go:embed` and
+written by `make calibrate` (`harness_calibrate_test.go`). From the reference
+populations it gets a KDE likelihood ratio per stage, capped at `MaxLR`, and the
+probability is the **mean** log-LR at a 0.5 prior. The detectors share features,
+so a sum would count that evidence several times. A trained warden's reference is
+out-of-fold `CrossValidate` scores under the same rule as the refit model it
+ships, never the harness's nested, Platt-calibrated ones, because those describe
+a different scoring function. The chunking (`chunkValues`), `featuresOf`,
+`decodeValues` and `trainedWardens` live in `analyze.go` and the harness uses
+them, so the calibration and the analysis cannot drift apart. Three things decide
+a result outright:
+- a format Mist cannot write (`BasisFormat`, 0%);
+- a known-cover diff against `plainEncode` of a reference, the Mist pipeline with
+  nothing embedded (`BasisKnownCover`). Zero changes is clean. A share at most
+  `stego.Density`, all ±1 for samples, is Mist. Anything else means the reference
+  is not the original, and it is ignored;
+- otherwise the blind posterior (`BasisBlind`).
+
+The fingerprint stage (`internal/trace`) is `Informational`, shown but never
+evidence: a file from any other encoder differs from ffmpeg anyway. Selection and
+key-aware are listed as not run. `analyze` takes no key.
+
+`Analyze` also asks whether **any other tool** hid data (`ScopeAny` stages,
+`internal/forensics`). These checks run on every format, including the lossy
+ones Mist cannot write: container structure, MP3 frame fields, and lossless
+digital silence. They are uncalibrated, so they report a `Suspicion` level with
+reasons, never a probability, and they never feed `Probability`.
+`Analysis.Suspicion` is the strongest. Every rule in `internal/forensics` is
+there because a real file needed it. LAME writes its signature into ancillary
+bits at any alignment and cuts it short in small gaps. Streamed AAC segments
+stack two ID3v2 tags and end mid-frame. Old rips carry MusicMatch tags and fill.
+Re-run it over a large real collection before tightening a threshold.
 
 **Formats.** Carriers are decoded to PCM and re-encoded, and **the installed FFmpeg decides what is acceptable on both sides**: `AudioInfo.NativeCodecID` carries libav's own `AVCodecID` verbatim, `av.CanDecode` asks libav for a decoder, and `av.Lossless` asks the codec descriptor for `AV_CODEC_PROP_LOSSLESS`, so Mist keeps no whitelist. `CodecID` stays Mist-local for the codecs Mist reasons about (Vorbis), and is `CodecIDNone` for the rest. An input libav cannot decode is `ErrUnsupportedCodec`.
 
@@ -58,11 +95,14 @@ lossless.go       sample-domain embed + windower (the lossless half of embed/ext
 format.go         Format, Formats, LookupFormat: which targets are writable
 span.go           planChunks/planSpan: split a payload across frames when it doesn't fit one
 estimate.go       EstimateCapacity: real per-frame and total room, without embedding anything
+analyze.go        Probe, Analyze: the harness's stages on one file, read against the calibration
+calibration.go    calibration.json (go:embed, written by `make calibrate`) and its lookup
 catcher.go        NewCatcher, Listen / ListenReader / Extract, options
 extract.go        scanner interface + residueScanner / sampleScanner, shared opener
 suite_test.go     shared test fixtures (audioSuite) for the root suites
 harness_*_test.go `make harness` (build tag harness): corpus, measurement, report,
-                  key-aware warden (harness_key_test.go), CNN export
+                  key-aware warden (harness_key_test.go), CNN export, calibration
+                  export (harness_calibrate_test.go)
 tools/cnn_warden  Python CNN warden over the harness export; README.md
 example/          Godoc examples: keys, Emitter, Catcher
 mist.go-level     payload, keys, protocol constants, errors
@@ -79,6 +119,12 @@ internal/steganalysis  the warden: chi-square, SPA, RS, HCF-COM, features,
                   second-difference Markov features, cross-validated logistic
                   classifier, AUC; README.md explains each
 internal/quality  lag-aligned SDR and segmental SNR, ViSQOL/PEAQ wrappers
+internal/forensics data any tool may hide outside the samples: container trailers,
+                  unknown chunks, cover-art tails, MP3 header bits and ancillary
+                  data, LSB replacement in silence; bytes in, levels out, no av
+internal/trace    what a file shows without decoding it (container, tags, ffprobe),
+                  field-by-field Diff, and the plain ffmpeg CLI encode it is
+                  compared against; shared by the harness and Analyze
 internal/dsp      FFT shared by steganalysis and quality
 ```
 
@@ -170,6 +216,7 @@ Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `C
 mist embed --input <file|url> --data <text> [--key pub] [--output out.flac] [--out-codec alac]
 mist catch --input <file|url> --key <priv> [--timeout 30s]
 mist formats
+mist analyze [folder] [--reference original]   # browses subfolders too
 ```
 
 Built on cobra. `embed` mints a keypair when `--key` is omitted and writes it
@@ -183,6 +230,15 @@ one (`alac` in an `.m4a`). `--out-codec` takes either name libav knows a codec b
 the encoder's or the codec's (`dca` or `dts`), because `formats` prints the latter.
 Output defaults to `<input>.stego.ogg`. An unwritable target fails in
 `LookupFormat` before the carrier is read.
+
+`analyze` is the one interactive command, built on **Bubble Tea v2**
+(`charm.land/bubbletea/v2`, `bubbles/v2`, `lipgloss/v2`). Do not go back to v1:
+its package `init` asks the terminal for its background colour, and every `mist`
+command pays for that, up to a 5 s hang on a terminal that never answers. The
+model (`analyze_tui.go`) takes `probe` and `analyze` as functions so tests drive
+it without libav. `renderReport` (`analyze_report.go`) is a pure function. The
+TUI writes through Bubble Tea, not `printf`, and `--no-color` maps to
+`colorprofile.Ascii`.
 
 Signals (`SIGINT`/`SIGTERM`/`SIGHUP`) cancel the command's context via
 `signal.NotifyContext`; SIGKILL cannot be trapped. Colour is disabled for
@@ -198,7 +254,12 @@ orders of magnitude more room and only fails on a carrier that is too short.
 
 ## Make targets
 
-`build` (to `bin/mist`), `embed`, `catch`, `formats`, `keys`, `test`, `test-quiet`, `harness`, `cnn-warden`, `lint`, `clean`.
+`build` (to `bin/mist`), `embed`, `catch`, `formats`, `estimate`, `analyze`, `keys`, `test`, `test-quiet`, `harness`, `calibrate`, `cnn-warden`, `lint`, `clean`.
+`analyze` takes `DIR=` and `REFERENCE=`. `calibrate` is `harness` with
+`MIST_HARNESS_CALIBRATION` set to `CALIBRATION=` (default `calibration.json`).
+Recalibrate after changing a detector, a feature vector or the embedder, and
+commit the result: a model whose dimension no longer matches its features is
+reported as stale and skipped.
 `test` is the loud one: `-v -race -count=1 -cover`, `GOTRACEBACK=all`, and
 `MIST_AV_LOG=$(LOG)` so libav talks too; `test-quiet` is the same run without
 the per-test output. 

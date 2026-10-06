@@ -1,6 +1,8 @@
 package steganalysis
 
 import (
+	"encoding/json"
+	"fmt"
 	"math"
 	"slices"
 )
@@ -58,6 +60,35 @@ func TrainLogisticPenalty(x [][]float64, y []bool, penalty float64) *Logistic {
 func (m *Logistic) Score(x []float64) float64 {
 	return sigmoid(m.b + dot(m.w, m.normalise(x)))
 }
+
+type logisticJSON struct {
+	W     []float64 `json:"w"`
+	Mean  []float64 `json:"mean"`
+	Scale []float64 `json:"scale"`
+	B     float64   `json:"b"`
+}
+
+// MarshalJSON writes the fitted weights and standardisation, so a model
+// trained once can score files in another process.
+func (m *Logistic) MarshalJSON() ([]byte, error) {
+	return json.Marshal(logisticJSON{W: m.w, Mean: m.mean, Scale: m.scale, B: m.b})
+}
+
+// UnmarshalJSON reads a model MarshalJSON wrote.
+func (m *Logistic) UnmarshalJSON(b []byte) error {
+	var v logisticJSON
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	if len(v.Mean) != len(v.W) || len(v.Scale) != len(v.W) {
+		return fmt.Errorf("logistic: %d weights, %d means, %d scales", len(v.W), len(v.Mean), len(v.Scale))
+	}
+	m.w, m.mean, m.scale, m.b = v.W, v.Mean, v.Scale, v.B
+	return nil
+}
+
+// Dim is the length of the feature vector the model scores.
+func (m *Logistic) Dim() int { return len(m.w) }
 
 // CrossValidate returns an out-of-fold score for every sample. Samples are
 // split into folds by group, and each fold is scored by a model trained on

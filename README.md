@@ -38,6 +38,7 @@ read in an afternoon. Contributions and design discussion are very welcome.
     - [catch](#catch)
     - [formats](#formats)
     - [estimate](#estimate)
+    - [analyze](#analyze)
     - [Interrupting a run](#interrupting-a-run)
   - [Library](#library)
     - [Emitter](#emitter)
@@ -328,6 +329,126 @@ A lossless target is cheap to check — capacity there is arithmetic over the
 sample count, so no full encode is needed — while a Vorbis target costs what
 `embed` costs, since only the encoder's real residues say how many are
 eligible.
+
+### analyze
+
+```bash
+mist analyze ~/Music/incoming            # default: the current folder
+mist analyze . --reference originals/carrier.wav
+```
+
+`analyze` is interactive. It browses a folder: a `..` row for its parent, its
+subfolders, then the audio files in it. Each file is shown with what libav
+reports about it (the fields `ffprobe` shows: codec, container, sample rate,
+channels, bitrate, duration) and its size. Files libav cannot decode as audio
+are left out.
+
+| Key | Does |
+|---|---|
+| `↑`/`↓` (`k`/`j`) | move |
+| `enter` (`→`/`l`) | open the folder, or analyze the file |
+| `←`/`backspace` (`h`) | go up to the parent folder |
+| `/` | filter by name |
+| `r` | mark the file as the original to compare against (again to clear) |
+| `pgup`/`pgdown` | page through a long folder |
+| `b`/`esc` | back to the list from a report; `esc` also cancels a running analysis |
+| `q` | quit |
+
+Every audio format is analyzed, and the report asks two separate questions.
+
+**Does it carry a Mist message?** This part runs every stage of
+[`make harness`](#development) that one file supports, in the harness's order,
+and gives a calibrated probability.
+
+| Stage | What it asks |
+|---|---|
+| format | Could Mist have written this at all? Mist writes only Ogg Vorbis and lossless audio, so any other lossy file (MP3, AAC, Opus) is 0% for Mist. Its other-tool checks still run |
+| chi-square, spa, rs, hcf-com | The classical LSB detectors, on the values Mist embeds into: grid samples for lossless audio, residue indices for Vorbis |
+| classifier, markov, rich | The trained wardens, scoring the file with the models the calibration run fitted |
+| dead tail | Is the end constant while the start is not, as embedding without filler would leave it? |
+| fingerprint | Re-encodes the file with the `ffmpeg` command line at its own settings and compares container and metadata field by field. Context only: any encoder other than ffmpeg differs too. Needs `ffmpeg` and `ffprobe` on `PATH` |
+| known cover, sdr | Only with a reference (below) |
+| selection, key-aware | Not run: they need the recipient's public key, which `analyze` neither needs nor accepts |
+| invariance, perceptual | Not run: they need two embeddings of the original, or ViSQOL/PEAQ |
+
+**Did any other tool hide data in it?** These checks look where steganography
+tools and file-joining tricks put data outside the audio itself. None of them is
+calibrated, since there is no corpus of other tools' output to calibrate
+against, so each reports a level (none, low, medium, high) with the reasons for
+it, never a percentage.
+
+| Check | What it looks for |
+|---|---|
+| container | Bytes after the end of the audio that no tag format accounts for (MP3, AAC, Ogg, WAV, AIFF, MP4), bytes between frames, unknown WAV/AIFF chunks and MP4 atoms, padding that is not empty, files appended to cover art (ID3 `APIC`, FLAC `PICTURE`), large binary `PRIV`/`GEOB` frames, and tag text that reads like base64 or hex. ID3v1, APEv2, Lyrics3 and MusicMatch tags, XMP packets, Content Credentials (`C2PA`), Pro Tools and broadcast chunks, and runs of `0x00`/`0xFF` fill are recognised as ordinary |
+| mp3 header bits | The private, copyright, original and emphasis bits of every frame. An encoder sets them once per file; changing from frame to frame they carry one bit per frame |
+| mp3 ancillary | The bits between one frame's audio and the next. Encoders leave them zero or write their own name and padding (LAME writes `LAME3.100UUUU…`); anything else, at the entropy of encrypted data, is a payload |
+| mp3 granules | Context only: the parity of each granule's length, where MP3Stego hides its bits. An honest encoder's lengths have random parity too, so this cannot be scored without the encoder that made the file |
+| silence | Lossless files only: isolated ±1 samples dropped into digital silence, the trace LSB-replacement tools leave. Dither fills silence densely and a fade reaches ±1 in runs, so neither counts |
+
+A tool that changes audio samples as carefully as Mist does leaves nothing
+these checks can see; they catch the far more common tricks.
+
+```
+  mist · analysis · 02 - Ride the Lightning.mp3
+  mp3 · lossy · 44100 Hz · 2ch · 320 kbps · 6m57s · 15.9 MiB
+
+  Mist's own embedding  calibrated
+  ✓ format           mp3 is lossy and not Vorbis: Mist cannot write it, so it carries no Mist message
+
+  Any steganography tool  structure and format checks, not calibrated
+  ✓ container        nothing hidden found
+  ✓ mp3 header bits  nothing hidden found
+  ✓ mp3 ancillary    nothing hidden found; 214484 bytes of ancillary data, 0 bytes of it neither zero…
+  i mp3 granules     context: 63910 granules, 49.7% of lengths odd; no Xing/Info header, …
+  · silence          not run: needs exact samples; a lossy decode is not
+  ╭──────────────────────────────────────────────────────────────────────╮
+  │  Summary                                                             │
+  │  Not found                                                           │
+  │    ○ mp3 is lossy and not Vorbis: Mist cannot write it, so it        │
+  │      carries no Mist message                                         │
+  │    ○ no data hidden outside the audio: container, mp3 header bits,   │
+  │      mp3 ancillary                                                   │
+  │  Mist message:          0%  Mist cannot write this format            │
+  │  Other steganography:   NONE  nothing found by the structure and     │
+  │                         format checks                                │
+  ╰──────────────────────────────────────────────────────────────────────╯
+```
+
+The checks were tuned against 1,851 real files: radio captures, streamed AAC
+segments, ads, rips and editor exports. Two were flagged high, both radio files
+with genuinely unexplained bytes after the last frame, and one medium, a WAV with
+a non-standard chunk. Read high as "data is here that no player reads", not as
+proof of a hidden message.
+
+**What the Mist percentage means.** Each detector's score is read against the
+calibration built into the binary (`make calibrate`, below): how often clean and
+stego files of the same format scored like this one in that run. That gives a
+likelihood ratio per detector, capped at 20 to 1. The probability is the
+average of their logarithms applied to a 50% prior. It is an average, not a
+sum, because the detectors read overlapping features of the same file and
+summing would count that evidence several times. **50% means no evidence either
+way**, and that is what most files score: Mist is designed so these detectors
+stay at chance, and the harness measures that they do. Read a blind result as
+"a warden without the original could tell this much", not as proof either way.
+The report names the calibration run it used. A lossless codec the calibration
+has no entry for borrows another lossless one, and the report says so.
+
+**With the original.** Pass `--reference <file>`, or highlight a file in the
+list and press `r` to mark it (a `REF` badge appears; `r` again clears it). The
+next analysis then also encodes that original through Mist's own encoder with
+nothing embedded and compares its values with the file's. Encoding is
+deterministic, so a clean encode of the same original matches exactly, while a
+Mist file differs in a small share of values (about 0.13%), each sample by
+exactly ±1. Either result decides the Mist probability (1% or 99%) and the
+summary says so. A reference that is not the file's original differs in far more
+values than Mist ever changes. It is reported and ignored, and the blind result
+stands. For Vorbis this also needs the same libvorbis build that made the file.
+With a reference, the fingerprint compares against ffmpeg's encode of the
+original, which is the harness's own comparison, and `sdr` reports the
+signal-to-distortion against it.
+
+`analyze` needs a terminal: it refuses to run with its input or output
+redirected.
 
 ### Interrupting a run
 
@@ -628,12 +749,14 @@ make embed INPUT=song.mp3 DATA="hello" OUTPUT=out.flac KEY=keys/mist.pub
 make catch INPUT=out.flac KEY=keys/mist.key TIMEOUT=30s
 make formats                     # output formats this FFmpeg build can write
 make estimate INPUT=song.mp3 OUTPUT=out.flac   # capacity check, no key needed
+make analyze DIR=~/Music REFERENCE=original.wav  # interactive warden; REFERENCE optional
 make test                        # verbose: -v -race -cover, full tracebacks
 make test LOG=trace              # ...and libav logging turned all the way up
 make test-quiet                  # same run, results only
 make lint                        # golangci-lint run --timeout=5m
 make harness CORPUS="$CORPUS" CORPUS_MANIFEST=testdata/harness/corpus.example.json
 make cnn-warden CORPUS="$CORPUS" CORPUS_MANIFEST=testdata/harness/corpus.example.json
+make calibrate CORPUS="$CORPUS" CORPUS_MANIFEST=testdata/harness/corpus.example.json
 ```
 
 `make harness` re-encodes every file in `CORPUS` (or a built-in synthetic set
@@ -661,6 +784,16 @@ hour-long tracks need it), `HARNESS_OUT=` chooses the output directory,
 side by side) into one report. It writes `report.md`, `report.json`,
 `manifest.json` and `scores.json`. It is build-tagged, so `make test` and CI
 never run it.
+
+`make calibrate` is a harness run that also writes `calibration.json` (or
+`CALIBRATION=`), the reference `mist analyze` reads a single file against. Per
+output format it holds every detector's per-file scores on the stego and clean
+copies, and the trained wardens refit on every chunk. A trained warden's scores
+are out-of-fold scores under the same training rule, so they describe files the
+model never saw. Carrier names are not written. The file is embedded at build
+time, so rebuild the CLI after recalibrating. It names the harness commit and
+corpus it came from, and `analyze` shows that in every report. A run that only
+merges reports (`MERGE=`) writes no calibration.
 
 `make test` is deliberately loud: every test and subtest is named, `t.Log`
 output is shown, coverage is reported per package, `GOTRACEBACK=all` dumps

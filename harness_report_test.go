@@ -54,6 +54,7 @@ type formatReport struct {
 	Added          stat              `json:"added_sdr"`
 	PerceptualDrop *stat             `json:"perceptual_drop,omitempty"`
 	Carriers       []carrierResult   `json:"carriers,omitempty"`
+	calibration    *calibratedFormat
 }
 
 type rawFormatScores struct {
@@ -391,8 +392,6 @@ const (
 	inaudibleSDR    = 70
 	aucDetectable   = 0.1
 	invarianceSlack = 0.05
-	classifierName  = "classifier"
-	markovName      = "markov"
 )
 
 type level int

@@ -20,8 +20,12 @@ func useColor(on bool, f *os.File) {
 		colorOn = false
 		return
 	}
+	colorOn = isTerminal(f)
+}
+
+func isTerminal(f *os.File) bool {
 	info, err := f.Stat()
-	colorOn = err == nil && info.Mode()&os.ModeCharDevice != 0
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func style(code string) func(string) string {

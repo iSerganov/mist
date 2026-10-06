@@ -29,8 +29,8 @@ func selectionScore(vals []int32, pub []byte) (float64, error) {
 		return 0, nil
 	}
 	window := vals
-	if len(window) > harnessChunk {
-		window = window[:harnessChunk]
+	if len(window) > chunkValues {
+		window = window[:chunkValues]
 	}
 	seed, err := crypto.PositionSeed(pub, 0)
 	if err != nil {
