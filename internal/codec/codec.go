@@ -64,6 +64,11 @@ type PCM struct {
 	SampleRate int
 	Format     SampleFormat
 	PTS        int64
+	// Frames is each decoded frame's length, summing to NbSamples. Empty
+	// when the PCM did not come from a demuxer. The encoder's resampler
+	// quantizes one of these at a time, because that is what ffmpeg does
+	// and the remainder of a frame rounds differently from the rest.
+	Frames []int
 }
 
 // Packet is one compressed audio packet, codec payload only — no Ogg

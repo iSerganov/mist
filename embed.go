@@ -46,11 +46,11 @@ func (e *Emitter) embed(ctx context.Context, r io.Reader, payload Payload) (io.R
 	if err := e.validate(ctx, payload); err != nil {
 		return nil, err
 	}
-	pcm, info, err := decodeCarrier(r)
+	pcm, info, meta, err := decodeCarrier(r)
 	if err != nil {
 		return nil, err
 	}
-	return e.embedPCM(ctx, pcm, info, payload)
+	return e.embedPCM(ctx, pcm, info, meta, payload)
 }
 
 // embedURL decodes carrier directly via libav's own URL handling (path,
@@ -61,11 +61,11 @@ func (e *Emitter) embedURL(ctx context.Context, source string, payload Payload) 
 	if err := e.validate(ctx, payload); err != nil {
 		return nil, err
 	}
-	pcm, info, err := decodeCarrierURL(source)
+	pcm, info, meta, err := decodeCarrierURL(source)
 	if err != nil {
 		return nil, err
 	}
-	return e.embedPCM(ctx, pcm, info, payload)
+	return e.embedPCM(ctx, pcm, info, meta, payload)
 }
 
 // validate checks the arguments common to every embed entry point before
@@ -88,7 +88,7 @@ func (e *Emitter) validate(ctx context.Context, payload Payload) error {
 // back bit for bit, so the payload goes into PCM before the encoder runs;
 // Vorbis does not, so it goes into the residues the encoder produced. The
 // frame layout, the density and the crypto are the same either way.
-func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo, payload Payload) (io.ReadCloser, error) {
+func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo, meta av.Metadata, payload Payload) (io.ReadCloser, error) {
 	plain, err := marshalPlain(payload, e.senderPriv)
 	if err != nil {
 		return nil, err
@@ -100,15 +100,15 @@ func (e *Emitter) embedPCM(ctx context.Context, pcm codec.PCM, info av.AudioInfo
 	defer func() { _ = enc.Close() }()
 
 	if e.target.Lossless {
-		if err := enc.Snap(pcm.Planes); err != nil {
+		if err := enc.Snap(pcm.Planes, pcm.Frames); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
 		if err := e.embedSamples(ctx, pcm, av.SampleScale(enc.Info().SampleFmt), plain); err != nil {
 			return nil, err
 		}
-		return encodeAndMux(enc, pcm, nil)
+		return encodeAndMux(enc, pcm, meta, nil)
 	}
-	return encodeAndMux(enc, pcm, func(pkts []codec.Packet) ([]codec.Packet, error) {
+	return encodeAndMux(enc, pcm, meta, func(pkts []codec.Packet) ([]codec.Packet, error) {
 		return e.embedResidues(ctx, enc.Info(), pkts, frameParams(pcm), plain)
 	})
 }
@@ -201,7 +201,7 @@ func nominalRate(enc *av.Encoder) int32 {
 // rewrite, when set, gets every packet before muxing — the hook the Vorbis
 // path embeds in, and the one a lossless path has no use for because its
 // bits were already in the PCM.
-func encodeAndMux(enc *av.Encoder, pcm codec.PCM, rewrite func([]codec.Packet) ([]codec.Packet, error)) (io.ReadCloser, error) {
+func encodeAndMux(enc *av.Encoder, pcm codec.PCM, meta av.Metadata, rewrite func([]codec.Packet) ([]codec.Packet, error)) (io.ReadCloser, error) {
 	pkts, err := enc.Encode(pcm)
 	if err != nil {
 		return nil, err
@@ -216,7 +216,7 @@ func encodeAndMux(enc *av.Encoder, pcm codec.PCM, rewrite func([]codec.Packet) (
 			return nil, err
 		}
 	}
-	return muxPackets(enc.Info(), all)
+	return muxPackets(enc.Info(), meta, all)
 }
 
 // embedResidues is the Vorbis path: group the encoder's packets into stego
@@ -279,7 +279,7 @@ func (e *Emitter) embedResidues(ctx context.Context, info av.AudioInfo, pkts []c
 // from the container, rather than what the encoder itself reported. See
 // embedResidues for why the two can differ.
 func canonicalPackets(info av.AudioInfo, pkts []codec.Packet) ([]codec.Packet, error) {
-	rc, err := muxPackets(info, pkts)
+	rc, err := muxPackets(info, av.Metadata{}, pkts)
 	if err != nil {
 		return nil, err
 	}
@@ -377,10 +377,10 @@ func frameParams(pcm codec.PCM) frame.Params {
 	}
 }
 
-func decodeCarrier(r io.Reader) (codec.PCM, av.AudioInfo, error) {
+func decodeCarrier(r io.Reader) (codec.PCM, av.AudioInfo, av.Metadata, error) {
 	d, err := av.OpenDemuxerReader(asSeeker(r))
 	if err != nil {
-		return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return codec.PCM{}, av.AudioInfo{}, av.Metadata{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
 	defer func() { _ = d.Close() }()
 	return decodeFromDemuxer(d)
@@ -390,24 +390,28 @@ func decodeCarrier(r io.Reader) (codec.PCM, av.AudioInfo, error) {
 // path, a file:// URL, or an http(s):// URL — without tunneling it
 // through a Go io.Reader. This is the only route into a plain http(s)
 // source, since it does not arrive as an io.Reader in the first place.
-func decodeCarrierURL(source string) (codec.PCM, av.AudioInfo, error) {
+func decodeCarrierURL(source string) (codec.PCM, av.AudioInfo, av.Metadata, error) {
 	d, err := av.OpenDemuxer(source)
 	if err != nil {
-		return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+		return codec.PCM{}, av.AudioInfo{}, av.Metadata{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
 	defer func() { _ = d.Close() }()
 	return decodeFromDemuxer(d)
 }
 
-func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, av.AudioInfo, error) {
+func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, av.AudioInfo, av.Metadata, error) {
 	info := d.Info()
+	meta, err := d.Metadata()
+	if err != nil {
+		return codec.PCM{}, av.AudioInfo{}, av.Metadata{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+	}
 	if !av.CanDecode(info) {
-		return codec.PCM{}, av.AudioInfo{},
+		return codec.PCM{}, av.AudioInfo{}, av.Metadata{},
 			fmt.Errorf("%w: this FFmpeg build cannot decode %s", ErrUnsupportedCodec, codecName(info))
 	}
 	dec, err := av.NewDecoder(info)
 	if err != nil {
-		return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: decoder", ErrCarrier)
+		return codec.PCM{}, av.AudioInfo{}, av.Metadata{}, fmt.Errorf("%w: decoder", ErrCarrier)
 	}
 	defer func() { _ = dec.Close() }()
 	var acc accumulator
@@ -417,29 +421,30 @@ func decodeFromDemuxer(d *av.Demuxer) (codec.PCM, av.AudioInfo, error) {
 			break
 		}
 		if err != nil {
-			return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+			return codec.PCM{}, av.AudioInfo{}, av.Metadata{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
 		if err := dec.Send(pkt); err != nil && !errors.Is(err, av.ErrAgain) {
-			return codec.PCM{}, av.AudioInfo{}, fmt.Errorf("%w: %v", ErrCarrier, err)
+			return codec.PCM{}, av.AudioInfo{}, av.Metadata{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
 		if err := acc.drain(dec); err != nil {
-			return codec.PCM{}, av.AudioInfo{}, err
+			return codec.PCM{}, av.AudioInfo{}, av.Metadata{}, err
 		}
 	}
 	_ = dec.Send(av.Packet{})
 	if err := acc.drain(dec); err != nil {
-		return codec.PCM{}, av.AudioInfo{}, err
+		return codec.PCM{}, av.AudioInfo{}, av.Metadata{}, err
 	}
 	if acc.n == 0 || len(acc.planes) == 0 {
-		return codec.PCM{}, av.AudioInfo{}, ErrCarrier
+		return codec.PCM{}, av.AudioInfo{}, av.Metadata{}, ErrCarrier
 	}
-	return acc.pcm(), info, nil
+	return acc.pcm(), info, meta, nil
 }
 
 // accumulator collects a decoder's output into one contiguous set of
 // float planes. Mist re-encodes the whole carrier, so it needs all of it.
 type accumulator struct {
 	planes [][]float32
+	frames []int
 	n      int
 	ch     int
 	rate   int
@@ -467,6 +472,7 @@ func (a *accumulator) add(f codec.PCM) {
 		}
 	}
 	if len(f.Planes) > 0 {
+		a.frames = append(a.frames, len(f.Planes[0]))
 		a.n += len(f.Planes[0])
 	}
 }
@@ -478,6 +484,7 @@ func (a *accumulator) pcm() codec.PCM {
 		Channels:   a.ch,
 		SampleRate: a.rate,
 		Format:     codec.SampleFmtFLTP,
+		Frames:     a.frames,
 	}
 }
 
@@ -505,11 +512,39 @@ func marshalPlain(p Payload, senderPriv []byte) ([]byte, error) {
 	return wire.MarshalPayload(wp)
 }
 
-func muxPackets(info av.AudioInfo, pkts []codec.Packet) (io.ReadCloser, error) {
+// writeTags copies source metadata the way ffmpeg's CLI does: file tags
+// first, then the audio stream's, dropping the product tags the CLI
+// itself removes. Stream tags do not replace an encoder ident the muxer
+// already wrote.
+func writeTags(m *av.Muxer, meta av.Metadata) error {
+	skip := map[string]struct{}{
+		"creation_time": {}, "company_name": {}, "product_name": {}, "product_version": {},
+	}
+	for _, t := range meta.Format {
+		if _, drop := skip[t.Key]; drop {
+			continue
+		}
+		if err := m.AddTag(av.TagsFormat, t.Key, t.Value); err != nil {
+			return err
+		}
+	}
+	for _, t := range meta.Stream {
+		if err := m.AddTag(av.TagsStream, t.Key, t.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func muxPackets(info av.AudioInfo, meta av.Metadata, pkts []codec.Packet) (io.ReadCloser, error) {
 	var buf seekBuf
 	m, err := av.NewMuxer(&buf, info)
 	if err != nil {
 		return nil, fmt.Errorf("%w: muxer", err)
+	}
+	if err := writeTags(m, meta); err != nil {
+		_ = m.Close()
+		return nil, err
 	}
 	if err := m.WriteHeader(); err != nil {
 		_ = m.Close()

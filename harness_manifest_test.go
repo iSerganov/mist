@@ -219,7 +219,7 @@ func describeCorpus(carriers []harnessCarrier, corpus corpusDescription, maxSeco
 		if err != nil {
 			return corpusManifest{}, fmt.Errorf("manifest carrier %q: %w", carrier.name, err)
 		}
-		pcm, info, err := decodeCarrier(bytes.NewReader(data))
+		pcm, info, _, err := decodeCarrier(bytes.NewReader(data))
 		if err != nil {
 			return corpusManifest{}, fmt.Errorf("manifest carrier %q: %w", carrier.name, err)
 		}

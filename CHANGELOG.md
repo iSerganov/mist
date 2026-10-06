@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose raw vector error exceeds the wet threshold is still avoided, and
   the substitute is still the nearest legal vector. The packet parse is
   reused between the residue read and the rewrite.
+- Output metadata follows ffmpeg's copy. The source's format tags and the
+  audio stream's tags are written in that order, the product tags the
+  ffmpeg CLI drops are dropped, and the encoder ident stays the Lavc or
+  Lavf string ffmpeg writes. Lossless samples are quantized one decoded
+  frame at a time, the way ffmpeg's resampler sees them, so a WAV no
+  longer ends in a run of digital zeros the ffmpeg encode does not have.
 
 ## [1.0.0]
 

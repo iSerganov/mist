@@ -607,6 +607,35 @@ int mist_av_demuxer_audio_info(mist_av_demuxer *d, mist_av_audio_info *info)
 	return err < 0 ? MIST_AV_ERR : MIST_AV_OK;
 }
 
+int mist_av_demuxer_tag(mist_av_demuxer *d, int which, int index, char **key, char **val)
+{
+	if (d == NULL || d->fmt == NULL || key == NULL || val == NULL || index < 0) {
+		return MIST_AV_ERR;
+	}
+	AVDictionary *dict = d->fmt->metadata;
+	if (which != 0) {
+		if (d->audio < 0) {
+			return MIST_AV_ERR;
+		}
+		dict = d->fmt->streams[d->audio]->metadata;
+	}
+	const AVDictionaryEntry *e = NULL;
+	for (int i = 0; i <= index; i++) {
+		e = av_dict_get(dict, "", e, AV_DICT_IGNORE_SUFFIX);
+		if (e == NULL) {
+			return MIST_AV_ERR;
+		}
+	}
+	*key = av_strdup(e->key);
+	*val = av_strdup(e->value);
+	if (*key == NULL || *val == NULL) {
+		av_freep(key);
+		av_freep(val);
+		return MIST_AV_ERR;
+	}
+	return MIST_AV_OK;
+}
+
 int mist_av_demuxer_read(mist_av_demuxer *d, mist_av_packet *pkt)
 {
 	if (d == NULL || d->fmt == NULL || pkt == NULL) {
@@ -718,6 +747,28 @@ mist_av_muxer *mist_av_muxer_open_io(mist_av_io *io, const mist_av_audio_info *i
 		return NULL;
 	}
 	return muxer_alloc(NULL, info, io, errbuf, errlen);
+}
+
+int mist_av_muxer_add_tag(mist_av_muxer *m, int which, const char *key, const char *val)
+{
+	if (m == NULL || m->fmt == NULL || key == NULL || key[0] == '\0' || val == NULL) {
+		return MIST_AV_ERR;
+	}
+	AVDictionary **dict = &m->fmt->metadata;
+	int flags = 0;
+	if (which != 0) {
+		if (m->fmt->nb_streams < 1) {
+			return MIST_AV_ERR;
+		}
+		dict = &m->fmt->streams[0]->metadata;
+		/* The encoder ident is already on the stream. ffmpeg's CLI uses
+		 * DONT_OVERWRITE, so a source "encoder" does not replace it. */
+		flags = AV_DICT_DONT_OVERWRITE;
+	}
+	if (av_dict_set(dict, key, val, flags) < 0) {
+		return MIST_AV_ERR;
+	}
+	return MIST_AV_OK;
 }
 
 int mist_av_muxer_write_header(mist_av_muxer *m)

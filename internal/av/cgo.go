@@ -234,6 +234,35 @@ func avDemuxInfo(d *Demuxer) error {
 	return nil
 }
 
+func avDemuxMetadata(d *Demuxer) (Metadata, error) {
+	if d == nil || d.handle == nil {
+		return Metadata{}, ErrClosed
+	}
+	format, err := readTags(d, TagsFormat)
+	if err != nil {
+		return Metadata{}, err
+	}
+	stream, err := readTags(d, TagsStream)
+	if err != nil {
+		return Metadata{}, err
+	}
+	return Metadata{Format: format, Stream: stream}, nil
+}
+
+func readTags(d *Demuxer, which TagSet) ([]Tag, error) {
+	var out []Tag
+	for i := 0; ; i++ {
+		var key, val *C.char
+		rc := C.mist_av_demuxer_tag((*C.mist_av_demuxer)(d.handle), C.int(which), C.int(i), &key, &val)
+		if rc != C.MIST_AV_OK {
+			return out, nil
+		}
+		out = append(out, Tag{Key: C.GoString(key), Value: C.GoString(val)})
+		C.mist_av_free(unsafe.Pointer(key))
+		C.mist_av_free(unsafe.Pointer(val))
+	}
+}
+
 func avDemuxRead(d *Demuxer) (Packet, error) {
 	if d == nil || d.handle == nil {
 		return Packet{}, ErrClosed
@@ -265,6 +294,16 @@ func avMuxHeader(m *Muxer) error {
 		return ErrClosed
 	}
 	return mapCErr(C.mist_av_muxer_write_header((*C.mist_av_muxer)(m.handle)), "write header")
+}
+
+func avMuxAddTag(m *Muxer, which TagSet, key, val string) error {
+	if m == nil || m.handle == nil {
+		return ErrClosed
+	}
+	ck, cv := C.CString(key), C.CString(val)
+	defer C.free(unsafe.Pointer(ck))
+	defer C.free(unsafe.Pointer(cv))
+	return mapCErr(C.mist_av_muxer_add_tag((*C.mist_av_muxer)(m.handle), C.int(which), ck, cv), "metadata")
 }
 
 func avMuxWrite(m *Muxer, pkt Packet) error {

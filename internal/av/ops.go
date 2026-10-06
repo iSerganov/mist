@@ -124,6 +124,12 @@ func (d *Demuxer) Close() error { return avDemuxClose(d) }
 // WriteHeader writes the container header.
 func (m *Muxer) WriteHeader() error { return avMuxHeader(m) }
 
+// AddTag writes one metadata entry. It has to run before WriteHeader.
+// A stream tag does not replace an encoder ident already set.
+func (m *Muxer) AddTag(which TagSet, key, val string) error {
+	return avMuxAddTag(m, which, key, val)
+}
+
 // WritePacket appends one compressed packet.
 func (m *Muxer) WritePacket(pkt Packet) error { return avMuxWrite(m, pkt) }
 
@@ -153,18 +159,22 @@ func (e *Encoder) Receive() (Packet, error) { return avEncReceive(e) }
 // Close releases the encoder.
 func (e *Encoder) Close() error { return avEncClose(e) }
 
-// Snap moves every sample in planes, in place, to the value the encoder
-// will store for it, on SampleScale's grid. libswresample converts them
-// exactly as it will when they are sent, rounding the way a plain ffmpeg
-// encode rounds on this platform; an encoder that writes float has no grid
-// to snap to and is left alone.
-func (e *Encoder) Snap(planes [][]float32) error {
+// Snap moves every sample in planes, in place, onto the integer the
+// encoder stores. frames is the decoder's own frame lengths; ffmpeg
+// resamples one decoded frame at a time, and a frame's remainder rounds
+// differently from the rest of it, so a different cut is a different file.
+// A nil or incomplete list falls back to fixed blocks.
+func (e *Encoder) Snap(planes [][]float32, frames []int) error {
 	f := e.info.SampleFmt
-	if _, ok := gridShift(f); !ok {
+	if _, ok := gridShift(f); !ok || len(planes) == 0 || len(planes[0]) == 0 {
 		return nil
 	}
-	for off := 0; len(planes) > 0 && off < len(planes[0]); off += snapChunk {
-		n := min(snapChunk, len(planes[0])-off)
+	cuts := frames
+	if !coverFrames(planes, cuts) {
+		cuts = fixedCuts(len(planes[0]), snapChunk)
+	}
+	off := 0
+	for _, n := range cuts {
 		chunk := make([][]float32, len(planes))
 		for c, p := range planes {
 			chunk[c] = p[off : off+n]
@@ -174,8 +184,34 @@ func (e *Encoder) Snap(planes [][]float32) error {
 			return err
 		}
 		snapTo(chunk, ints, f)
+		off += n
 	}
 	return nil
+}
+
+func coverFrames(planes [][]float32, frames []int) bool {
+	if len(planes) == 0 || len(planes[0]) == 0 || len(frames) == 0 {
+		return false
+	}
+	n := 0
+	for _, f := range frames {
+		if f <= 0 {
+			return false
+		}
+		n += f
+	}
+	return n == len(planes[0])
+}
+
+func fixedCuts(n, size int) []int {
+	if n <= 0 {
+		return nil
+	}
+	var out []int
+	for off := 0; off < n; off += size {
+		out = append(out, min(size, n-off))
+	}
+	return out
 }
 
 // ToCodecPacket copies an av packet into the codec-layer view.

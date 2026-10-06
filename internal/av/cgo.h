@@ -139,11 +139,17 @@ int mist_av_format_list(char *buf, int buflen);
 mist_av_demuxer *mist_av_demuxer_open(const char *url, char *errbuf, int errlen);
 mist_av_demuxer *mist_av_demuxer_open_io(mist_av_io *io, char *errbuf, int errlen);
 int              mist_av_demuxer_audio_info(mist_av_demuxer *d, mist_av_audio_info *info);
+/* which is 0 for format tags and 1 for the audio stream. index walks them
+ * in stored order; MIST_AV_ERR ends the walk. key and val are malloc'd. */
+int              mist_av_demuxer_tag(mist_av_demuxer *d, int which, int index, char **key, char **val);
 int              mist_av_demuxer_read(mist_av_demuxer *d, mist_av_packet *pkt);
 void             mist_av_demuxer_close(mist_av_demuxer *d);
 
 mist_av_muxer *mist_av_muxer_open(const char *url, const mist_av_audio_info *info, char *errbuf, int errlen);
 mist_av_muxer *mist_av_muxer_open_io(mist_av_io *io, const mist_av_audio_info *info, char *errbuf, int errlen);
+/* which is 0 for format tags and 1 for the audio stream. A stream tag
+ * already set (the encoder ident) is left in place. */
+int            mist_av_muxer_add_tag(mist_av_muxer *m, int which, const char *key, const char *val);
 int            mist_av_muxer_write_header(mist_av_muxer *m);
 int            mist_av_muxer_write(mist_av_muxer *m, const mist_av_packet *pkt);
 int            mist_av_muxer_write_trailer(mist_av_muxer *m);

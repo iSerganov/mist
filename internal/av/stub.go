@@ -30,6 +30,10 @@ func avDemuxRead(*Demuxer) (Packet, error) { return Packet{}, errUnimplemented }
 
 func avDemuxClose(*Demuxer) error { return nil }
 
+func avDemuxMetadata(*Demuxer) (Metadata, error) { return Metadata{}, errUnimplemented }
+
+func avMuxAddTag(*Muxer, TagSet, string, string) error { return errUnimplemented }
+
 func avMuxHeader(*Muxer) error { return errUnimplemented }
 
 func avMuxWrite(*Muxer, Packet) error { return errUnimplemented }

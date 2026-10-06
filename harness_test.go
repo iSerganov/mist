@@ -298,7 +298,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 	if err != nil {
 		return carrierRun{}, err
 	}
-	ref, info, err := decodeCarrier(bytes.NewReader(data))
+	ref, info, _, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
 		return carrierRun{}, err
 	}
@@ -413,7 +413,7 @@ func ffmpegTwin(ctx context.Context, container, codecName, carrierExt string, da
 // carrier. It asks the encoder: libvorbis writes a nominal rate of 0 at some
 // sample rates, so matching rates cannot tell the levels apart.
 func mistLevel(target av.Format, data []byte) (int, error) {
-	pcm, info, err := decodeCarrier(bytes.NewReader(data))
+	pcm, info, _, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
 		return 0, err
 	}
@@ -431,7 +431,7 @@ func mistLevel(target av.Format, data []byte) (int, error) {
 // embedding from everything else Mist's pipeline does differently
 // from ffmpeg.
 func mistTwin(target av.Format, data []byte) ([]byte, error) {
-	pcm, info, err := decodeCarrier(bytes.NewReader(data))
+	pcm, info, meta, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -444,11 +444,11 @@ func mistTwin(target av.Format, data []byte) ([]byte, error) {
 	// anything. The clean twin has to do the same, or the comparison is a
 	// second resample rather than the pipeline with nothing embedded.
 	if target.Lossless {
-		if err := enc.Snap(pcm.Planes); err != nil {
+		if err := enc.Snap(pcm.Planes, pcm.Frames); err != nil {
 			return nil, err
 		}
 	}
-	rc, err := encodeAndMux(enc, pcm, nil)
+	rc, err := encodeAndMux(enc, pcm, meta, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -472,7 +472,7 @@ type decoded struct {
 }
 
 func inspect(out []byte) (decoded, error) {
-	pcm, info, err := decodeCarrier(bytes.NewReader(out))
+	pcm, info, _, err := decodeCarrier(bytes.NewReader(out))
 	if err != nil {
 		return decoded{}, err
 	}

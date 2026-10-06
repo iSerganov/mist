@@ -42,7 +42,7 @@ A demuxer read already in flight cannot be interrupted, so `Listen` relays the s
 
 The lossless path shares everything that defines the protocol — `FrameDuration` windows, HKDF position keys, `stego.Density`, payload in the first frame with room and CSPRNG filler in every other. Only the carrier differs, behind `stego.carrier` (`Len`/`At`/`Cost`/`Flip`). Do not give it its own density, its own framing, its own code or its own crypto.
 
-Sample embedding rides on the **integer grid the encoder quantizes to** (`av.SampleScale`). Before embedding, `Encoder.Snap` moves every carrier sample to the integer the encoder will store for it, computed by libav itself: libswresample's own conversion (the one `send_flt` uses, with this platform's rounding) plus the encoder's truncation of an s32 sample to its top 24 bits (`gridShift`). Mist does no float→integer rounding of its own on the embed path, so everything but the ±1 changes is what a plain ffmpeg encode writes. Both sides then read `round(f*scale)` of on-grid values, so a written LSB survives encode and decode. `ApplySamples` still writes **every** sample in the window back onto that grid: the receiver reads the LSB of every covered sample, not just the changed ones. The grid is capped at 24 bits because float32 carries 24 mantissa bits and the pipeline is float throughout; a finer grid would not round-trip. `Samples.Set` clamps by **two**, not one, so the encoder's own clipping cannot take the embedded bit with it. Position k means channel `k%ch`, sample `Off+k/ch` — interleaved order, stated once in `stego.Samples` and relied on by both `sampleFrames` (embed) and `windower` (listen).
+Sample embedding rides on the **integer grid the encoder quantizes to** (`av.SampleScale`). Before embedding, `Encoder.Snap` moves every carrier sample to the integer the encoder will store for it, computed by libav itself: libswresample's own conversion (the one `send_flt` uses, with this platform's rounding) plus the encoder's truncation of an s32 sample to its top 24 bits (`gridShift`). It cuts on the decoded frame lengths, because ffmpeg resamples one frame at a time and that frame's remainder rounds differently from the rest. Mist does no float→integer rounding of its own on the embed path, so everything but the ±1 changes is what a plain ffmpeg encode writes. Both sides then read `round(f*scale)` of on-grid values, so a written LSB survives encode and decode. `ApplySamples` still writes **every** sample in the window back onto that grid: the receiver reads the LSB of every covered sample, not just the changed ones. The grid is capped at 24 bits because float32 carries 24 mantissa bits and the pipeline is float throughout; a finer grid would not round-trip. `Samples.Set` clamps by **two**, not one, so the encoder's own clipping cannot take the embedded bit with it. Position k means channel `k%ch`, sample `Off+k/ch` — interleaved order, stated once in `stego.Samples` and relied on by both `sampleFrames` (embed) and `windower` (listen).
 
 Decoders emit whatever sample format suits them — FLAC gives s32, WAV s16, Vorbis fltp, packed or planar — so `Frame.FloatPlanes` normalises all of them to float planes before the encoder sees them. Never reinterpret frame bytes as float32 directly; that silently produces noise for integer formats.
 
@@ -182,7 +182,10 @@ container, `--out-codec` overrides the encoder when a container holds more than
 one (`alac` in an `.m4a`). `--out-codec` takes either name libav knows a codec by,
 the encoder's or the codec's (`dca` or `dts`), because `formats` prints the latter.
 Output defaults to `<input>.stego.ogg`. An unwritable target fails in
-`LookupFormat` before the carrier is read.
+`LookupFormat` before the carrier is read. Source metadata is copied the
+way ffmpeg copies it: the file's tags, then the mapped audio stream's
+tags, dropping `creation_time`, `company_name`, `product_name`, and
+`product_version`, with the encoder string left as the one the CLI writes.
 
 Signals (`SIGINT`/`SIGTERM`/`SIGHUP`) cancel the command's context via
 `signal.NotifyContext`; SIGKILL cannot be trapped. Colour is disabled for

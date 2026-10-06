@@ -67,9 +67,9 @@ func (s *LosslessSuite) TestRoundTripPerFormat() {
 					out := s.stego(pub, Text("meet me at the pier"), carrier,
 						WithFormat(tc.format), WithCodec(tc.codec))
 					res := s.extract(priv, out)
-					src, _, err := decodeCarrier(bytes.NewReader(carrier))
+					src, _, _, err := decodeCarrier(bytes.NewReader(carrier))
 					s.Require().NoError(err)
-					got, _, err := decodeCarrier(bytes.NewReader(out))
+					got, _, _, err := decodeCarrier(bytes.NewReader(out))
 					s.Require().NoError(err)
 
 					s.Equal(src.NbSamples, got.NbSamples)
@@ -101,7 +101,7 @@ func (s *LosslessSuite) TestOutputDepthFollowsTheCarrier() {
 			s.Require().NoError(err)
 
 			out := s.stego(pub, Text("deep"), tc.carrier, WithFormat("flac"))
-			_, info, err := decodeCarrier(bytes.NewReader(out))
+			_, info, _, err := decodeCarrier(bytes.NewReader(out))
 			s.Require().NoError(err)
 
 			s.Equal(tc.wantFmt, info.SampleFmt)
@@ -209,7 +209,7 @@ func (s *LosslessSuite) TestDigitalSilenceStaysSilent() {
 	}
 	out := s.stego(pub, Text("quiet please"), wavFile(testRate, 2, samples), WithFormat("flac"))
 
-	pcm, _, err := decodeCarrier(bytes.NewReader(out))
+	pcm, _, _, err := decodeCarrier(bytes.NewReader(out))
 	s.Require().NoError(err)
 	for c, p := range pcm.Planes {
 		for i := range testRate * 8 {
@@ -312,7 +312,7 @@ func (s *LosslessSuite) decodedCarrier(d time.Duration) codec.PCM {
 	if !av.Available() {
 		s.T().Skip("libav not available")
 	}
-	pcm, _, err := decodeCarrier(bytes.NewReader(s.pcmCarrier(d)))
+	pcm, _, _, err := decodeCarrier(bytes.NewReader(s.pcmCarrier(d)))
 	s.Require().NoError(err)
 	return pcm
 }

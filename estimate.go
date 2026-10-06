@@ -75,14 +75,16 @@ func EstimateCapacity(ctx context.Context, source, formatName, codecName string)
 
 func decodeSource(source string) (codec.PCM, av.AudioInfo, error) {
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-		return decodeCarrierURL(source)
+		pcm, info, _, err := decodeCarrierURL(source)
+		return pcm, info, err
 	}
 	rc, err := openSource(source)
 	if err != nil {
 		return codec.PCM{}, av.AudioInfo{}, err
 	}
 	defer func() { _ = rc.Close() }()
-	return decodeCarrier(rc)
+	pcm, info, _, err := decodeCarrier(rc)
+	return pcm, info, err
 }
 
 func estimatePCM(ctx context.Context, target av.Format, pcm codec.PCM, info av.AudioInfo) (Capacity, error) {
@@ -94,7 +96,7 @@ func estimatePCM(ctx context.Context, target av.Format, pcm codec.PCM, info av.A
 
 	var rooms []int
 	if target.Lossless {
-		if err := enc.Snap(pcm.Planes); err != nil {
+		if err := enc.Snap(pcm.Planes, pcm.Frames); err != nil {
 			return Capacity{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
 		rooms = sampleRooms(sampleFrames(pcm, av.SampleScale(enc.Info().SampleFmt)))
