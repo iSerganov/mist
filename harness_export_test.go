@@ -31,7 +31,7 @@ func exportCarrier(format string, c harnessCarrier, clean, stego []int32) error 
 	}
 	stem := filepath.Join(dir, unsafeName.ReplaceAllString(c.name, "_"))
 	for suffix, vals := range map[string][]int32{".clean.i32": clean, ".stego.i32": stego} {
-		vals = vals[:min(len(vals), exportChunks*harnessChunk)]
+		vals = vals[:min(len(vals), exportChunks*chunkValues)]
 		buf := make([]byte, 4*len(vals))
 		for i, v := range vals {
 			binary.LittleEndian.PutUint32(buf[4*i:], uint32(v))

@@ -1,6 +1,7 @@
 package steganalysis
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -182,4 +183,23 @@ func classifierSet(embed embedFunc, rate float64) ([][]float64, []bool, []int) {
 		}
 	}
 	return x, y, g
+}
+
+func (s *ClassifierSuite) TestLogisticRoundTripScoresTheSame() {
+	x := [][]float64{{0, 1}, {1, 0}, {2, 1}, {3, 0}, {0.5, 1}, {2.5, 0}}
+	y := []bool{false, false, true, true, false, true}
+	m := TrainLogistic(x, y)
+	raw, err := json.Marshal(m)
+	s.Require().NoError(err)
+	var back Logistic
+	s.Require().NoError(json.Unmarshal(raw, &back))
+	s.Equal(m.Dim(), back.Dim())
+	for _, xi := range x {
+		s.Equal(m.Score(xi), back.Score(xi))
+	}
+}
+
+func (s *ClassifierSuite) TestLogisticRejectsMismatchedLengths() {
+	var m Logistic
+	s.Error(json.Unmarshal([]byte(`{"w":[1,2],"mean":[0],"scale":[1,1],"b":0}`), &m))
 }

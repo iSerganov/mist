@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -22,15 +23,13 @@ import (
 	"time"
 
 	"github.com/iSerganov/mist/internal/av"
-	"github.com/iSerganov/mist/internal/codec/vorbis"
 	"github.com/iSerganov/mist/internal/quality"
 	"github.com/iSerganov/mist/internal/steganalysis"
-	"github.com/iSerganov/mist/internal/stego"
+	"github.com/iSerganov/mist/internal/trace"
 	"github.com/stretchr/testify/suite"
 )
 
 const (
-	harnessChunk       = 1 << 16
 	harnessRounds      = 1000
 	harnessSeed        = 1
 	harnessFolds       = 5
@@ -133,6 +132,9 @@ func (s *HarnessSuite) TestMeasure() {
 	}
 	md, err := rep.write(cmp.Or(os.Getenv("MIST_HARNESS_OUT"), "harness-out"), baseline)
 	s.Require().NoError(err)
+	if path := os.Getenv("MIST_HARNESS_CALIBRATION"); path != "" {
+		s.Require().NoError(rep.writeCalibration(path))
+	}
 	s.T().Log("\n" + md)
 }
 
@@ -270,6 +272,10 @@ func measureFormat(ctx context.Context, spec string, carriers []harnessCarrier, 
 	}
 	fr.Meta = scoreMetadata(fr.Traces, familyOf)
 	fr.Detectors, fr.Raw.Operational = analyzeDetectors(stegoFeatures, clean, minimal, identities, familyOf, true)
+	if os.Getenv("MIST_HARNESS_CALIBRATION") != "" {
+		cal := calibrate(f, fr.Raw.Operational, stegoFeatures, clean, familyOf)
+		fr.calibration = &cal
+	}
 	fr.Detectors = append(fr.Detectors, detectorFrom(keyAwareName, keyStego, keyClean, 0.5, true))
 	fr.Raw.Operational = append(fr.Raw.Operational, rawDetectorFrom(keyAwareName, keyStego, keyClean, scored{}, identities))
 	fr.Detectors = append(fr.Detectors, detectorFrom(steganalysis.SelectionName, selStego, selClean, 0.5, true))
@@ -308,7 +314,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 	}
 	sameLevel := twin
 	if !em.target.Lossless {
-		level, err := mistLevel(em.target, data)
+		level, err := vorbisLevel(em.target, ref, info)
 		if err != nil {
 			return carrierRun{}, err
 		}
@@ -374,7 +380,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 		selClean:  selClean,
 		trace: carrierTrace{
 			Name: c.name, Source: ref.NbSamples,
-			SourceRate: info.SampleRate, SourceChannels: info.Channels, SourceFmt: sampleFmtName(info.SampleFmt),
+			SourceRate: info.SampleRate, SourceChannels: info.Channels, SourceFmt: info.SampleFmt.String(),
 			FFmpeg: defaultOut.trace, Canonical: cleanOut.trace, Clean: ownOut.trace, Mist: stegoDec.trace,
 		},
 	}
@@ -386,74 +392,24 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 
 // ffmpegTwin encodes the carrier with the ffmpeg CLI at its own defaults
 // plus any extra encoder arguments. That is the clean file a warden without
-// the original compares Mist's output against. Only the first audio stream
-// is kept, so cover art in an MP3 does not turn into a video stream.
+// the original compares Mist's output against.
 func ffmpegTwin(ctx context.Context, container, codecName, carrierExt string, data []byte, extra ...string) ([]byte, error) {
-	dir, err := os.MkdirTemp("", "mist-twin-*")
+	out, err := trace.Encode(ctx, harnessBinary("MIST_FFMPEG", "ffmpeg"), data, carrierExt, container, codecName, extra...)
 	if err != nil {
-		return nil, err
+		return nil, errors.New(redactLocalPaths(err.Error()))
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
-	in, out := filepath.Join(dir, "carrier"+carrierExt), filepath.Join(dir, "twin")
-	if err := os.WriteFile(in, data, 0o600); err != nil {
-		return nil, err
-	}
-	args := []string{"-nostdin", "-loglevel", "error", "-i", in, "-map", "0:a:0"}
-	if codecName != "" {
-		args = append(args, "-c:a", codecName)
-	}
-	args = append(append(args, extra...), "-f", container, out)
-	if msg, err := exec.CommandContext(ctx, harnessBinary("MIST_FFMPEG", "ffmpeg"), args...).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("ffmpeg: %s", redactLocalPaths(fmt.Sprintf("%v: %s", err, bytes.TrimSpace(msg)), dir, in, out))
-	}
-	return os.ReadFile(out)
-}
-
-// mistLevel is the Vorbis quality level Mist opened its encoder at for the
-// carrier. It asks the encoder: libvorbis writes a nominal rate of 0 at some
-// sample rates, so matching rates cannot tell the levels apart.
-func mistLevel(target av.Format, data []byte) (int, error) {
-	pcm, info, err := decodeCarrier(bytes.NewReader(data))
-	if err != nil {
-		return 0, err
-	}
-	enc, err := openEncoder(target, pcm, info)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = enc.Close() }()
-	return enc.Info().Quality, nil
+	return out, nil
 }
 
 // mistTwin is the carrier through Mist's own encoder with nothing
-// embedded, including the lossless grid snap Embed does before it
-// changes a sample. Comparing it with the stego copy isolates the
-// embedding from everything else Mist's pipeline does differently
-// from ffmpeg.
+// embedded. Comparing it with the stego copy isolates the embedding from
+// everything else Mist's pipeline does differently from ffmpeg.
 func mistTwin(target av.Format, data []byte) ([]byte, error) {
 	pcm, info, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
-	enc, err := openEncoder(target, pcm, info)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = enc.Close() }()
-	// Embed snaps a lossless carrier onto the encoder grid before it changes
-	// anything. The clean twin has to do the same, or the comparison is a
-	// second resample rather than the pipeline with nothing embedded.
-	if target.Lossless {
-		if err := enc.Snap(pcm.Planes); err != nil {
-			return nil, err
-		}
-	}
-	rc, err := encodeAndMux(enc, pcm, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rc.Close() }()
-	return io.ReadAll(rc)
+	return plainEncode(target, pcm, info)
 }
 
 func embedBytes(ctx context.Context, em *Emitter, data []byte, p Payload) ([]byte, error) {
@@ -468,60 +424,15 @@ func embedBytes(ctx context.Context, em *Emitter, data []byte, p Payload) ([]byt
 type decoded struct {
 	planes [][]float32
 	vals   []int32
-	trace  outputTrace
+	trace  trace.Trace
 }
 
 func inspect(out []byte) (decoded, error) {
-	pcm, info, err := decodeCarrier(bytes.NewReader(out))
+	v, err := decodeValues(out)
 	if err != nil {
 		return decoded{}, err
 	}
-	d := decoded{planes: pcm.Planes, trace: traceOf(out, pcm, info)}
-	if av.Lossless(info.NativeCodecID) {
-		d.vals = gridValues(pcm.Planes, av.SampleScale(info.SampleFmt))
-		return d, nil
-	}
-	_, pkts, err := readPackets(bytes.NewReader(out))
-	if err != nil {
-		return decoded{}, err
-	}
-	vc := vorbis.New()
-	if err := vc.Load(info.Extradata); err != nil {
-		return decoded{}, err
-	}
-	d.vals, err = stego.EligibleValues(vc, pkts)
-	return d, err
-}
-
-func gridValues(planes [][]float32, scale float32) []int32 {
-	var out []int32
-	for _, p := range planes {
-		s := stego.Samples{Planes: [][]float32{p}, N: len(p), Scale: scale}
-		for i := range s.Len() {
-			out = append(out, s.At(i))
-		}
-	}
-	return out
-}
-
-// chunk is what the wardens see of one stretch of a file: the general
-// classifier's features, led by every detector's score, and the
-// second-difference Markov features the markov classifier trains on alone.
-type chunk struct {
-	features, markov, rich []float64
-}
-
-func featuresOf(v []int32, channels int) []chunk {
-	var out []chunk
-	for off := 0; off < len(v); off += harnessChunk {
-		c := v[off:min(off+harnessChunk, len(v))]
-		out = append(out, chunk{
-			features: steganalysis.Features(c),
-			markov:   steganalysis.Markov(c),
-			rich:     steganalysis.RichPlanar(c, channels),
-		})
-	}
-	return out
+	return decoded{planes: v.pcm.Planes, vals: v.vals, trace: traceOf(out, v.pcm, v.info)}, nil
 }
 
 // scored is a population of detector scores. groups is the recording, which
@@ -596,36 +507,47 @@ type trained struct {
 }
 
 func classify(pos, neg [][]chunk, pick func(chunk) []float64, familyOf []int) (scored, scored, trained) {
-	var x [][]float64
-	var y []bool
-	var groups, recording []int
+	m, recording := matrix(pos, neg, pick, familyOf)
+	ps, ns := split(steganalysis.NestedCrossValidate(m.x, m.y, m.groups, harnessFolds), m, recording)
+	return ps, ns, m
+}
+
+// matrix lays every chunk of the stego and clean copies out as training
+// rows, with the lineage each row belongs to and the recording it came from.
+func matrix(pos, neg [][]chunk, pick func(chunk) []float64, familyOf []int) (trained, []int) {
+	var m trained
+	var recording []int
 	for i := range pos {
 		fam := i
 		if i < len(familyOf) {
 			fam = familyOf[i]
 		}
 		for _, c := range pos[i] {
-			x = append(x, pick(c))
-			y = append(y, true)
-			groups = append(groups, fam)
+			m.x = append(m.x, pick(c))
+			m.y = append(m.y, true)
+			m.groups = append(m.groups, fam)
 			recording = append(recording, i)
 		}
 		for _, c := range neg[i] {
-			x = append(x, pick(c))
-			y = append(y, false)
-			groups = append(groups, fam)
+			m.x = append(m.x, pick(c))
+			m.y = append(m.y, false)
+			m.groups = append(m.groups, fam)
 			recording = append(recording, i)
 		}
 	}
-	var ps, ns scored
-	for i, v := range steganalysis.NestedCrossValidate(x, y, groups, harnessFolds) {
-		if y[i] {
-			ps.add(v, recording[i], groups[i])
+	return m, recording
+}
+
+// split sorts per-row scores back into the stego and clean populations.
+func split(scores []float64, m trained, recording []int) (ps, ns scored) {
+	for i, v := range scores {
+		if m.y[i] {
+			ps.add(v, recording[i], m.groups[i])
 		} else {
-			ns.add(v, recording[i], groups[i])
+			ns.add(v, recording[i], m.groups[i])
 		}
 	}
-	return ps, ns, trained{x: x, y: y, groups: groups}
+	return ps, ns
 }
 
 // detectorScores is one detector's score for every chunk of the stego copy
@@ -647,14 +569,7 @@ func scoreAll(pos, neg [][]chunk, familyOf []int) []detectorScores {
 	for k, d := range steganalysis.Detectors() {
 		out = append(out, detectorScores{name: d.Name, pos: column(pos, k, familyOf), neg: column(neg, k, familyOf)})
 	}
-	for _, cl := range []struct {
-		name string
-		pick func(chunk) []float64
-	}{
-		{classifierName, func(c chunk) []float64 { return c.features }},
-		{markovName, func(c chunk) []float64 { return c.markov }},
-		{steganalysis.RichName, func(c chunk) []float64 { return c.rich }},
-	} {
+	for _, cl := range trainedWardens {
 		ps, ns, model := classify(pos, neg, cl.pick, familyOf)
 		out = append(out, detectorScores{name: cl.name, pos: ps, neg: ns, model: model})
 	}
