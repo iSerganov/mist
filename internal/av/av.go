@@ -41,6 +41,29 @@ type AudioInfo struct {
 	FrameSize     int
 }
 
+// Tag is one container metadata entry, in the order libav stored it.
+type Tag struct {
+	Key   string
+	Value string
+}
+
+// Metadata is the tags ffmpeg copies onto an encode: the file's own
+// entries, then the audio stream's. Order is the order a probe reports.
+type Metadata struct {
+	Format []Tag
+	Stream []Tag
+}
+
+// TagSet selects which dictionary a tag belongs to.
+type TagSet int
+
+const (
+	// TagsFormat is the file-level dictionary.
+	TagsFormat TagSet = iota
+	// TagsStream is the audio stream's dictionary.
+	TagsStream
+)
+
 // Format is one output target: an encoder plus the container libav wraps
 // it in. Every field is libav's own answer — CodecName from
 // avcodec_get_name, Lossless from AV_CODEC_PROP_LOSSLESS — so which
@@ -167,6 +190,9 @@ type Encoder struct {
 
 // Info returns the audio stream parameters discovered at open.
 func (d *Demuxer) Info() AudioInfo { return d.info }
+
+// Metadata returns the container tags in the order libav stored them.
+func (d *Demuxer) Metadata() (Metadata, error) { return avDemuxMetadata(d) }
 
 // Info returns the audio parameters the muxer was opened with.
 func (m *Muxer) Info() AudioInfo { return m.info }

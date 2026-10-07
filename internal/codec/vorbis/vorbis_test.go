@@ -191,8 +191,10 @@ func (s *VorbisSuite) TestLoadAndResidues() {
 	// Identity rewrite must decode to the same rounded residues.
 	same, err := c.Residues(pkts[0])
 	s.Require().NoError(err)
+	s.NotNil(c.parsed, "the packet parse is reused by the rewrite")
 	rewrittenIdent, err := c.Rewrite(pkts[0], same)
 	s.Require().NoError(err)
+	s.Nil(c.parsed)
 	again, err := c.Residues(rewrittenIdent)
 	s.Require().NoError(err)
 	s.Require().Len(again, len(same))

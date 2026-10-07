@@ -5,11 +5,11 @@ does not change the embedder, the payload, or a container. A file embedded
 before this phase extracts the same way, and a new file is byte-for-byte
 the same kind of output Phase 3 already produced.
 
-`REPORT.md` was not re-run. It remains the metal-dev measurement from
-before these wardens existed (schema 3 at the time, corpus name
-`metal-dev`, first 300 seconds, 84 lineages, commit `b610b12-dirty`).
-That report's Holm family has four members. Schema 6 has six. The two
-Holm columns are not comparable number for number.
+`REPORT.md` is now the schema-6 metal-dev before-score: corpus name
+`metal-dev`, first 300 seconds, 84 lineages, harness stamp
+`38f5caa-dirty`, waveform CNN included. The previous file was schema 3
+and a Holm family of four. Schema 6 has six. The two Holm columns are
+not comparable number for number.
 
 ## What was frozen
 
@@ -135,10 +135,11 @@ costs change (Phase 5, PR sequence step 8). The frozen suite is enough
 to start that code: the wardens, the folds and the positive controls
 exist, and an embedder edit can be scored against them.
 
-It is not enough to claim the embedding got harder to detect. That claim
-needs a paired harness on corpus name `metal-dev`, the same 300 second
-cap and the same 84 lineages, run after the Phase 3 container changes,
-with schema 6, before and after the embedder edit. The synthetic checks
-in earlier phases are not that baseline. The Phase 2 power count of
-about 128 lineages is still unmet, and the blind red-team (PR step 16)
-stays open.
+It is not enough to claim the embedding got harder to detect. The
+before-score is `REPORT.md`. The same corpus, the same 300 second cap
+and the same 84 lineages have to be run again after the embedder edit.
+The synthetic checks in earlier phases are not that comparison. The
+Phase 2 power count of about 128 lineages is still unmet, and the blind
+red-team (PR step 16) stays open. Canonical metadata tags failed this
+before-score (FLAC 25/84, WAV 29/84, Vorbis 55/84). That is a pipeline
+fingerprint, recorded in `REPORT.md`, and it is not an embedding result.

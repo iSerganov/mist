@@ -74,6 +74,11 @@ type PCM struct {
 	SampleRate int
 	Format     SampleFormat
 	PTS        int64
+	// Frames is each decoded frame's length, summing to NbSamples. Empty
+	// when the PCM did not come from a demuxer. The encoder's resampler
+	// quantizes one of these at a time, because that is what ffmpeg does
+	// and the remainder of a frame rounds differently from the rest.
+	Frames []int
 }
 
 // Packet is one compressed audio packet, codec payload only — no Ogg
@@ -102,7 +107,13 @@ type Residue struct {
 	// FlipCost is the squared distance between this symbol's dequantized
 	// vector and that of the entry a flip would substitute for it: how
 	// much spectrum one embedded change moves. Zero when Unflippable.
+	// A distance past the sender's wet threshold is avoided outright.
 	FlipCost float64
+	// RankCost is FlipCost divided by the entry's own energy and raised
+	// when few same-length substitutes exist, so a loud, well-supported
+	// residue is cheaper to change than a quiet one with the same vector
+	// error. Zero means "use FlipCost".
+	RankCost float64
 }
 
 // Codec converts between PCM and a compressed bitstream and, when the

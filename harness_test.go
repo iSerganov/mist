@@ -304,7 +304,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 	if err != nil {
 		return carrierRun{}, err
 	}
-	ref, info, err := decodeCarrier(bytes.NewReader(data))
+	ref, info, _, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
 		return carrierRun{}, err
 	}
@@ -398,6 +398,27 @@ func ffmpegTwin(ctx context.Context, container, codecName, carrierExt string, da
 	if err != nil {
 		return nil, errors.New(redactLocalPaths(err.Error()))
 	}
+	args = append(append(args, extra...), "-f", container, out)
+	if msg, err := exec.CommandContext(ctx, harnessBinary("MIST_FFMPEG", "ffmpeg"), args...).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ffmpeg: %s", redactLocalPaths(fmt.Sprintf("%v: %s", err, bytes.TrimSpace(msg)), dir, in, out))
+	}
+	return os.ReadFile(out)
+}
+
+// mistLevel is the Vorbis quality level Mist opened its encoder at for the
+// carrier. It asks the encoder: libvorbis writes a nominal rate of 0 at some
+// sample rates, so matching rates cannot tell the levels apart.
+func mistLevel(target av.Format, data []byte) (int, error) {
+	pcm, info, _, err := decodeCarrier(bytes.NewReader(data))
+	if err != nil {
+		return 0, err
+	}
+	enc, err := openEncoder(target, pcm, info)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = enc.Close() }()
+	return enc.Info().Quality, nil
 	return out, nil
 }
 
@@ -405,7 +426,7 @@ func ffmpegTwin(ctx context.Context, container, codecName, carrierExt string, da
 // embedded. Comparing it with the stego copy isolates the embedding from
 // everything else Mist's pipeline does differently from ffmpeg.
 func mistTwin(target av.Format, data []byte) ([]byte, error) {
-	pcm, info, err := decodeCarrier(bytes.NewReader(data))
+	pcm, info, meta, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -428,6 +449,16 @@ type decoded struct {
 }
 
 func inspect(out []byte) (decoded, error) {
+	pcm, info, _, err := decodeCarrier(bytes.NewReader(out))
+	if err != nil {
+		return decoded{}, err
+	}
+	d := decoded{planes: pcm.Planes, trace: traceOf(out, pcm, info)}
+	if av.Lossless(info.NativeCodecID) {
+		d.vals = gridValues(pcm.Planes, av.SampleScale(info.SampleFmt))
+		return d, nil
+	}
+	_, pkts, err := readPackets(bytes.NewReader(out))
 	v, err := decodeValues(out)
 	if err != nil {
 		return decoded{}, err

@@ -130,7 +130,7 @@ func (s *EmitterSuite) TestApplyRecoverSamePackets() {
 	s.Require().GreaterOrEqual(len(got), len(payload))
 	s.Equal(payload, []byte(got[:len(payload)]))
 
-	rc, err := muxPackets(info, out)
+	rc, err := muxPackets(info, av.Metadata{}, out)
 	s.Require().NoError(err)
 	defer func() { _ = rc.Close() }()
 	ogg, err := io.ReadAll(rc)

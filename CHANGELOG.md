@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.0]
 
+### Changed
+
+- Lossless embedding now spends its changes on noisy, poorly predicted
+  samples. Each eligible sample is priced by how much a ±1 grows the local
+  first and second difference, discounted by the neighbourhood's own
+  residual, with extra cost for stereo disturbance, clipping, and sitting
+  next to a silent run. The price has a floor and a capped ratio, and a
+  dither from the position key, so the cheap samples are neither free nor
+  a pure function of the waveform. The ±1 direction still follows the
+  frame histogram, tilted by that residual. The receiver's sample list is
+  unchanged, so a file embedded before this still extracts.
+- Vorbis changes are ranked by vector error divided by the residue's own
+  energy, and cost more when few same-length substitutes exist. A flip
+  whose raw vector error exceeds the wet threshold is still avoided, and
+  the substitute is still the nearest legal vector. The packet parse is
+  reused between the residue read and the rewrite.
+- Output metadata follows ffmpeg's copy. The source's format tags and the
+  audio stream's tags are written in that order, the product tags the
+  ffmpeg CLI drops are dropped, and the encoder ident stays the Lavc or
+  Lavf string ffmpeg writes. Lossless samples are quantized one decoded
+  frame at a time, the way ffmpeg's resampler sees them, so a WAV no
+  longer ends in a run of digital zeros the ffmpeg encode does not have.
+- The harness now shares its decoding, chunking, container traces and
+  ffmpeg reference encodes with `analyze`, so a calibration and the
+  analysis read against it always measure the same thing. Its reports are
+  unchanged.
+- The CLI depends on Bubble Tea v2 for the interactive screen.
+
 ### Added
 
 - `mist analyze [folder]`: an interactive terminal browser for asking how a
@@ -46,14 +74,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `make calibrate` runs the harness and also writes `calibration.json`,
   the reference `analyze` reads a file against. `make analyze DIR=`
   starts the browser.
-
-### Changed
-
-- The harness now shares its decoding, chunking, container traces and
-  ffmpeg reference encodes with `analyze`, so a calibration and the
-  analysis read against it always measure the same thing. Its reports are
-  unchanged.
-- The CLI depends on Bubble Tea v2 for the interactive screen.
 
 ## [1.0.0]
 

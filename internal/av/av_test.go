@@ -222,6 +222,102 @@ func (s *AVSuite) TestEncodeDecodePCM() {
 	s.Greater(frameEnergy(frames[0]), 1.0)
 }
 
+// ffmpeg resamples one decoded frame at a time, and libswresample treats the
+// samples past its vector width differently from the rest on some platforms
+// (NEON floors the body and rounds the tail; x86 rounds both). Snap has to
+// land on what the encoder writes for the same frame cuts, wherever it runs.
+func (s *AVSuite) TestSnapMatchesTheEncodeForTheSameFrameCuts() {
+	s.requireLibav()
+	f, err := FindFormat("wav", "")
+	s.Require().NoError(err)
+	info := f.Info(44100, 2, AudioInfo{SampleFmt: codec.SampleFmtFLTP})
+
+	tests := []struct {
+		title string
+		cuts  []int
+	}{
+		{"one frame", []int{100}},
+		{"two frames each with their own tail", []int{50, 50}},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			raw := constantPlanes(100, -1e-6)
+			want := s.encodeS16(info, raw, tc.cuts)
+
+			snapped := constantPlanes(100, -1e-6)
+			enc, err := NewEncoder(info)
+			s.Require().NoError(err)
+			defer func() { _ = enc.Close() }()
+			s.Equal(codec.SampleFmtS16, enc.Info().SampleFmt)
+			s.Require().NoError(enc.Snap(snapped, tc.cuts))
+
+			for c := range snapped {
+				for i, v := range snapped[c] {
+					s.InDelta(float32(want[c][i])/32768, v, 1e-8, "channel %d sample %d", c, i)
+				}
+			}
+			s.Equal(want, s.encodeS16(info, snapped, tc.cuts), "values already on the grid must survive the encode")
+		})
+	}
+}
+
+// encodeS16 encodes planes as one frame per cut and returns the stored
+// samples per channel.
+func (s *AVSuite) encodeS16(info AudioInfo, planes [][]float32, cuts []int) [][]int16 {
+	s.T().Helper()
+	enc, err := NewEncoder(info)
+	s.Require().NoError(err)
+	defer func() { _ = enc.Close() }()
+	var pkts []Packet
+	off := 0
+	for _, n := range cuts {
+		part := make([][]float32, len(planes))
+		for c := range planes {
+			part[c] = planes[c][off : off+n]
+		}
+		s.Require().NoError(enc.Send(shiftPTS(planesFrame(part), int64(off))))
+		pkts = append(pkts, s.recvPackets(enc)...)
+		off += n
+	}
+	s.Require().NoError(enc.Send(Frame{}))
+	pkts = append(pkts, s.recvPackets(enc)...)
+
+	var data []byte
+	for _, p := range pkts {
+		data = append(data, p.Data...)
+	}
+	ch := len(planes)
+	s.Require().Equal(off*ch*2, len(data))
+	out := make([][]int16, ch)
+	for i := 0; i < off; i++ {
+		for c := range out {
+			out[c] = append(out[c], int16(binary.LittleEndian.Uint16(data[(i*ch+c)*2:])))
+		}
+	}
+	return out
+}
+
+func constantPlanes(n int, v float32) [][]float32 {
+	out := [][]float32{make([]float32, n), make([]float32, n)}
+	for c := range out {
+		for i := range out[c] {
+			out[c][i] = v
+		}
+	}
+	return out
+}
+
+func planesFrame(planes [][]float32) Frame {
+	data := make([][]byte, len(planes))
+	for c := range planes {
+		data[c] = floatsToLE(planes[c])
+	}
+	return Frame{
+		Data: data, NbSamples: len(planes[0]), Channels: len(planes),
+		SampleRate: 44100, Format: codec.SampleFmtFLTP,
+	}
+}
+
 func (s *AVSuite) TestEncoderOpenErrorsSayWhetherTheSettingsWereRefused() {
 	s.requireLibav()
 	tests := []struct {
@@ -329,7 +425,7 @@ func (s *AVSuite) TestSnapPredictsWhatTheEncoderStores() {
 			s.Require().NoError(err)
 
 			snapped := [][]float32{append([]float32(nil), planes[0]...), append([]float32(nil), planes[1]...)}
-			s.Require().NoError(enc.Snap(snapped))
+			s.Require().NoError(enc.Snap(snapped, nil))
 
 			dec, err := NewDecoder(enc.Info())
 			s.Require().NoError(err)

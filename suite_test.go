@@ -42,7 +42,7 @@ func (s *audioSuite) carrier(d time.Duration) []byte {
 	flushed, err := enc.Flush()
 	s.Require().NoError(err)
 
-	rc, err := muxPackets(info, append(pkts, flushed...))
+	rc, err := muxPackets(info, av.Metadata{}, append(pkts, flushed...))
 	s.Require().NoError(err)
 	defer func() { _ = rc.Close() }()
 	raw, err := io.ReadAll(rc)

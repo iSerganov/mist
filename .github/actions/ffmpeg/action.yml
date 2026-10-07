@@ -1,0 +1,22 @@
+name: Install FFmpeg
+description: Fetch BtbN's prebuilt shared FFmpeg (libs, headers, pkg-config, CLI; libvorbis included) and expose it.
+
+inputs:
+  branch:
+    description: FFmpeg release branch; BtbN publishes its latest build.
+    default: "9.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Download FFmpeg ${{ inputs.branch }}
+      shell: bash
+      run: |
+        name="ffmpeg-n${{ inputs.branch }}-latest-linux64-lgpl-shared-${{ inputs.branch }}"
+        mkdir -p "$HOME/ffmpeg"
+        curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$name.tar.xz" |
+          tar xJ --strip-components=1 -C "$HOME/ffmpeg"
+        echo "$HOME/ffmpeg/bin" >> "$GITHUB_PATH"
+        echo "PKG_CONFIG_PATH=$HOME/ffmpeg/lib/pkgconfig" >> "$GITHUB_ENV"
+        echo "LD_LIBRARY_PATH=$HOME/ffmpeg/lib" >> "$GITHUB_ENV"
+        LD_LIBRARY_PATH="$HOME/ffmpeg/lib" "$HOME/ffmpeg/bin/ffmpeg" -hide_banner -version | head -1
