@@ -1,42 +1,22 @@
 name: Install FFmpeg
-description: Build a pinned FFmpeg release with libvorbis, cached per runner image, and expose its libraries, headers and CLI.
+description: Fetch BtbN's prebuilt shared FFmpeg (libs, headers, pkg-config, CLI; libvorbis included) and expose it.
 
 inputs:
-  version:
-    description: FFmpeg release to build.
-    default: 9.0.2
+  branch:
+    description: FFmpeg release branch; BtbN publishes its latest build.
+    default: "9.0"
 
 runs:
   using: composite
   steps:
-    - name: Install build dependencies
+    - name: Download FFmpeg ${{ inputs.branch }}
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y pkg-config nasm libvorbis-dev
-
-    - id: cache
-      uses: actions/cache@v4
-      with:
-        path: ~/ffmpeg
-        key: ffmpeg-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
-
-    - name: Build FFmpeg ${{ inputs.version }}
-      if: steps.cache.outputs.cache-hit != 'true'
-      shell: bash
-      run: |
-        cd "$RUNNER_TEMP"
-        curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${{ inputs.version }}.tar.xz" | tar xJ
-        cd "ffmpeg-${{ inputs.version }}"
-        ./configure --prefix="$HOME/ffmpeg" --enable-shared --disable-static \
-          --disable-doc --disable-ffplay --enable-libvorbis
-        make -j"$(nproc)"
-        make install
-
-    - name: Expose FFmpeg
-      shell: bash
-      run: |
+        name="ffmpeg-n${{ inputs.branch }}-latest-linux64-lgpl-shared-${{ inputs.branch }}"
+        mkdir -p "$HOME/ffmpeg"
+        curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$name.tar.xz" |
+          tar xJ --strip-components=1 -C "$HOME/ffmpeg"
         echo "$HOME/ffmpeg/bin" >> "$GITHUB_PATH"
         echo "PKG_CONFIG_PATH=$HOME/ffmpeg/lib/pkgconfig" >> "$GITHUB_ENV"
         echo "LD_LIBRARY_PATH=$HOME/ffmpeg/lib" >> "$GITHUB_ENV"
-        "$HOME/ffmpeg/bin/ffmpeg" -hide_banner -version | head -1
+        LD_LIBRARY_PATH="$HOME/ffmpeg/lib" "$HOME/ffmpeg/bin/ffmpeg" -hide_banner -version | head -1

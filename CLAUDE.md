@@ -208,7 +208,7 @@ The muxer sets `bits_per_coded_sample` for raw-PCM containers and `bits_per_raw_
 
 Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `Close`. No finalizers. Ogg custom IO must be `io.Seeker`.
 
-`CGO_ENABLED=1` needs system FFmpeg with libvorbis (`pkg-config` must find the four libs). CI builds FFmpeg 9.0.2 from source with libvorbis (`.github/actions/ffmpeg`, cached per runner image) on both lint and test, because Ubuntu's packaged FFmpeg is too old to match local results.
+`CGO_ENABLED=1` needs system FFmpeg with libvorbis (`pkg-config` must find the four libs). CI takes BtbN's prebuilt shared FFmpeg 9.0 build (libs, headers, pkg-config, CLI, libvorbis) via `.github/actions/ffmpeg` on both lint and test; Ubuntu's packages are years behind.
 
 ## CLI (`cmd/mist`)
 

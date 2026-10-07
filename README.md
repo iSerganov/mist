@@ -116,10 +116,6 @@ brew install ffmpeg pkg-config
 sudo apt-get install pkg-config libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libvorbis-dev
 ```
 
-The test suite is checked against FFmpeg 9.0.2, the version CI builds. Older
-distribution packages (Ubuntu 24.04 ships 6.1) compile but quantize some
-samples differently, so a few exact-match tests fail on them.
-
 Building with `CGO_ENABLED=0` still type-checks against a pure-Go stub, which
 keeps editors and vet happy, but every encode and decode then reports
 unimplemented. Real use needs cgo.

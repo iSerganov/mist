@@ -222,48 +222,77 @@ func (s *AVSuite) TestEncodeDecodePCM() {
 	s.Greater(frameEnergy(frames[0]), 1.0)
 }
 
-// libswresample floors a frame on its vector path and rounds the samples
-// that hang past a multiple of that width. ffmpeg resamples one decoded
-// frame at a time, so Snap has to cut on those same lengths: one buffer
-// of 100 and two of 50 do not quantize the same samples.
-func (s *AVSuite) TestShortTailQuantizes() {
+// ffmpeg resamples one decoded frame at a time, and libswresample treats the
+// samples past its vector width differently from the rest on some platforms
+// (NEON floors the body and rounds the tail; x86 rounds both). Snap has to
+// land on what the encoder writes for the same frame cuts, wherever it runs.
+func (s *AVSuite) TestSnapMatchesTheEncodeForTheSameFrameCuts() {
 	s.requireLibav()
 	f, err := FindFormat("wav", "")
 	s.Require().NoError(err)
 	info := f.Info(44100, 2, AudioInfo{SampleFmt: codec.SampleFmtFLTP})
 
-	const n = 100
-	raw := constantPlanes(n, -1e-6)
+	tests := []struct {
+		title string
+		cuts  []int
+	}{
+		{"one frame", []int{100}},
+		{"two frames each with their own tail", []int{50, 50}},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			raw := constantPlanes(100, -1e-6)
+			want := s.encodeS16(info, raw, tc.cuts)
+
+			snapped := constantPlanes(100, -1e-6)
+			enc, err := NewEncoder(info)
+			s.Require().NoError(err)
+			defer func() { _ = enc.Close() }()
+			s.Equal(codec.SampleFmtS16, enc.Info().SampleFmt)
+			s.Require().NoError(enc.Snap(snapped, tc.cuts))
+
+			for c := range snapped {
+				for i, v := range snapped[c] {
+					s.InDelta(float32(want[c][i])/32768, v, 1e-8, "channel %d sample %d", c, i)
+				}
+			}
+			s.Equal(want, s.encodeS16(info, snapped, tc.cuts), "values already on the grid must survive the encode")
+		})
+	}
+}
+
+// encodeS16 encodes planes as one frame per cut and returns the stored
+// samples per channel.
+func (s *AVSuite) encodeS16(info AudioInfo, planes [][]float32, cuts []int) [][]int16 {
+	s.T().Helper()
 	enc, err := NewEncoder(info)
 	s.Require().NoError(err)
 	defer func() { _ = enc.Close() }()
-	s.Equal(codec.SampleFmtS16, enc.Info().SampleFmt)
-	s.Require().NoError(enc.Snap(raw, []int{n}))
-	s.assertSnapped(raw, -1, 96)
-
-	// The encode converts again. Values already on the grid must survive it.
-	s.Require().NoError(enc.Send(planesFrame(raw)))
-	got := s.recvPackets(enc)
+	var pkts []Packet
+	off := 0
+	for _, n := range cuts {
+		part := make([][]float32, len(planes))
+		for c := range planes {
+			part[c] = planes[c][off : off+n]
+		}
+		s.Require().NoError(enc.Send(shiftPTS(planesFrame(part), int64(off))))
+		pkts = append(pkts, s.recvPackets(enc)...)
+		off += n
+	}
 	s.Require().NoError(enc.Send(Frame{}))
-	s.assertQuantized(concatPackets(append(got, s.recvPackets(enc)...)), n, -1, 96)
+	pkts = append(pkts, s.recvPackets(enc)...)
 
-	split := constantPlanes(n, -1e-6)
-	enc2, err := NewEncoder(info)
-	s.Require().NoError(err)
-	defer func() { _ = enc2.Close() }()
-	s.Require().NoError(enc2.Snap(split, []int{50, 50}))
-	// Each 50-sample frame rounds its own last two samples.
-	s.InDelta(float32(0), split[0][48], 1e-8)
-	s.InDelta(float32(0), split[0][49], 1e-8)
-	s.InDelta(float32(-1)/32768, split[0][50], 1e-8)
-	s.InDelta(float32(0), split[0][98], 1e-8)
-	s.InDelta(float32(0), split[0][99], 1e-8)
-}
-
-func concatPackets(pkts []Packet) []byte {
-	var out []byte
+	var data []byte
 	for _, p := range pkts {
-		out = append(out, p.Data...)
+		data = append(data, p.Data...)
+	}
+	ch := len(planes)
+	s.Require().Equal(off*ch*2, len(data))
+	out := make([][]int16, ch)
+	for i := 0; i < off; i++ {
+		for c := range out {
+			out[c] = append(out[c], int16(binary.LittleEndian.Uint16(data[(i*ch+c)*2:])))
+		}
 	}
 	return out
 }
@@ -286,35 +315,6 @@ func planesFrame(planes [][]float32) Frame {
 	return Frame{
 		Data: data, NbSamples: len(planes[0]), Channels: len(planes),
 		SampleRate: 44100, Format: codec.SampleFmtFLTP,
-	}
-}
-
-func (s *AVSuite) assertSnapped(planes [][]float32, body int16, tailAt int) {
-	s.T().Helper()
-	scale := float32(32768)
-	for c := range planes {
-		for i, v := range planes[c] {
-			want := float32(body) / scale
-			if i >= tailAt {
-				want = 0
-			}
-			s.InDelta(want, v, 1e-8, "channel %d sample %d", c, i)
-		}
-	}
-}
-
-func (s *AVSuite) assertQuantized(data []byte, frames int, body int16, tailAt int) {
-	s.T().Helper()
-	s.Require().Equal(frames*2*2, len(data))
-	for i := 0; i < frames; i++ {
-		want := body
-		if i >= tailAt {
-			want = 0
-		}
-		for c := 0; c < 2; c++ {
-			v := int16(binary.LittleEndian.Uint16(data[(i*2+c)*2:]))
-			s.Equal(want, v, "sample %d channel %d", i, c)
-		}
 	}
 }
 
