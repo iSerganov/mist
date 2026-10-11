@@ -443,7 +443,7 @@ func (a *analyzer) knownCover(refRaw []byte, suspect values) error {
 		a.add(sdr)
 		return nil
 	}
-	clean, err := plainEncode(target, refPCM, refInfo)
+	clean, err := plainEncode(target, refPCM, refInfo, av.Metadata{})
 	if err != nil {
 		return fmt.Errorf("reference: %w", err)
 	}
@@ -617,7 +617,7 @@ func vorbisLevel(target av.Format, pcm codec.PCM, info av.AudioInfo) (int, error
 // embedded, including the lossless grid snap Embed does before it changes
 // a sample, so it differs from Embed's output by the embedding alone. It
 // snaps pcm in place.
-func plainEncode(target av.Format, pcm codec.PCM, info av.AudioInfo) ([]byte, error) {
+func plainEncode(target av.Format, pcm codec.PCM, info av.AudioInfo, meta av.Metadata) ([]byte, error) {
 	enc, err := openEncoder(target, pcm, info)
 	if err != nil {
 		return nil, err
@@ -628,7 +628,7 @@ func plainEncode(target av.Format, pcm codec.PCM, info av.AudioInfo) ([]byte, er
 			return nil, err
 		}
 	}
-	rc, err := encodeAndMux(enc, pcm, av.Metadata{}, nil)
+	rc, err := encodeAndMux(enc, pcm, meta, nil)
 	if err != nil {
 		return nil, err
 	}
