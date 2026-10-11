@@ -18,7 +18,6 @@ NewCatcher(priv []byte, opts ...CatcherOption) (*Catcher, error)
     Catcher.Listen(ctx, source string) (<-chan Result, error)
     Catcher.ListenReader(ctx, r io.Reader) (<-chan Result, error)
     Catcher.Extract(ctx, source *os.File) ([]Result, error)  // synchronous
-FrameCapacity() int
 Formats() []Format                       // what this FFmpeg build can write
 LookupFormat(name, codec string) (Format, error)
 EstimateCapacity(ctx, source, format, codec string) (Capacity, error)
@@ -90,7 +89,7 @@ libav's own logging defaults to `AV_LOG_FATAL`: failures already reach Go via re
 ```
 cmd/mist          cobra CLI: embed / catch / formats / estimate, colour output, signal handling
 emitter.go        NewEmitter, Embed / EmbedReader / EmbedFile → io.ReadCloser
-embed.go          carrier decode, encoder open, mux; FrameCapacity
+embed.go          carrier decode, encoder open, mux
 lossless.go       sample-domain embed + windower (the lossless half of embed/extract)
 format.go         Format, Formats, LookupFormat: which targets are writable
 span.go           planChunks/planSpan: split a payload across frames when it doesn't fit one
@@ -295,7 +294,7 @@ the decoding and hands them `[]int32` values and `[][]float32` planes.
 
 Phase 1 is feature-complete end to end, with a `cmd/mist` CLI over it. All internal packages are implemented; `Emitter` embeds text and `Catcher` recovers it via `Listen` / `ListenReader` / `Extract`. Output is Ogg Vorbis or any lossless codec the installed FFmpeg can encode — verified end to end for FLAC, WAV, ALAC, WavPack, TTA, AIFF and CAF. `make harness` measures detectability and quality per output format, against a plain ffmpeg encode of the same carrier. A historical 84-carrier run (see `REPORT.md`; not bound to a Phase 0 manifest) found no detector's aggregate file AUC above 0.55 for FLAC or WAV, while the key-aware warden sat at chance. That is not undetectable: scored within one kind of audio, the classifier separated several categories. Bind any later claim to that run's commit, corpus name and independent lineage count. Embedding costs under 0.05 dB of SDR beyond a plain re-encode, and lossless output leaves digital silence untouched. A warden holding the original carrier can diff against it, which the harness cannot measure.
 
-Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic for the Vorbis path only — it ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time), and it does not describe a lossless target at all, which holds far more (`EstimateCapacity`, and the `mist estimate` command built on it, report the real number instead, at the cost of decoding and re-encoding the carrier); `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either.
+Remaining Phase 1 gaps: `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either.
 
 ## Design principles
 

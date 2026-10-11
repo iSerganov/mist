@@ -49,10 +49,6 @@ func (s *EmitterSuite) TestWithSenderAuthCopiesKey() {
 	s.Equal(byte(4), e.senderPriv[0])
 }
 
-func (s *EmitterSuite) TestFrameCapacity() {
-	s.Greater(FrameCapacity(), 0)
-}
-
 func (s *EmitterSuite) TestEmbedReaderRejectsShortKey() {
 	e, err := NewEmitter([]byte{1, 2, 3})
 	s.Require().NoError(err)

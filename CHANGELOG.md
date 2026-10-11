@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `make embed` takes `FILE=` and `make catch` takes `OUTDIR=`.
 
+### Removed
+
+- `FrameCapacity()`. Room per frame depends on the carrier and the target, so
+  a fixed figure was always wrong: it said 576 bytes where real carriers held
+  106–176 bytes per Vorbis frame and 812–890 per FLAC frame. Use
+  `EstimateCapacity`, or `mist estimate`, which measure the carrier itself.
+
 ## [1.1.0]
 
 ### Changed

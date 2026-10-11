@@ -324,8 +324,7 @@ the recipient. `source` is read straight from libav: the carrier's own codec,
 container, sample rate, channel count, bitrate (when the source reports one)
 and duration.
 
-It reports the real limit `embed` enforces, not the
-[`FrameCapacity()`](#choosing-a-carrier) heuristic: for Vorbis it groups the
+It reports the real limit `embed` enforces: for Vorbis it groups the
 encoder's actual packets into stego frames and counts each one's genuinely
 eligible residues, and for a lossless target it computes each frame's sample
 capacity directly. `frame cap` is the largest message a single, unspanned
@@ -620,12 +619,10 @@ every usable frame in turn, so there a longer carrier directly means more
 room. Either way, if your message does not fit at all, shorten it or pick a
 carrier with more high-frequency content.
 
-`FrameCapacity()` reports a rough upper bound for the Vorbis path and
-over-estimates, because it does not account for how many residues are actually
-usable. It does not describe a lossless target at all, which holds far more.
-Treat it as a planning hint; the real limit is enforced when you call `Embed`.
-For the real number ahead of time, without producing any output, use
-`mist estimate` (or `EstimateCapacity` from Go) — see [estimate](#estimate).
+Capacity depends on the carrier and the target, so there is no fixed per-frame
+figure: on two real songs a Vorbis frame held 106 and 176 bytes and a FLAC frame
+812 and 890. For the real number ahead of time, without producing any output,
+use `mist estimate` (or `EstimateCapacity` from Go); see [estimate](#estimate).
 
 ### Audio quality
 
@@ -712,7 +709,6 @@ TTA, AIFF and CAF.
 
 Known gaps, all recorded in [CLAUDE.md](CLAUDE.md):
 
-- `FrameCapacity()` over-estimates and describes the Vorbis path only, as above.
 - `Embed` over `http(s)` buffers a finite file rather than streaming a live source,
   and the lossless path buffers the whole carrier before encoding.
 - A listener that joins mid-frame cannot align to that frame; it says so once and
