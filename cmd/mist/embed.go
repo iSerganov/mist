@@ -86,7 +86,8 @@ func runEmbed(ctx context.Context, o *embedOptions) error {
 	step("re-encoding carrier and embedding…")
 
 	started := time.Now()
-	emitter, err := mist.NewEmitter(pub, mist.WithFormat(output), mist.WithCodec(o.codec))
+	emitter, err := mist.NewEmitter(pub, mist.WithFormat(output), mist.WithCodec(o.codec),
+		mist.WithEmitProgress(func(p mist.Progress) { meter("embedding frame %d/%d", p.Done, p.Total) }))
 	if err != nil {
 		return err
 	}

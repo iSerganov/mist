@@ -58,6 +58,7 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			useColor(!noColor, os.Stdout)
+			useLive(os.Stdout)
 		},
 	}
 	root.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable coloured output")

@@ -20,10 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing file.
 - `mist --version` prints the version stamped by `make build`, or the module
   version for a `go install`.
+- Progress reporting. `WithEmitProgress` reports each embedded frame and
+  `WithCatchProgress` each scanned frame and each received chunk of a spanned
+  message. A frame that fails to decrypt is reported like any other, so
+  progress reveals nothing a warden could use. `embed` and `catch` show it on
+  a terminal.
+- `WithPartial` and `mist catch --partial` return the start of a spanned
+  message whose later frames were lost, as a `Result` with `Partial` and
+  `Total` set. Off by default.
 
 ### Changed
 
 - `make embed` takes `FILE=` and `make catch` takes `OUTDIR=`.
+- A spanned message is dropped at the first frame that should have carried
+  its next chunk and did not, instead of being held until the stream ends.
 
 ### Removed
 

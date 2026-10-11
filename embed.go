@@ -247,6 +247,7 @@ func (e *Emitter) embedResidues(ctx context.Context, info av.AudioInfo, pkts []c
 			return nil, err
 		}
 		all = append(all, out...)
+		e.progress.report(ProgressEmbed, i+1, len(groups))
 	}
 	return all, nil
 }

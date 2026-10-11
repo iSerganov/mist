@@ -111,5 +111,8 @@ func recoveredName(r mist.Result) (name string, data []byte) {
 		}
 		name = fmt.Sprintf("recovered-%d%s", r.FrameIdx, ext)
 	}
+	if r.Partial {
+		name += ".partial"
+	}
 	return name, data
 }

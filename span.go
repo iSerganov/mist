@@ -44,11 +44,7 @@ func planSpan(full []byte, room []int) [][]byte {
 		if off >= len(full) {
 			break
 		}
-		header := wire.SpanContinueHeaderSize
-		if !started {
-			header = wire.SpanStartHeaderSize
-		}
-		avail := r - EnvelopeOverhead - header
+		avail := spanRoom(r, !started)
 		if avail <= 0 {
 			continue
 		}
@@ -65,4 +61,12 @@ func planSpan(full []byte, room []int) [][]byte {
 		return nil
 	}
 	return out
+}
+
+func spanRoom(room int, first bool) int {
+	header := wire.SpanContinueHeaderSize
+	if first {
+		header = wire.SpanStartHeaderSize
+	}
+	return room - EnvelopeOverhead - header
 }

@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/iSerganov/mist/internal/av"
+	"github.com/iSerganov/mist/internal/crypto"
+	"github.com/iSerganov/mist/internal/stego"
 	"github.com/iSerganov/mist/internal/wire"
 	"github.com/stretchr/testify/suite"
 )
@@ -260,5 +263,83 @@ func (s *SpanSuite) TestTypedPayloadsRoundTrip() {
 			s.Require().NoError(err)
 			s.Empty(s.extract(wrongPriv, out))
 		})
+	}
+}
+
+// A span stops at the first frame that should have carried a chunk and did
+// not. Only WithPartial hands out what arrived before it, and only once the
+// first chunk has authenticated.
+func (s *SpanSuite) TestInterruptedSpan() {
+	pub, priv, err := GenerateKeyPair()
+	s.Require().NoError(err)
+	_, other, err := GenerateKeyPair()
+	s.Require().NoError(err)
+	msg := bytes.Repeat([]byte("abcdefghij"), 33)
+	full := s.marshaledText(string(msg))
+	room := EnvelopeOverhead + wire.SpanStartHeaderSize + 100
+	plan := planSpan(full, []int{room, room, room, room})
+	s.Require().NotNil(plan[3])
+
+	sealed := func(i int) stego.Bits {
+		env, err := crypto.Seal(plan[i], pub)
+		s.Require().NoError(err)
+		return env.Marshal()
+	}
+	noise := stego.Bits(bytes.Repeat([]byte{0x5a}, room))
+	prefix := func(chunks int) []byte {
+		n := len(plan[0]) - wire.SpanStartHeaderSize
+		for i := 1; i < chunks; i++ {
+			n += len(plan[i]) - wire.SpanContinueHeaderSize
+		}
+		return full[wire.PayloadHeaderSize:n]
+	}
+	type frame struct {
+		bits stego.Bits
+		room int
+	}
+	tests := []struct {
+		title       string
+		key         []byte
+		frames      []frame
+		wantPartial []byte
+		wantFull    bool
+	}{
+		{"chunk lost mid span", priv, []frame{{sealed(0), room}, {sealed(1), room}, {noise, room}, {sealed(3), room}}, prefix(2), false},
+		{"first chunk lost", priv, []frame{{noise, room}, {sealed(1), room}, {sealed(2), room}, {sealed(3), room}}, nil, false},
+		{"stream ends mid span", priv, []frame{{sealed(0), room}, {sealed(1), room}}, prefix(2), false},
+		{"frame without room is not a gap", priv, []frame{{sealed(0), room}, {noise, 0}, {sealed(1), room}, {sealed(2), room}, {sealed(3), room}}, nil, true},
+		{"chunk out of order breaks the span", priv, []frame{{sealed(0), room}, {sealed(0), room}}, prefix(1), false},
+		{"wrong key", other, []frame{{sealed(0), room}, {sealed(1), room}, {noise, room}}, nil, false},
+	}
+	for _, tc := range tests {
+		for _, keep := range []bool{false, true} {
+			s.Run(fmt.Sprintf("%s keep=%v", tc.title, keep), func() {
+				o := &opener{priv: tc.key, keep: keep}
+				var got []Result
+				for i, f := range tc.frames {
+					if r, ok := o.open(int64(i), f.bits, nil, func() int { return f.room }); ok {
+						got = append(got, r)
+					}
+				}
+				if r, ok := o.interrupt(); ok {
+					got = append(got, r)
+				}
+
+				switch {
+				case tc.wantFull:
+					s.Require().Len(got, 1)
+					s.False(got[0].Partial)
+					s.Equal(msg, got[0].Payload.Data)
+				case keep && tc.wantPartial != nil:
+					s.Require().Len(got, 1)
+					s.True(got[0].Partial)
+					s.Equal(len(msg), got[0].Total)
+					s.Equal(PayloadText, got[0].Payload.Type)
+					s.Equal(tc.wantPartial, got[0].Payload.Data)
+				default:
+					s.Empty(got)
+				}
+			})
+		}
 	}
 }

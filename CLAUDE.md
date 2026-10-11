@@ -27,13 +27,16 @@ WithCodec(name string) EmitterOption     // encoder override; ffmpeg's -c:a
 WithMaxRetries(n int) CatcherOption
 WithBackoff(d time.Duration) CatcherOption
 WithLogger(*slog.Logger) CatcherOption   // diagnostics only; never decrypt failures
+WithEmitProgress(ProgressFunc) EmitterOption
+WithCatchProgress(ProgressFunc) CatcherOption  // scan and assembly; never decrypt failures
+WithPartial() CatcherOption              // a span cut short becomes Result{Partial: true}
 Probe(source string) (Source, error)      // libav's stream facts, no decode
 Analyze(ctx, source string, AnalyzeOptions) (Analysis, error)  // single-file warden: Mist probability + other-tool Suspicion
 ```
 
 `Listen` / `Embed` `source` is a path, `file://` URL, or `http(s)://` URL. Finite files close the channel on EOF; live streams run until `ctx` is cancelled. Distinguish with `ctx.Err()` after range. A `Listen` called with an already-cancelled context returns a closed channel and no error. `Catcher` and `Emitter` copy keys at construction; do not add setters. Embed methods return `io.ReadCloser` (no `mist.Reader` type); the caller must Close it.
 
-Do not add `ErrNoMessage`. Failed AEAD / partial frame / empty frame are the same silent skip. Exposing "something was there but I could not decrypt" is a side channel. `ErrNoCapacity` is the opposite case and *must* be loud: it means the Emitter embedded into no frame at all, so the caller would otherwise get a silent no-op file. Telling the sender its own request failed leaks nothing to a warden.
+Do not add `ErrNoMessage`. Failed AEAD / partial frame / empty frame are the same silent skip. Exposing "something was there but I could not decrypt" is a side channel. `ErrNoCapacity` is the opposite case and *must* be loud: it means the Emitter embedded into no frame at all, so the caller would otherwise get a silent no-op file. Telling the sender its own request failed leaks nothing to a warden. `WithPartial` is the one opt-in exception on the reading side, and only after a span's first chunk has authenticated: it hands the key holder the prefix that arrived. A span ends at the first frame with room for a chunk (`spanRoom`, shared with `planSpan`) that fails to open.
 
 A demuxer read already in flight cannot be interrupted, so `Listen` relays the scan through a second channel (`relay`): the channel the caller ranges over closes as soon as `ctx` does, while the scan goroutine ends when its blocked read finally returns. `ListenReader` buffers a non-seekable reader whole (`asSeeker`), so live sources belong in `Listen`, not `ListenReader`.
 
@@ -213,7 +216,7 @@ Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `C
 
 ```
 mist embed --input <file|url> --data <text> [--key pub] [--output out.flac] [--out-codec alac]
-mist catch --input <file|url> --key <priv> [--timeout 30s]
+mist catch --input <file|url> --key <priv> [--timeout 30s] [--out-dir dir] [--partial]
 mist formats
 mist analyze [folder] [--reference original]   # browses subfolders too
 ```

@@ -244,10 +244,17 @@ mist catch --input song.stego.ogg --key song.stego.key
 | `--key` | `-k` | yes | Private key file |
 | `--timeout` | `-t` | no | Go duration; `0` (the default) reads until the stream ends |
 | `--out-dir` | | no | Directory for recovered images, audio and files (default `.`) |
+| `--partial` | | no | Keep what arrived of a spanned message that was cut short |
 
 Text is printed. Any other payload is written to `--out-dir` and its path is
 printed. Only the last element of a stored name is used, and an existing file is
 never replaced: a taken name becomes `name-1.ext`, `name-2.ext`.
+
+A message spread over several frames is lost when one of its frames is. With
+`--partial`, `catch` keeps the part that arrived before the gap instead: text is
+printed, anything else is saved with a `.partial` suffix, and a warning says how
+much of the message that is. On a terminal, `embed` and `catch` show which frame
+they are on and how much of a spanned message has arrived.
 
 A successful scan reports one message, whether it rode in a single frame or
 spread across several — `FrameIdx` names the frame where it started. `catch`
@@ -575,8 +582,15 @@ reader in full before it starts.
 | `WithMaxRetries(n)` | Catcher | Tolerate transient read failures on a live source |
 | `WithBackoff(d)` | Catcher | Pause between those retries |
 | `WithLogger(*slog.Logger)` | Catcher | Receive diagnostics such as joining mid-frame |
+| `WithEmitProgress(f)` | Emitter | Call `f` after each frame is embedded |
+| `WithCatchProgress(f)` | Catcher | Call `f` for each frame scanned and each chunk of a spanned message received |
+| `WithPartial()` | Catcher | Return the start of a spanned message cut short, with `Result.Partial` set |
 
 The logger is discarded by default and never receives failed decrypts.
+Progress never reports one either: a frame that fails to decrypt is scanned
+exactly like a frame that carries nothing. A `Partial` result holds the bytes
+that arrived, in order up to the first missing frame, and `Total` is the length
+the sender declared. It can never carry a signature.
 
 ### Errors
 
