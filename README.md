@@ -130,6 +130,19 @@ go get github.com/iSerganov/mist
 go install github.com/iSerganov/mist/cmd/mist@latest
 ```
 
+On macOS the repository is also a Homebrew tap. The formula builds from source
+against Homebrew's FFmpeg:
+
+```bash
+brew tap iSerganov/mist https://github.com/iSerganov/mist
+brew install mist
+```
+
+The explicit URL is needed because the tap lives in this repository rather than
+in a `homebrew-mist` one. Publishing a GitHub release runs
+[bump-formula.yml](.github/workflows/bump-formula.yml), which points `url` and
+`sha256` in [Formula/mist.rb](Formula/mist.rb) at the new tag and commits to `master`.
+
 ## Command line
 
 The `mist` binary has several commands. Colour is enabled for terminals and turned
