@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0]
+
+### Added
+
+- Typed payloads. `mist.Image`, `mist.Audio` and `mist.File(name, data)`
+  build the payload types that were reserved on the wire; `Payload.FileName`
+  splits a file payload back into its name and content. The wire format is
+  unchanged: a file's name rides at the front of its `Data`.
+- `mist embed --file` hides an image, audio file or any other file instead of
+  text. The type follows the file's content, not its extension.
+- `mist catch --out-dir` saves recovered images, audio and files (default: the
+  current directory) under a sanitized base name, and never replaces an
+  existing file.
+- `mist --version` prints the version stamped by `make build`, or the module
+  version for a `go install`.
+
+### Changed
+
+- `make embed` takes `FILE=` and `make catch` takes `OUTDIR=`.
+
 ## [1.1.0]
 
 ### Changed

@@ -145,6 +145,9 @@ in a `homebrew-mist` one. Publishing a GitHub release runs
 
 ## Command line
 
+`mist --version` prints the version. `make build` stamps it from `git describe`;
+a `go install` reports the module version, and a plain `go build` reports `dev`.
+
 The `mist` binary has several commands. Colour is enabled for terminals and turned
 off automatically for pipes, `TERM=dumb`, and `NO_COLOR`; `--no-color` forces it
 off.
@@ -175,7 +178,8 @@ mist embed --input song.ogg --data "the eagle lands at dawn"
 | Flag | Short | Required | Description |
 |---|---|---|---|
 | `--input` | `-i` | yes | Carrier audio: path, `file://` or `http(s)://` URL |
-| `--data` | `-d` | yes | Text to hide |
+| `--data` | `-d` | one of | Text to hide |
+| `--file` | `-f` | one of | Image, audio or other file to hide; give this or `--data`, not both |
 | `--key` | `-k` | no | Recipient **public** key file; a keypair is generated when omitted |
 | `--output` | `-o` | no | Destination file; its extension picks the format (default `<input>.stego.ogg`) |
 | `--out-codec` | | no | Encoder to use when the container holds more than one, e.g. `alac` for `.m4a` |
@@ -196,6 +200,17 @@ last bit of one percent of the samples. Run `mist formats` to see every target
 your FFmpeg build can write. An unwritable one — a lossy format other than
 Vorbis, or an extension FFmpeg does not know — fails immediately, before the
 carrier is even read.
+
+`--file` hides a file instead of text. The payload type follows the file's
+content, not its extension: an image or audio file travels as such and comes
+back under a generated name (`recovered-<frame>.jpg`), anything else keeps its
+base name. A payload larger than one frame is spread across as many as it
+needs, so a photo fits when the carrier is long enough; `mist estimate` reports
+how much. Lossless output holds far more than Vorbis.
+
+```bash
+mist embed -i song.flac -f photo.jpg -o song.stego.flac
+```
 
 When `--key` is omitted, Mist generates a keypair and writes it beside the
 output, named after it: `song.stego.pub` and `song.stego.key`. Keys are
@@ -228,6 +243,11 @@ mist catch --input song.stego.ogg --key song.stego.key
 | `--input` | `-i` | yes | Source to read: path, `file://` or `http(s)://` URL |
 | `--key` | `-k` | yes | Private key file |
 | `--timeout` | `-t` | no | Go duration; `0` (the default) reads until the stream ends |
+| `--out-dir` | | no | Directory for recovered images, audio and files (default `.`) |
+
+Text is printed. Any other payload is written to `--out-dir` and its path is
+printed. Only the last element of a stored name is used, and an existing file is
+never replaced: a taken name becomes `name-1.ext`, `name-2.ext`.
 
 A successful scan reports one message, whether it rode in a single frame or
 spread across several — `FrameIdx` names the frame where it started. `catch`
@@ -492,6 +512,17 @@ io.Copy(dst, stego)
 `io.Reader`, and `EmbedFile` an `*os.File`. All three return an
 `io.ReadCloser` producing a new stego stream, which the caller must close.
 
+A `Payload` is a type and bytes. `mist.Text(s)`, `mist.Image(b)` and
+`mist.Audio(b)` build the first three; `mist.File(name, b)` also remembers a
+file name, and `Payload.FileName()` splits it back into name and content on the
+other side. The type is encrypted with the data, and a payload larger than one
+frame is spread across several, so a photo fits in a long enough carrier.
+
+```go
+file, err := mist.File("report.pdf", pdf)
+stego, err := emitter.EmbedReader(ctx, carrier, file)
+```
+
 The output format is Ogg Vorbis unless you ask for another:
 
 ```go
@@ -521,7 +552,7 @@ spreading it across every usable frame when it doesn't fit in one).
 catcher, err := mist.NewCatcher(priv)
 results, err := catcher.Listen(ctx, "https://radio.example.com/live.ogg")
 for r := range results {
-    fmt.Println(r.FrameIdx, string(r.Payload.Data))
+    fmt.Println(r.FrameIdx, r.Payload.Type, len(r.Payload.Data))
 }
 if ctx.Err() != nil {
     // stopped by the caller rather than by end of stream

@@ -16,6 +16,7 @@ type embedOptions struct {
 	input  string
 	output string
 	data   string
+	file   string
 	key    string
 	codec  string
 }
@@ -24,8 +25,9 @@ func newEmbedCmd() *cobra.Command {
 	o := &embedOptions{}
 	cmd := &cobra.Command{
 		Use:   "embed",
-		Short: "Hide text inside an audio file",
-		Long: "  Encrypt --data for a recipient public key and embed it into --input,\n" +
+		Short: "Hide text or a file inside an audio file",
+		Long: "  Encrypt --data (text) or --file (an image, audio or any file) for a\n" +
+			"  recipient public key and embed it into --input,\n" +
 			"  writing a new audio file. The output format follows the --output\n" +
 			"  extension the way ffmpeg's does — .ogg, .flac, .wav and every other\n" +
 			"  lossless format this FFmpeg can write. Run `mist formats` to see\n" +
@@ -40,11 +42,13 @@ func newEmbedCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVarP(&o.input, "input", "i", "", "carrier audio file: path, file:// or http(s):// URL")
 	f.StringVarP(&o.data, "data", "d", "", "text to hide")
+	f.StringVarP(&o.file, "file", "f", "", "file to hide: an image, audio or any other file")
 	f.StringVarP(&o.key, "key", "k", "", "recipient public key file (a new keypair is created when omitted)")
 	f.StringVarP(&o.output, "output", "o", "", "destination file; its extension picks the format (default: <input>.stego.ogg)")
 	f.StringVar(&o.codec, "out-codec", "", "encoder to use when the container holds more than one (e.g. alac for .m4a)")
 	_ = cmd.MarkFlagRequired("input")
-	_ = cmd.MarkFlagRequired("data")
+	cmd.MarkFlagsOneRequired("data", "file")
+	cmd.MarkFlagsMutuallyExclusive("data", "file")
 	return cmd
 }
 
@@ -52,6 +56,12 @@ func runEmbed(ctx context.Context, o *embedOptions) error {
 	format, err := mist.LookupFormat(o.output, o.codec)
 	if err != nil {
 		return fmt.Errorf("%w — run `mist formats` for what this FFmpeg build can write", err)
+	}
+	payload := mist.Text(o.data)
+	if o.file != "" {
+		if payload, err = payloadFromFile(o.file); err != nil {
+			return err
+		}
 	}
 	output := o.output
 	if output == "" {
@@ -65,7 +75,8 @@ func runEmbed(ctx context.Context, o *embedOptions) error {
 
 	header("embed")
 	field("carrier", bold(o.input), "")
-	field("payload", bold(fmt.Sprintf("%d bytes", len(o.data))), "text")
+	size, kind := payloadSummary(payload)
+	field("payload", bold(fmt.Sprintf("%d bytes", size)), kind)
 	field("output", bold(output), describeFormat(format))
 	if priv != nil {
 		field("recipient", bold("new keypair"), "no --key given")
@@ -79,7 +90,7 @@ func runEmbed(ctx context.Context, o *embedOptions) error {
 	if err != nil {
 		return err
 	}
-	stream, err := emitter.Embed(ctx, o.input, mist.Text(o.data))
+	stream, err := emitter.Embed(ctx, o.input, payload)
 	if errors.Is(err, mist.ErrNoCapacity) {
 		return fmt.Errorf("%w — %s", err, capacityHint(format))
 	}

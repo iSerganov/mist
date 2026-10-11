@@ -71,12 +71,12 @@ func step(msg string) {
 	printf("\n  %s %s\n", blue("→"), msg)
 }
 
-func result(frame int64, text string) {
+func result(frame int64, size int, label string) {
 	printf("  %s %s  %s  %s\n",
 		green("▸"),
 		dim(fmt.Sprintf("frame %-3d", frame)),
-		dim(fmt.Sprintf("%3d B", len(text))),
-		bold(text),
+		dim(fmt.Sprintf("%3d B", size)),
+		bold(label),
 	)
 }
 

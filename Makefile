@@ -3,6 +3,9 @@ KEYDIR  ?= keys
 NAME    ?= mist
 INPUT   ?=
 DATA    ?=
+FILE    ?=
+OUTDIR  ?=
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 OUTPUT  ?=
 CODEC   ?=
 KEY     ?=
@@ -88,14 +91,14 @@ lint:
 
 build:
 	@mkdir -p $(dir $(BIN))
-	go build -o $(BIN) ./cmd/mist
+	go build -ldflags "-X main.version=$(VERSION)" -o $(BIN) ./cmd/mist
 
-# make embed INPUT=song.mp3 DATA="hello" [OUTPUT=out.flac] [CODEC=alac] [KEY=keys/mist.pub]
+# make embed INPUT=song.mp3 (DATA="hello" | FILE=photo.jpg) [OUTPUT=out.flac] [CODEC=alac] [KEY=keys/mist.pub]
 # OUTPUT's extension picks the format, as it does for ffmpeg; see make formats.
 embed: build
-	@test -n "$(INPUT)" || { echo "usage: make embed INPUT=<file|url> DATA=<text> [OUTPUT=..] [CODEC=..] [KEY=..]"; exit 2; }
-	@test -n "$(DATA)"  || { echo "usage: make embed INPUT=<file|url> DATA=<text> [OUTPUT=..] [CODEC=..] [KEY=..]"; exit 2; }
-	./$(BIN) embed --input "$(INPUT)" --data "$(DATA)" \
+	@test -n "$(INPUT)" || { echo "usage: make embed INPUT=<file|url> (DATA=<text> | FILE=<path>) [OUTPUT=..] [CODEC=..] [KEY=..]"; exit 2; }
+	@test -n "$(DATA)$(FILE)" || { echo "usage: make embed INPUT=<file|url> (DATA=<text> | FILE=<path>) [OUTPUT=..] [CODEC=..] [KEY=..]"; exit 2; }
+	./$(BIN) embed --input "$(INPUT)" $(if $(DATA),--data "$(DATA)") $(if $(FILE),--file "$(FILE)") \
 		$(if $(OUTPUT),--output "$(OUTPUT)") $(if $(CODEC),--out-codec "$(CODEC)") \
 		$(if $(KEY),--key "$(KEY)")
 
@@ -114,11 +117,12 @@ estimate: build
 analyze: build
 	./$(BIN) analyze "$(DIR)" $(if $(REFERENCE),--reference "$(REFERENCE)")
 
-# make catch INPUT=out.ogg KEY=keys/mist.key [TIMEOUT=30s]
+# make catch INPUT=out.ogg KEY=keys/mist.key [TIMEOUT=30s] [OUTDIR=recovered]
 catch: build
-	@test -n "$(INPUT)" || { echo "usage: make catch INPUT=<file|url> KEY=<private key> [TIMEOUT=30s]"; exit 2; }
-	@test -n "$(KEY)"   || { echo "usage: make catch INPUT=<file|url> KEY=<private key> [TIMEOUT=30s]"; exit 2; }
-	./$(BIN) catch --input "$(INPUT)" --key "$(KEY)" --timeout "$(TIMEOUT)"
+	@test -n "$(INPUT)" || { echo "usage: make catch INPUT=<file|url> KEY=<private key> [TIMEOUT=30s] [OUTDIR=..]"; exit 2; }
+	@test -n "$(KEY)"   || { echo "usage: make catch INPUT=<file|url> KEY=<private key> [TIMEOUT=30s] [OUTDIR=..]"; exit 2; }
+	./$(BIN) catch --input "$(INPUT)" --key "$(KEY)" --timeout "$(TIMEOUT)" \
+		$(if $(OUTDIR),--out-dir "$(OUTDIR)")
 
 # X25519 keypair via OpenSSL, written in the hex form the CLI reads.
 # OpenSSL emits PKCS#8/SPKI DER, whose final 32 bytes are the raw key.

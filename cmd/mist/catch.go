@@ -12,6 +12,7 @@ import (
 
 type catchOptions struct {
 	input   string
+	outDir  string
 	key     string
 	timeout time.Duration
 }
@@ -20,7 +21,7 @@ func newCatchCmd() *cobra.Command {
 	o := &catchOptions{}
 	cmd := &cobra.Command{
 		Use:   "catch",
-		Short: "Recover hidden text from an audio file or stream",
+		Short: "Recover hidden text or files from an audio file or stream",
 		Long: "  Scan --input for frames that decrypt under --key, printing each one\n" +
 			"  as it is recovered. A file ends by itself; a live stream runs until\n" +
 			"  --timeout elapses or the process is interrupted.\n\n" +
@@ -34,6 +35,7 @@ func newCatchCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVarP(&o.input, "input", "i", "", "source to read: path, file:// or http(s):// URL")
 	f.StringVarP(&o.key, "key", "k", "", "private key file")
+	f.StringVar(&o.outDir, "out-dir", ".", "directory that receives recovered images, audio and files")
 	f.DurationVarP(&o.timeout, "timeout", "t", 0, "stop after this long (0 reads until end of stream)")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("key")
@@ -71,7 +73,15 @@ func runCatch(ctx context.Context, o *catchOptions) error {
 	found := 0
 	for r := range results {
 		found++
-		result(r.FrameIdx, string(r.Payload.Data))
+		if r.Payload.Type == mist.PayloadText {
+			result(r.FrameIdx, len(r.Payload.Data), string(r.Payload.Data))
+			continue
+		}
+		saved, err := saveRecovered(o.outDir, r)
+		if err != nil {
+			return err
+		}
+		result(r.FrameIdx, len(r.Payload.Data), "saved "+saved)
 	}
 
 	success("%d frame(s) recovered · %s", found, stopReason(ctx))

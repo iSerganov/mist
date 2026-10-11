@@ -172,7 +172,7 @@ func (s *CatcherSuite) TestPayloadEmbeddedOnce() {
 	s.requireLibav()
 	pub, priv, err := GenerateKeyPair()
 	s.Require().NoError(err)
-	f := s.openTemp(s.stego(pub, Text("once only"), s.carrier(4*FrameDuration)))
+	f := s.openTemp(s.stego(pub, Text("once only"), s.carrier(2*FrameDuration)))
 
 	c, err := NewCatcher(priv)
 	s.Require().NoError(err)
