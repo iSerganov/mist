@@ -18,11 +18,11 @@ import (
 	"github.com/iSerganov/mist/internal/trace"
 )
 
-// canonicalWorkflow is the innocent encode the fingerprint verdict uses.
-// Vorbis follows the quality level Mist already opens (ffmpeg -q:a N).
-// A lossless codec has no quality knob, so the canonical encode is ffmpeg's
-// own defaults. Default ffmpeg on Vorbis is a second threat model.
-const canonicalWorkflow = "vorbis: ffmpeg -q:a at Mist's source-conditioned level; lossless: ffmpeg defaults"
+// canonicalWorkflow is the innocent encode the fingerprint verdict uses:
+// ffmpeg with the encoder settings Mist opens (encoderArgs), the Vorbis
+// quality level or a lossless encoder's frame size. Default ffmpeg is a
+// second threat model.
+const canonicalWorkflow = "vorbis: ffmpeg -q:a at Mist's source-conditioned level; lossless: ffmpeg -frame_size at Mist's encoder frame size"
 
 // metaThreshold is the preregistered pass for the audio-blind classifier.
 // An interval that does not contain 0.5 is a failed objective.

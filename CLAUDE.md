@@ -281,7 +281,8 @@ must use public carrier ids: pass a corpus manifest, or accept anonymous
 scored; `MIST_HARNESS_UNSEAL=1` scores that split instead and leaves the
 development carriers out, so one run never trains on both. The fingerprint verdict
 compares Mist with the canonical workflow: Vorbis at the `-q:a` level Mist chose,
-lossless at ffmpeg's defaults. Default ffmpeg is a labeled second threat model.
+lossless at the frame size Mist's encoder uses (`encoderArgs`, shared with
+`Analyze`). Default ffmpeg is a labeled second threat model.
 `MIST_FFPROBE` (`FFPROBE`) supplies the audio-blind metadata warden. The confirmatory family is frozen: hcf-com, classifier, markov, key-aware, rich, selection (schema 6). `make corpus CORPUS_OUT=`
 writes a generated PCM set plus that holdout, and the directory must sit outside
 the checkout. Never commit local audio paths. It is never part of

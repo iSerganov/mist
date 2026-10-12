@@ -590,7 +590,7 @@ func (r harnessReport) markdown(baseline *harnessReport) string {
 	}
 	b.WriteString("\n\nEach carrier is compared as four files: ffmpeg at its defaults, ffmpeg at the canonical workflow, " +
 		"Mist with nothing embedded, and Mist with a hidden message. For Vorbis the canonical workflow is `ffmpeg -q:a N` " +
-		"at the level Mist chose. For a lossless codec it is ffmpeg's defaults, so those two files are the same encode. " +
+		"at the level Mist chose. For a lossless codec it is `ffmpeg -frame_size N` at the frame size Mist's encoder uses. " +
 		"The fingerprint verdict is Mist against the canonical file. Default ffmpeg is a second threat model and does not " +
 		"decide that verdict. Detectors for Vorbis use the canonical file, so the quality setting is not the signal. " +
 		"[How to read this report](#how-to-read-this-report) explains every number and threshold.\n\n")
@@ -952,8 +952,8 @@ more carriers, and to the carriers that remain. It does not retrain.
 **Message size** compares a 64-byte message with a 1-byte one. Mist changes the same amount of audio whatever
 the message, so this should read 0.5: anything else means the message length shows.
 
-**Canonical workflow** is ffmpeg -q:a N at the Vorbis level Mist chose, and ffmpeg's defaults for a lossless
-codec. The fingerprint verdict uses that file. A nominal-rate gap against ffmpeg's default quality is reported
+**Canonical workflow** is ffmpeg -q:a N at the Vorbis level Mist chose, and ffmpeg -frame_size N at the frame
+size Mist's encoder uses for a lossless codec. The fingerprint verdict uses that file. A nominal-rate gap against ffmpeg's default quality is reported
 beside it and does not fail the verdict: that warden re-encoded at a different setting. Ogg serial numbers are
 random on every encode, so the audit compares how many serials a file has, not the number itself.
 

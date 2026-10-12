@@ -312,13 +312,13 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 	if err != nil {
 		return carrierRun{}, err
 	}
-	sameLevel := twin
-	if !em.target.Lossless {
-		level, err := vorbisLevel(em.target, ref, info)
-		if err != nil {
-			return carrierRun{}, err
-		}
-		if sameLevel, err = ffmpegTwin(ctx, em.target.Container, codecName, c.ext, data, "-q:a", strconv.Itoa(level)); err != nil {
+	canonical := twin
+	args, err := encoderArgs(em.target, ref, info)
+	if err != nil {
+		return carrierRun{}, err
+	}
+	if len(args) > 0 {
+		if canonical, err = ffmpegTwin(ctx, em.target.Container, codecName, c.ext, data, args...); err != nil {
 			return carrierRun{}, err
 		}
 	}
@@ -338,7 +338,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 	if err != nil {
 		return carrierRun{}, fmt.Errorf("key-aware: %w", err)
 	}
-	keyClean, err := keyAwareScore(sameLevel, em.pub)
+	keyClean, err := keyAwareScore(canonical, em.pub)
 	if err != nil {
 		return carrierRun{}, fmt.Errorf("key-aware: %w", err)
 	}
@@ -347,7 +347,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 		channels = info.Channels
 	}
 	var outs [5]decoded
-	for i, b := range [][]byte{twin, own, stegoOut, minimalOut, sameLevel} {
+	for i, b := range [][]byte{twin, own, stegoOut, minimalOut, canonical} {
 		if outs[i], err = inspect(b); err != nil {
 			return carrierRun{}, err
 		}
