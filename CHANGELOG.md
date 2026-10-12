@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0]
+
+### Added
+
+- Typed payloads. `mist.Image`, `mist.Audio` and `mist.File(name, data)`
+  build the payload types that were reserved on the wire; `Payload.FileName`
+  splits a file payload back into its name and content. The wire format is
+  unchanged: a file's name rides at the front of its `Data`.
+- `mist embed --file` hides an image, audio file or any other file instead of
+  text. The type follows the file's content, not its extension.
+- `mist catch --out-dir` saves recovered images, audio and files (default: the
+  current directory) under a sanitized base name, and never replaces an
+  existing file.
+- `mist --version` prints the version stamped by `make build`, or the module
+  version for a `go install`.
+- Progress reporting. `WithEmitProgress` reports each embedded frame and
+  `WithCatchProgress` each scanned frame and each received chunk of a spanned
+  message. A frame that fails to decrypt is reported like any other, so
+  progress reveals nothing a warden could use. `embed` and `catch` show it on
+  a terminal.
+- `WithPartial` and `mist catch --partial` return the start of a spanned
+  message whose later frames were lost, as a `Result` with `Partial` and
+  `Total` set. Off by default.
+
+### Changed
+
+- `make embed` takes `FILE=` and `make catch` takes `OUTDIR=`.
+- A spanned message is dropped at the first frame that should have carried
+  its next chunk and did not, instead of being held until the stream ends.
+
+### Removed
+
+- `FrameCapacity()`. Room per frame depends on the carrier and the target, so
+  a fixed figure was always wrong: it said 576 bytes where real carriers held
+  106–176 bytes per Vorbis frame and 812–890 per FLAC frame. Use
+  `EstimateCapacity`, or `mist estimate`, which measure the carrier itself.
+
 ## [1.1.0]
 
 ### Changed

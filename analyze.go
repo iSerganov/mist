@@ -403,18 +403,19 @@ func (a *analyzer) plainFFmpeg(ffmpeg string, source []byte, ext string, info av
 	if err != nil {
 		return nil, err
 	}
-	if target.Lossless {
-		return trace.Encode(a.ctx, ffmpeg, source, ext, target.Container, target.CodecName)
-	}
 	pcm, srcInfo, _, err := decodeCarrier(bytes.NewReader(source))
 	if err != nil {
 		return nil, err
 	}
-	level, err := vorbisLevel(target, pcm, srcInfo)
+	args, err := encoderArgs(target, pcm, srcInfo)
 	if err != nil {
 		return nil, err
 	}
-	return trace.Encode(a.ctx, ffmpeg, source, ext, target.Container, "", "-q:a", strconv.Itoa(level))
+	codecName := ""
+	if target.Lossless {
+		codecName = target.CodecName
+	}
+	return trace.Encode(a.ctx, ffmpeg, source, ext, target.Container, codecName, args...)
 }
 
 // knownCover encodes the reference through Mist's own pipeline with
@@ -443,7 +444,7 @@ func (a *analyzer) knownCover(refRaw []byte, suspect values) error {
 		a.add(sdr)
 		return nil
 	}
-	clean, err := plainEncode(target, refPCM, refInfo)
+	clean, err := plainEncode(target, refPCM, refInfo, av.Metadata{})
 	if err != nil {
 		return fmt.Errorf("reference: %w", err)
 	}
@@ -601,23 +602,30 @@ func targetOf(info av.AudioInfo) (av.Format, error) {
 	return lookupFormat(firstName(info.Container), info.CodecName)
 }
 
-// vorbisLevel is the Vorbis quality level Mist opens its encoder at for a
-// carrier. It asks the encoder: libvorbis writes a nominal rate of 0 at
+// encoderArgs are the ffmpeg arguments that open the encoder the way Mist
+// opens it for a carrier: the Vorbis quality level, or a lossless encoder's
+// frame size. It asks the encoder: libvorbis writes a nominal rate of 0 at
 // some sample rates, so matching rates cannot tell the levels apart.
-func vorbisLevel(target av.Format, pcm codec.PCM, info av.AudioInfo) (int, error) {
+func encoderArgs(target av.Format, pcm codec.PCM, info av.AudioInfo) ([]string, error) {
 	enc, err := openEncoder(target, pcm, info)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer func() { _ = enc.Close() }()
-	return enc.Info().Quality, nil
+	if !target.Lossless {
+		return []string{"-q:a", strconv.Itoa(enc.Info().Quality)}, nil
+	}
+	if fs := enc.Info().FrameSize; fs > 0 {
+		return []string{"-frame_size", strconv.Itoa(fs)}, nil
+	}
+	return nil, nil
 }
 
 // plainEncode is the carrier through Mist's own encoder with nothing
 // embedded, including the lossless grid snap Embed does before it changes
 // a sample, so it differs from Embed's output by the embedding alone. It
 // snaps pcm in place.
-func plainEncode(target av.Format, pcm codec.PCM, info av.AudioInfo) ([]byte, error) {
+func plainEncode(target av.Format, pcm codec.PCM, info av.AudioInfo, meta av.Metadata) ([]byte, error) {
 	enc, err := openEncoder(target, pcm, info)
 	if err != nil {
 		return nil, err
@@ -628,7 +636,7 @@ func plainEncode(target av.Format, pcm codec.PCM, info av.AudioInfo) ([]byte, er
 			return nil, err
 		}
 	}
-	rc, err := encodeAndMux(enc, pcm, av.Metadata{}, nil)
+	rc, err := encodeAndMux(enc, pcm, meta, nil)
 	if err != nil {
 		return nil, err
 	}

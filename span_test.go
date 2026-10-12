@@ -3,10 +3,14 @@ package mist
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/iSerganov/mist/internal/av"
+	"github.com/iSerganov/mist/internal/crypto"
+	"github.com/iSerganov/mist/internal/stego"
 	"github.com/iSerganov/mist/internal/wire"
 	"github.com/stretchr/testify/suite"
 )
@@ -188,8 +192,8 @@ func (s *SpanSuite) TestEmbedExtractSpansAcrossLosslessFrames() {
 	pub, priv, err := GenerateKeyPair()
 	s.Require().NoError(err)
 
-	msg := string(bytes.Repeat([]byte("0123456789"), 400)) // 4000 bytes
-	out := s.stego(pub, Text(msg), s.pcmCarrier(64*time.Second), WithFormat("flac"))
+	msg := string(bytes.Repeat([]byte("0123456789"), 200)) // 2000 bytes, three frames
+	out := s.stego(pub, Text(msg), s.pcmCarrier(4*FrameDuration), WithFormat("flac"))
 	res := s.extract(priv, out)
 
 	s.Require().Len(res, 1)
@@ -208,4 +212,134 @@ func (s *SpanSuite) TestEmbedFailsWhenSpanningStillIsNotEnough() {
 	huge := string(bytes.Repeat([]byte{0x41}, 200_000))
 	_, err = em.EmbedReader(context.Background(), bytes.NewReader(s.pcmCarrier(4*FrameDuration)), Text(huge))
 	s.Require().ErrorIs(err, ErrNoCapacity)
+}
+
+// Every payload type comes back with its type and bytes intact, and a wrong
+// key recovers nothing. Spanning is type-blind and covered above.
+func (s *SpanSuite) TestTypedPayloadsRoundTrip() {
+	random := func(n int) []byte {
+		b := make([]byte, n)
+		_, err := rand.Read(b)
+		s.Require().NoError(err)
+		return b
+	}
+	file := func(name string, data []byte) Payload {
+		p, err := File(name, data)
+		s.Require().NoError(err)
+		return p
+	}
+	tests := []struct {
+		title   string
+		format  string
+		payload Payload
+		seconds int
+	}{
+		{"named file in flac", "flac", file("quarterly/report.pdf", random(200)), 9},
+		{"image in wav", "wav", Image(random(200)), 9},
+		{"audio in wav", "wav", Audio(random(200)), 9},
+		{"image in vorbis", "", Image(random(150)), 32},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			if tc.format == "" {
+				s.requireLibav()
+			} else {
+				s.requireFormat(tc.format)
+			}
+			pub, priv, err := GenerateKeyPair()
+			s.Require().NoError(err)
+			var opts []EmitterOption
+			if tc.format != "" {
+				opts = append(opts, WithFormat(tc.format))
+			}
+			out := s.stego(pub, tc.payload, s.pcmCarrier(time.Duration(tc.seconds)*time.Second), opts...)
+
+			res := s.extract(priv, out)
+			s.Require().Len(res, 1)
+			s.Equal(tc.payload.Type, res[0].Payload.Type)
+			s.Equal(tc.payload.Data, res[0].Payload.Data)
+
+			_, wrongPriv, err := GenerateKeyPair()
+			s.Require().NoError(err)
+			s.Empty(s.extract(wrongPriv, out))
+		})
+	}
+}
+
+// A span stops at the first frame that should have carried a chunk and did
+// not. Only WithPartial hands out what arrived before it, and only once the
+// first chunk has authenticated.
+func (s *SpanSuite) TestInterruptedSpan() {
+	pub, priv, err := GenerateKeyPair()
+	s.Require().NoError(err)
+	_, other, err := GenerateKeyPair()
+	s.Require().NoError(err)
+	msg := bytes.Repeat([]byte("abcdefghij"), 33)
+	full := s.marshaledText(string(msg))
+	room := EnvelopeOverhead + wire.SpanStartHeaderSize + 100
+	plan := planSpan(full, []int{room, room, room, room})
+	s.Require().NotNil(plan[3])
+
+	sealed := func(i int) stego.Bits {
+		env, err := crypto.Seal(plan[i], pub)
+		s.Require().NoError(err)
+		return env.Marshal()
+	}
+	noise := stego.Bits(bytes.Repeat([]byte{0x5a}, room))
+	prefix := func(chunks int) []byte {
+		n := len(plan[0]) - wire.SpanStartHeaderSize
+		for i := 1; i < chunks; i++ {
+			n += len(plan[i]) - wire.SpanContinueHeaderSize
+		}
+		return full[wire.PayloadHeaderSize:n]
+	}
+	type frame struct {
+		bits stego.Bits
+		room int
+	}
+	tests := []struct {
+		title       string
+		key         []byte
+		frames      []frame
+		wantPartial []byte
+		wantFull    bool
+	}{
+		{"chunk lost mid span", priv, []frame{{sealed(0), room}, {sealed(1), room}, {noise, room}, {sealed(3), room}}, prefix(2), false},
+		{"first chunk lost", priv, []frame{{noise, room}, {sealed(1), room}, {sealed(2), room}, {sealed(3), room}}, nil, false},
+		{"stream ends mid span", priv, []frame{{sealed(0), room}, {sealed(1), room}}, prefix(2), false},
+		{"frame without room is not a gap", priv, []frame{{sealed(0), room}, {noise, 0}, {sealed(1), room}, {sealed(2), room}, {sealed(3), room}}, nil, true},
+		{"chunk out of order breaks the span", priv, []frame{{sealed(0), room}, {sealed(0), room}}, prefix(1), false},
+		{"wrong key", other, []frame{{sealed(0), room}, {sealed(1), room}, {noise, room}}, nil, false},
+	}
+	for _, tc := range tests {
+		for _, keep := range []bool{false, true} {
+			s.Run(fmt.Sprintf("%s keep=%v", tc.title, keep), func() {
+				o := &opener{priv: tc.key, keep: keep}
+				var got []Result
+				for i, f := range tc.frames {
+					if r, ok := o.open(int64(i), f.bits, nil, func() int { return f.room }); ok {
+						got = append(got, r)
+					}
+				}
+				if r, ok := o.interrupt(); ok {
+					got = append(got, r)
+				}
+
+				switch {
+				case tc.wantFull:
+					s.Require().Len(got, 1)
+					s.False(got[0].Partial)
+					s.Equal(msg, got[0].Payload.Data)
+				case keep && tc.wantPartial != nil:
+					s.Require().Len(got, 1)
+					s.True(got[0].Partial)
+					s.Equal(len(msg), got[0].Total)
+					s.Equal(PayloadText, got[0].Payload.Type)
+					s.Equal(tc.wantPartial, got[0].Payload.Data)
+				default:
+					s.Empty(got)
+				}
+			})
+		}
+	}
 }

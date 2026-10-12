@@ -115,6 +115,38 @@ func (s *WireSuite) TestUnmarshalPayloadDoesNotAliasInput() {
 	s.Equal([]byte("abc"), got.Data)
 }
 
+func (s *WireSuite) TestUnmarshalPayloadPrefix() {
+	full, err := MarshalPayload(Payload{Type: 0x04, Data: []byte("0123456789")})
+	s.Require().NoError(err)
+
+	tests := []struct {
+		title    string
+		in       []byte
+		wantData string
+		wantErr  error
+	}{
+		{"header only", full[:PayloadHeaderSize], "", nil},
+		{"part of the data", full[:PayloadHeaderSize+4], "0123", nil},
+		{"all of the data", full, "0123456789", nil},
+		{"shorter than the header", full[:PayloadHeaderSize-1], "", ErrShort},
+		{"unknown version", append([]byte{9}, full[1:]...), "", ErrVersion},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			p, length, err := UnmarshalPayloadPrefix(tc.in)
+			if tc.wantErr != nil {
+				s.ErrorIs(err, tc.wantErr)
+				return
+			}
+			s.Require().NoError(err)
+			s.Equal(uint32(10), length)
+			s.Equal(byte(0x04), p.Type)
+			s.Equal(tc.wantData, string(p.Data))
+			s.Empty(p.Signature)
+		})
+	}
+}
+
 func (s *WireSuite) TestEnvelopeRoundTrip() {
 	tests := []struct {
 		title string

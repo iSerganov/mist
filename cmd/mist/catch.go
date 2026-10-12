@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 
 type catchOptions struct {
 	input   string
+	outDir  string
+	partial bool
 	key     string
 	timeout time.Duration
 }
@@ -20,7 +23,7 @@ func newCatchCmd() *cobra.Command {
 	o := &catchOptions{}
 	cmd := &cobra.Command{
 		Use:   "catch",
-		Short: "Recover hidden text from an audio file or stream",
+		Short: "Recover hidden text or files from an audio file or stream",
 		Long: "  Scan --input for frames that decrypt under --key, printing each one\n" +
 			"  as it is recovered. A file ends by itself; a live stream runs until\n" +
 			"  --timeout elapses or the process is interrupted.\n\n" +
@@ -34,6 +37,8 @@ func newCatchCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVarP(&o.input, "input", "i", "", "source to read: path, file:// or http(s):// URL")
 	f.StringVarP(&o.key, "key", "k", "", "private key file")
+	f.StringVar(&o.outDir, "out-dir", ".", "directory that receives recovered images, audio and files")
+	f.BoolVar(&o.partial, "partial", false, "keep what arrived of a message cut short, saved with a .partial suffix")
 	f.DurationVarP(&o.timeout, "timeout", "t", 0, "stop after this long (0 reads until end of stream)")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("key")
@@ -57,7 +62,14 @@ func runCatch(ctx context.Context, o *catchOptions) error {
 		defer cancel()
 	}
 
-	catcher, err := mist.NewCatcher(priv, mist.WithLogger(slog.New(noteHandler{})))
+	opts := []mist.CatcherOption{
+		mist.WithLogger(slog.New(noteHandler{})),
+		mist.WithCatchProgress(catchMeter()),
+	}
+	if o.partial {
+		opts = append(opts, mist.WithPartial())
+	}
+	catcher, err := mist.NewCatcher(priv, opts...)
 	if err != nil {
 		return err
 	}
@@ -71,7 +83,9 @@ func runCatch(ctx context.Context, o *catchOptions) error {
 	found := 0
 	for r := range results {
 		found++
-		result(r.FrameIdx, string(r.Payload.Data))
+		if err := show(o.outDir, r); err != nil {
+			return err
+		}
 	}
 
 	success("%d frame(s) recovered · %s", found, stopReason(ctx))
@@ -96,5 +110,40 @@ func stopReason(ctx context.Context) string {
 		return "interrupted"
 	default:
 		return "end of stream"
+	}
+}
+
+func show(dir string, r mist.Result) error {
+	label := string(r.Payload.Data)
+	if r.Payload.Type != mist.PayloadText {
+		saved, err := saveRecovered(dir, r)
+		if err != nil {
+			return err
+		}
+		label = "saved " + saved
+	}
+	result(r.FrameIdx, len(r.Payload.Data), label)
+	if r.Partial {
+		warn("partial: %s of %s arrived", humanBytes(int64(len(r.Payload.Data))), humanBytes(int64(r.Total)))
+	}
+	return nil
+}
+
+func catchMeter() mist.ProgressFunc {
+	var scan, assemble mist.Progress
+	return func(p mist.Progress) {
+		if p.Stage == mist.ProgressAssemble {
+			assemble = p
+		} else {
+			scan = p
+		}
+		line := fmt.Sprintf("frame %d", scan.Done)
+		if scan.Total > 0 {
+			line += fmt.Sprintf("/%d", scan.Total)
+		}
+		if assemble.Total > 0 && assemble.Done < assemble.Total {
+			line += fmt.Sprintf(" · receiving %s / %s", humanBytes(int64(assemble.Done)), humanBytes(int64(assemble.Total)))
+		}
+		meter("%s", line)
 	}
 }

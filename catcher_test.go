@@ -100,7 +100,9 @@ func (s *CatcherSuite) TestRejectsNonVorbisCarrier() {
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
-			_, err := newScanner(priv, av.AudioInfo{CodecID: tc.id}, slog.New(slog.DiscardHandler))
+			c, err := NewCatcher(priv)
+			s.Require().NoError(err)
+			_, err = newScanner(c, av.AudioInfo{CodecID: tc.id})
 			s.ErrorIs(err, ErrUnsupportedCodec)
 		})
 	}
@@ -172,7 +174,7 @@ func (s *CatcherSuite) TestPayloadEmbeddedOnce() {
 	s.requireLibav()
 	pub, priv, err := GenerateKeyPair()
 	s.Require().NoError(err)
-	f := s.openTemp(s.stego(pub, Text("once only"), s.carrier(4*FrameDuration)))
+	f := s.openTemp(s.stego(pub, Text("once only"), s.carrier(2*FrameDuration)))
 
 	c, err := NewCatcher(priv)
 	s.Require().NoError(err)
@@ -307,7 +309,9 @@ func (s *CatcherSuite) TestJoinMidStreamLogsAndSkips() {
 	defer func() { _ = d.Close() }()
 
 	var logs bytes.Buffer
-	sc, err := newScanner(priv, d.Info(), slog.New(slog.NewTextHandler(&logs, nil)))
+	c, err := NewCatcher(priv, WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+	s.Require().NoError(err)
+	sc, err := newScanner(c, d.Info())
 	s.Require().NoError(err)
 
 	var got []Result

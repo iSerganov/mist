@@ -32,6 +32,20 @@ func WithLogger(log *slog.Logger) CatcherOption {
 	return func(c *Catcher) { c.log = log }
 }
 
+// WithCatchProgress reports each frame scanned and each chunk of a spanned
+// payload assembled to f. Frames that fail to decrypt are reported exactly
+// like frames that carry nothing.
+func WithCatchProgress(f ProgressFunc) CatcherOption {
+	return func(c *Catcher) { c.progress = f }
+}
+
+// WithPartial makes a spanned payload that stops arriving part way through
+// a Result with Partial set, holding the bytes that did arrive, instead of
+// nothing. Off by default.
+func WithPartial() CatcherOption {
+	return func(c *Catcher) { c.partial = true }
+}
+
 // Catcher extracts payloads with a recipient private key. Construct it once
 // with NewCatcher and share it; methods do not mutate it.
 type Catcher struct {
@@ -39,6 +53,8 @@ type Catcher struct {
 	maxRetries int
 	backoff    time.Duration
 	log        *slog.Logger
+	progress   ProgressFunc
+	partial    bool
 }
 
 // NewCatcher returns an immutable Catcher for privKey.

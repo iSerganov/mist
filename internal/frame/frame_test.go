@@ -121,24 +121,3 @@ func (s *FrameSuite) TestGrouperEmitsOnWindowChange() {
 	_, ok = g.Flush()
 	s.False(ok, "flushing twice yields nothing")
 }
-
-func (s *FrameSuite) TestCapacity() {
-	tests := []struct {
-		title    string
-		eligible int
-		density  float64
-		overhead int
-		want     int
-	}{
-		{"room to spare", 8000, 0.10, 10, 90},
-		{"exactly overhead", 800, 0.10, 10, 0},
-		{"below overhead", 10, 0.10, 10, 0},
-		{"no residues", 0, 0.10, 0, 0},
-		{"no density", 8000, 0, 10, 0},
-	}
-	for _, tc := range tests {
-		s.Run(tc.title, func() {
-			s.Equal(tc.want, Capacity(tc.eligible, tc.density, tc.overhead))
-		})
-	}
-}

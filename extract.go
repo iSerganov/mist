@@ -23,18 +23,26 @@ import (
 type scanner interface {
 	push(codec.Packet) (Result, bool)
 	flush() (Result, bool)
+	interrupt() (Result, bool)
 	Close() error
 }
 
 // newScanner picks the domain the stream was embedded in. Extraction is
 // possible wherever Emit could write: Vorbis, whose residues Mist parses,
 // and any lossless codec, whose samples come back unchanged.
-func newScanner(priv []byte, info av.AudioInfo, log *slog.Logger) (scanner, error) {
-	pub, err := crypto.PublicFromPrivate(priv)
+func newScanner(c *Catcher, info av.AudioInfo) (scanner, error) {
+	pub, err := crypto.PublicFromPrivate(c.priv)
 	if err != nil {
 		return nil, ErrInvalidKey
 	}
-	o := &opener{priv: priv, pub: pub, log: log}
+	o := &opener{
+		priv:     c.priv,
+		pub:      pub,
+		log:      c.logger(),
+		progress: c.progress,
+		keep:     c.partial,
+		frames:   frameCount(info.DurationUs),
+	}
 	p := info.Params()
 	fp := frame.Params{SampleRate: p.SampleRate, Channels: p.Channels, Duration: FrameDuration}
 	switch {
@@ -62,16 +70,20 @@ func newScanner(priv []byte, info av.AudioInfo, log *slog.Logger) (scanner, erro
 
 // opener is the half of a scan that does not depend on where the bits
 // came from. Every failure here is a silent skip: a frame that carries no
-// payload and a frame this key cannot open must be indistinguishable.
+// payload and a frame this key cannot open must be indistinguishable. The
+// one exception is WithPartial, and only once a span has authenticated.
 //
 // A payload that did not fit one frame arrives as consecutive chunks (see
 // span.go and wire's span framing), so opener also carries the assembly
 // state across calls: span, want and startIdx are empty except mid-span.
 type opener struct {
-	priv   []byte
-	pub    []byte
-	log    *slog.Logger
-	joined bool
+	priv     []byte
+	pub      []byte
+	log      *slog.Logger
+	progress ProgressFunc
+	keep     bool
+	frames   int
+	joined   bool
 
 	spanning bool
 	span     []byte
@@ -79,22 +91,60 @@ type opener struct {
 	startIdx int64
 }
 
-func (o *opener) open(idx int64, bits stego.Bits, err error) (Result, bool) {
-	if err != nil {
-		return Result{}, false
-	}
-	env, err := wire.UnmarshalEnvelope(bits)
-	if err != nil {
-		return Result{}, false
-	}
-	plain, err := crypto.Open(&env, o.priv)
-	if err != nil {
-		return Result{}, false
+func (o *opener) open(idx int64, bits stego.Bits, err error, room func() int) (Result, bool) {
+	o.scanned(idx)
+	plain, ok := o.decrypt(bits, err)
+	if !ok {
+		return o.miss(room)
 	}
 	if o.spanning {
 		return o.resume(idx, plain)
 	}
 	return o.start(idx, plain)
+}
+
+func (o *opener) decrypt(bits stego.Bits, err error) ([]byte, bool) {
+	if err != nil {
+		return nil, false
+	}
+	env, err := wire.UnmarshalEnvelope(bits)
+	if err != nil {
+		return nil, false
+	}
+	plain, err := crypto.Open(&env, o.priv)
+	return plain, err == nil
+}
+
+func (o *opener) scanned(idx int64) {
+	o.progress.report(ProgressScan, int(idx)+1, o.frames)
+}
+
+func (o *opener) miss(room func() int) (Result, bool) {
+	if !o.spanning || spanRoom(room(), false) <= 0 {
+		return Result{}, false
+	}
+	return o.interrupt()
+}
+
+func (o *opener) interrupt() (Result, bool) {
+	if !o.spanning {
+		return Result{}, false
+	}
+	span, startIdx := o.span, o.startIdx
+	o.reset()
+	if !o.keep {
+		return Result{}, false
+	}
+	p, total, err := wire.UnmarshalPayloadPrefix(span)
+	if err != nil {
+		return Result{}, false
+	}
+	return Result{
+		Payload:  Payload{Type: PayloadType(p.Type), Data: p.Data},
+		FrameIdx: startIdx,
+		Partial:  true,
+		Total:    int(total),
+	}, true
 }
 
 // start handles a frame that is not a continuation of one already being
@@ -117,12 +167,11 @@ func (o *opener) start(idx int64, plain []byte) (Result, bool) {
 // resume appends a later chunk of a payload already being assembled. A
 // frame that authenticates but does not carry a valid continuation marker
 // means the span was interrupted (a frame lost or corrupted in transit);
-// the partial assembly is discarded rather than ever handed out.
+// the partial assembly is handed out only under WithPartial.
 func (o *opener) resume(idx int64, plain []byte) (Result, bool) {
 	chunk, ok := wire.UnmarshalSpanContinue(plain)
 	if !ok {
-		o.reset()
-		return Result{}, false
+		return o.interrupt()
 	}
 	o.span = append(o.span, chunk...)
 	return o.assembled()
@@ -130,6 +179,7 @@ func (o *opener) resume(idx int64, plain []byte) (Result, bool) {
 
 // assembled reports the reassembled payload once every chunk has arrived.
 func (o *opener) assembled() (Result, bool) {
+	o.progress.report(ProgressAssemble, min(len(o.span), o.want), o.want)
 	if len(o.span) < o.want {
 		return Result{}, false
 	}
@@ -156,6 +206,7 @@ func (o *opener) seed(idx int64) ([]byte, bool) {
 // partial logs the single diagnostic a scan emits. A listener that joined
 // mid-window cannot align to it, and there is no phase search.
 func (o *opener) partial(idx int64) (Result, bool) {
+	o.scanned(idx)
 	if !o.joined {
 		o.joined = true
 		o.log.Info("joined in the middle of transmission, cannot decrypt", "frame", idx)
@@ -195,7 +246,13 @@ func (s *residueScanner) group(g frame.Group) (Result, bool) {
 		return Result{}, false
 	}
 	bits, err := stego.Recover(s.vc, pos, g.Packets)
-	return s.open(g.Index, bits, err)
+	return s.open(g.Index, bits, err, func() int {
+		room, err := stego.Capacity(s.vc, g.Packets)
+		if err != nil {
+			return 0
+		}
+		return room
+	})
 }
 
 // sampleScanner reads bits from decoded PCM, which a lossless codec
@@ -252,7 +309,7 @@ func (s *sampleScanner) read(windows []sampleFrame) (Result, bool) {
 			continue
 		}
 		bits, err := stego.RecoverSamples(w.Samples, pos)
-		if res, ok := s.open(w.index, bits, err); ok {
+		if res, ok := s.open(w.index, bits, err, w.Capacity); ok {
 			return res, true
 		}
 	}
@@ -268,7 +325,7 @@ func (s *sampleScanner) read(windows []sampleFrame) (Result, bool) {
 // on: the channel they range over closes as soon as ctx does, whatever
 // the reader is still waiting for.
 func (c *Catcher) stream(ctx context.Context, d *av.Demuxer) (<-chan Result, error) {
-	sc, err := newScanner(c.priv, d.Info(), c.logger())
+	sc, err := newScanner(c, d.Info())
 	if err != nil {
 		_ = d.Close()
 		return nil, err
@@ -308,7 +365,10 @@ func (c *Catcher) scan(ctx context.Context, d *av.Demuxer, sc scanner, out chan<
 	for ctx.Err() == nil {
 		pkt, err := d.NextPacket()
 		if errors.Is(err, av.ErrEOF) {
-			if res, ok := sc.flush(); ok {
+			if res, ok := sc.flush(); ok && !send(ctx, out, res) {
+				return
+			}
+			if res, ok := sc.interrupt(); ok {
 				send(ctx, out, res)
 			}
 			return
@@ -360,4 +420,12 @@ func (r *retrier) wait(ctx context.Context) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+func frameCount(durationUs int64) int {
+	d := time.Duration(durationUs) * time.Microsecond
+	if d <= 0 {
+		return 0
+	}
+	return int((d + FrameDuration - 1) / FrameDuration)
 }

@@ -35,6 +35,11 @@ func WithCodec(name string) EmitterOption {
 	return func(e *Emitter) { e.codec = name }
 }
 
+// WithEmitProgress reports each frame Embed writes to f.
+func WithEmitProgress(f ProgressFunc) EmitterOption {
+	return func(e *Emitter) { e.progress = f }
+}
+
 // Emitter encrypts a payload for a recipient public key and embeds it
 // into a carrier. Construct it once with NewEmitter and share it. Methods
 // do not mutate the Emitter.
@@ -44,6 +49,7 @@ type Emitter struct {
 	format     string
 	codec      string
 	target     av.Format
+	progress   ProgressFunc
 }
 
 // NewEmitter returns an Emitter for recipientPubKey.

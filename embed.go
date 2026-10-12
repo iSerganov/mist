@@ -19,29 +19,6 @@ import (
 	"github.com/iSerganov/mist/internal/wire"
 )
 
-// FrameCapacity returns a rough upper bound on the payload bytes
-// embeddable per stego frame at the library's fixed embedding density,
-// before encryption overhead. It is a planning heuristic for a typical
-// carrier, not the real limit Embed enforces — EstimateCapacity reports
-// that, for an actual carrier, and also accounts for Embed spanning the
-// payload across frames when it does not fit in a single one.
-func FrameCapacity() int {
-	return frame.Capacity(typicalEligible(), stego.Density, EnvelopeOverhead)
-}
-
-func typicalEligible() int {
-	const rate, hop, n = 44100, 1024, 1024
-	packets := int(FrameDuration.Seconds() * float64(rate) / hop)
-	bins := 0
-	for i := 0; i < n; i++ {
-		hz := i * rate / (n * 2)
-		if hz >= stego.DefaultBands.FromHz && hz < stego.DefaultBands.ToHz {
-			bins++
-		}
-	}
-	return bins * 2 * packets
-}
-
 func (e *Emitter) embed(ctx context.Context, r io.Reader, payload Payload) (io.ReadCloser, error) {
 	if err := e.validate(ctx, payload); err != nil {
 		return nil, err
@@ -270,6 +247,7 @@ func (e *Emitter) embedResidues(ctx context.Context, info av.AudioInfo, pkts []c
 			return nil, err
 		}
 		all = append(all, out...)
+		e.progress.report(ProgressEmbed, i+1, len(groups))
 	}
 	return all, nil
 }

@@ -14,6 +14,8 @@ var out io.Writer = os.Stdout
 
 var colorOn = true
 
+var liveOn, meterOpen bool
+
 // useColor turns styling off for pipes, dumb terminals and NO_COLOR.
 func useColor(on bool, f *os.File) {
 	if !on || os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
@@ -21,6 +23,25 @@ func useColor(on bool, f *os.File) {
 		return
 	}
 	colorOn = isTerminal(f)
+}
+
+func useLive(f *os.File) {
+	liveOn = os.Getenv("TERM") != "dumb" && isTerminal(f)
+}
+
+func meter(format string, args ...any) {
+	if !liveOn {
+		return
+	}
+	printf("\r\x1b[K  %s %s", blue("→"), fmt.Sprintf(format, args...))
+	meterOpen = true
+}
+
+func endMeter() {
+	if meterOpen {
+		printf("\n")
+		meterOpen = false
+	}
 }
 
 func isTerminal(f *os.File) bool {
@@ -71,20 +92,23 @@ func step(msg string) {
 	printf("\n  %s %s\n", blue("→"), msg)
 }
 
-func result(frame int64, text string) {
+func result(frame int64, size int, label string) {
+	endMeter()
 	printf("  %s %s  %s  %s\n",
 		green("▸"),
 		dim(fmt.Sprintf("frame %-3d", frame)),
-		dim(fmt.Sprintf("%3d B", len(text))),
-		bold(text),
+		dim(fmt.Sprintf("%3d B", size)),
+		bold(label),
 	)
 }
 
 func success(format string, args ...any) {
+	endMeter()
 	printf("\n  %s %s\n\n", green("✓"), fmt.Sprintf(format, args...))
 }
 
 func warn(format string, args ...any) {
+	endMeter()
 	printf("  %s %s\n", yellow("!"), fmt.Sprintf(format, args...))
 }
 

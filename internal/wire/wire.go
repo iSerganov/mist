@@ -94,6 +94,22 @@ func UnmarshalPayload(b []byte) (Payload, error) {
 	return p, nil
 }
 
+// UnmarshalPayloadPrefix decodes the start of a marshaled payload whose
+// tail never arrived. Data holds the bytes present and length is the Data
+// length the header declares. Signature is always empty.
+func UnmarshalPayloadPrefix(b []byte) (p Payload, length uint32, err error) {
+	if len(b) < PayloadHeaderSize {
+		return Payload{}, 0, ErrShort
+	}
+	if b[0] != CurrentVersion {
+		return Payload{}, 0, fmt.Errorf("%w: %d", ErrVersion, b[0])
+	}
+	length = binary.BigEndian.Uint32(b[2:6])
+	rest := b[PayloadHeaderSize:]
+	data := rest[:min(uint64(length), uint64(len(rest)))]
+	return Payload{Version: b[0], Type: b[1], Data: append([]byte(nil), data...)}, length, nil
+}
+
 // Marshal encodes the outer envelope as a single byte string for embedding.
 func (e Envelope) Marshal() []byte {
 	out := make([]byte, EnvelopePrefix+len(e.Body))

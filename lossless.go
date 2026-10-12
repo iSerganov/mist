@@ -52,6 +52,7 @@ func (e *Emitter) embedSamples(ctx context.Context, pcm codec.PCM, scale float32
 			!errors.Is(err, stego.ErrNoResidues) {
 			return fmt.Errorf("%w: %v", ErrCarrier, err)
 		}
+		e.progress.report(ProgressEmbed, i+1, len(frames))
 	}
 	return nil
 }

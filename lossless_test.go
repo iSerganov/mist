@@ -52,9 +52,9 @@ func (s *LosslessSuite) TestRoundTripPerFormat() {
 		{"alac by codec", "m4a", "alac"},
 	}
 	carriers := map[string][]byte{
-		"whole frames":  s.pcmCarrier(20 * time.Second),
+		"whole frames":  s.pcmCarrier(9 * time.Second),
 		"partial frame": s.pcmCarrier(2 * time.Second),
-		"24-bit":        wav24(testRate, 2, 20*testRate),
+		"24-bit":        wav24(testRate, 2, 9*testRate),
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
@@ -91,8 +91,8 @@ func (s *LosslessSuite) TestOutputDepthFollowsTheCarrier() {
 		wantFmt  codec.SampleFormat
 		wantBits int
 	}{
-		{"16-bit carrier", wav(testRate, 2, 10*testRate), codec.SampleFmtS16, 16},
-		{"24-bit carrier", wav24(testRate, 2, 10*testRate), codec.SampleFmtS32, 24},
+		{"16-bit carrier", wav(testRate, 2, 9*testRate), codec.SampleFmtS16, 16},
+		{"24-bit carrier", wav24(testRate, 2, 9*testRate), codec.SampleFmtS32, 24},
 	}
 	for _, tc := range tests {
 		s.Run(tc.title, func() {
@@ -122,8 +122,8 @@ func (s *LosslessSuite) TestCarrierShapes() {
 		duration time.Duration
 		wantErr  error
 	}{
-		{"mono", 1, 20 * time.Second, nil},
-		{"stereo spanning frames", 2, 25 * time.Second, nil},
+		{"mono", 1, 9 * time.Second, nil},
+		{"stereo spanning frames", 2, 17 * time.Second, nil},
 		{"far too short", 2, 100 * time.Millisecond, ErrNoCapacity},
 	}
 	for _, tc := range tests {
@@ -161,7 +161,7 @@ func (s *LosslessSuite) TestWrongKeyRecoversNothing() {
 	_, other, err := GenerateKeyPair()
 	s.Require().NoError(err)
 
-	out := s.stego(pub, Text("secret"), s.pcmCarrier(20*time.Second), WithFormat("flac"))
+	out := s.stego(pub, Text("secret"), s.pcmCarrier(9*time.Second), WithFormat("flac"))
 	s.Empty(s.extract(other, out))
 }
 

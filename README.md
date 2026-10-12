@@ -145,6 +145,9 @@ in a `homebrew-mist` one. Publishing a GitHub release runs
 
 ## Command line
 
+`mist --version` prints the version. `make build` stamps it from `git describe`;
+a `go install` reports the module version, and a plain `go build` reports `dev`.
+
 The `mist` binary has several commands. Colour is enabled for terminals and turned
 off automatically for pipes, `TERM=dumb`, and `NO_COLOR`; `--no-color` forces it
 off.
@@ -175,7 +178,8 @@ mist embed --input song.ogg --data "the eagle lands at dawn"
 | Flag | Short | Required | Description |
 |---|---|---|---|
 | `--input` | `-i` | yes | Carrier audio: path, `file://` or `http(s)://` URL |
-| `--data` | `-d` | yes | Text to hide |
+| `--data` | `-d` | one of | Text to hide |
+| `--file` | `-f` | one of | Image, audio or other file to hide; give this or `--data`, not both |
 | `--key` | `-k` | no | Recipient **public** key file; a keypair is generated when omitted |
 | `--output` | `-o` | no | Destination file; its extension picks the format (default `<input>.stego.ogg`) |
 | `--out-codec` | | no | Encoder to use when the container holds more than one, e.g. `alac` for `.m4a` |
@@ -196,6 +200,17 @@ last bit of one percent of the samples. Run `mist formats` to see every target
 your FFmpeg build can write. An unwritable one — a lossy format other than
 Vorbis, or an extension FFmpeg does not know — fails immediately, before the
 carrier is even read.
+
+`--file` hides a file instead of text. The payload type follows the file's
+content, not its extension: an image or audio file travels as such and comes
+back under a generated name (`recovered-<frame>.jpg`), anything else keeps its
+base name. A payload larger than one frame is spread across as many as it
+needs, so a photo fits when the carrier is long enough; `mist estimate` reports
+how much. Lossless output holds far more than Vorbis.
+
+```bash
+mist embed -i song.flac -f photo.jpg -o song.stego.flac
+```
 
 When `--key` is omitted, Mist generates a keypair and writes it beside the
 output, named after it: `song.stego.pub` and `song.stego.key`. Keys are
@@ -228,6 +243,18 @@ mist catch --input song.stego.ogg --key song.stego.key
 | `--input` | `-i` | yes | Source to read: path, `file://` or `http(s)://` URL |
 | `--key` | `-k` | yes | Private key file |
 | `--timeout` | `-t` | no | Go duration; `0` (the default) reads until the stream ends |
+| `--out-dir` | | no | Directory for recovered images, audio and files (default `.`) |
+| `--partial` | | no | Keep what arrived of a spanned message that was cut short |
+
+Text is printed. Any other payload is written to `--out-dir` and its path is
+printed. Only the last element of a stored name is used, and an existing file is
+never replaced: a taken name becomes `name-1.ext`, `name-2.ext`.
+
+A message spread over several frames is lost when one of its frames is. With
+`--partial`, `catch` keeps the part that arrived before the gap instead: text is
+printed, anything else is saved with a `.partial` suffix, and a warning says how
+much of the message that is. On a terminal, `embed` and `catch` show which frame
+they are on and how much of a spanned message has arrived.
 
 A successful scan reports one message, whether it rode in a single frame or
 spread across several — `FrameIdx` names the frame where it started. `catch`
@@ -304,8 +331,7 @@ the recipient. `source` is read straight from libav: the carrier's own codec,
 container, sample rate, channel count, bitrate (when the source reports one)
 and duration.
 
-It reports the real limit `embed` enforces, not the
-[`FrameCapacity()`](#choosing-a-carrier) heuristic: for Vorbis it groups the
+It reports the real limit `embed` enforces: for Vorbis it groups the
 encoder's actual packets into stego frames and counts each one's genuinely
 eligible residues, and for a lossless target it computes each frame's sample
 capacity directly. `frame cap` is the largest message a single, unspanned
@@ -492,6 +518,17 @@ io.Copy(dst, stego)
 `io.Reader`, and `EmbedFile` an `*os.File`. All three return an
 `io.ReadCloser` producing a new stego stream, which the caller must close.
 
+A `Payload` is a type and bytes. `mist.Text(s)`, `mist.Image(b)` and
+`mist.Audio(b)` build the first three; `mist.File(name, b)` also remembers a
+file name, and `Payload.FileName()` splits it back into name and content on the
+other side. The type is encrypted with the data, and a payload larger than one
+frame is spread across several, so a photo fits in a long enough carrier.
+
+```go
+file, err := mist.File("report.pdf", pdf)
+stego, err := emitter.EmbedReader(ctx, carrier, file)
+```
+
 The output format is Ogg Vorbis unless you ask for another:
 
 ```go
@@ -521,7 +558,7 @@ spreading it across every usable frame when it doesn't fit in one).
 catcher, err := mist.NewCatcher(priv)
 results, err := catcher.Listen(ctx, "https://radio.example.com/live.ogg")
 for r := range results {
-    fmt.Println(r.FrameIdx, string(r.Payload.Data))
+    fmt.Println(r.FrameIdx, r.Payload.Type, len(r.Payload.Data))
 }
 if ctx.Err() != nil {
     // stopped by the caller rather than by end of stream
@@ -545,8 +582,15 @@ reader in full before it starts.
 | `WithMaxRetries(n)` | Catcher | Tolerate transient read failures on a live source |
 | `WithBackoff(d)` | Catcher | Pause between those retries |
 | `WithLogger(*slog.Logger)` | Catcher | Receive diagnostics such as joining mid-frame |
+| `WithEmitProgress(f)` | Emitter | Call `f` after each frame is embedded |
+| `WithCatchProgress(f)` | Catcher | Call `f` for each frame scanned and each chunk of a spanned message received |
+| `WithPartial()` | Catcher | Return the start of a spanned message cut short, with `Result.Partial` set |
 
 The logger is discarded by default and never receives failed decrypts.
+Progress never reports one either: a frame that fails to decrypt is scanned
+exactly like a frame that carries nothing. A `Partial` result holds the bytes
+that arrived, in order up to the first missing frame, and `Total` is the length
+the sender declared. It can never carry a signature.
 
 ### Errors
 
@@ -589,12 +633,10 @@ every usable frame in turn, so there a longer carrier directly means more
 room. Either way, if your message does not fit at all, shorten it or pick a
 carrier with more high-frequency content.
 
-`FrameCapacity()` reports a rough upper bound for the Vorbis path and
-over-estimates, because it does not account for how many residues are actually
-usable. It does not describe a lossless target at all, which holds far more.
-Treat it as a planning hint; the real limit is enforced when you call `Embed`.
-For the real number ahead of time, without producing any output, use
-`mist estimate` (or `EstimateCapacity` from Go) — see [estimate](#estimate).
+Capacity depends on the carrier and the target, so there is no fixed per-frame
+figure: on two real songs a Vorbis frame held 106 and 176 bytes and a FLAC frame
+812 and 890. For the real number ahead of time, without producing any output,
+use `mist estimate` (or `EstimateCapacity` from Go); see [estimate](#estimate).
 
 ### Audio quality
 
@@ -681,7 +723,6 @@ TTA, AIFF and CAF.
 
 Known gaps, all recorded in [CLAUDE.md](CLAUDE.md):
 
-- `FrameCapacity()` over-estimates and describes the Vorbis path only, as above.
 - `Embed` over `http(s)` buffers a finite file rather than streaming a live source,
   and the lossless path buffers the whole carrier before encoding.
 - A listener that joins mid-frame cannot align to that frame; it says so once and

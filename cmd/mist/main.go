@@ -1,5 +1,5 @@
-// Command mist hides a text message inside an audio file and recovers it
-// again with the matching private key.
+// Command mist hides a text message or a file inside an audio file and
+// recovers it again with the matching private key.
 package main
 
 import (
@@ -7,10 +7,25 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/spf13/cobra"
 )
+
+// version is stamped by the build (-ldflags "-X main.version=…"); a plain
+// `go install` falls back to the module version the toolchain recorded.
+var version = "dev"
+
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
+}
 
 func main() {
 	// SIGKILL cannot be trapped; SIGINT/SIGTERM/SIGHUP cancel the context,
@@ -38,10 +53,12 @@ func newRootCmd() *cobra.Command {
 			"  The payload lives in the audio itself, not in tags or container\n" +
 			"  metadata, so a digital recording of a stream carries it. Output is\n" +
 			"  Ogg Vorbis or any lossless format FFmpeg can write; see `formats`.",
+		Version:       buildVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			useColor(!noColor, os.Stdout)
+			useLive(os.Stdout)
 		},
 	}
 	root.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable coloured output")

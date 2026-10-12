@@ -34,9 +34,9 @@ func (s *AnalyzeSuite) clean(carrier []byte, format string) []byte {
 	s.T().Helper()
 	target, err := lookupFormat(format, "")
 	s.Require().NoError(err)
-	pcm, info, _, err := decodeCarrier(bytes.NewReader(carrier))
+	pcm, info, meta, err := decodeCarrier(bytes.NewReader(carrier))
 	s.Require().NoError(err)
-	out, err := plainEncode(target, pcm, info)
+	out, err := plainEncode(target, pcm, info, meta)
 	s.Require().NoError(err)
 	return out
 }

@@ -312,13 +312,13 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 	if err != nil {
 		return carrierRun{}, err
 	}
-	sameLevel := twin
-	if !em.target.Lossless {
-		level, err := vorbisLevel(em.target, ref, info)
-		if err != nil {
-			return carrierRun{}, err
-		}
-		if sameLevel, err = ffmpegTwin(ctx, em.target.Container, codecName, c.ext, data, "-q:a", strconv.Itoa(level)); err != nil {
+	canonical := twin
+	args, err := encoderArgs(em.target, ref, info)
+	if err != nil {
+		return carrierRun{}, err
+	}
+	if len(args) > 0 {
+		if canonical, err = ffmpegTwin(ctx, em.target.Container, codecName, c.ext, data, args...); err != nil {
 			return carrierRun{}, err
 		}
 	}
@@ -338,7 +338,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 	if err != nil {
 		return carrierRun{}, fmt.Errorf("key-aware: %w", err)
 	}
-	keyClean, err := keyAwareScore(sameLevel, em.pub)
+	keyClean, err := keyAwareScore(canonical, em.pub)
 	if err != nil {
 		return carrierRun{}, fmt.Errorf("key-aware: %w", err)
 	}
@@ -347,7 +347,7 @@ func measureCarrier(ctx context.Context, em *Emitter, format, codecName, ext str
 		channels = info.Channels
 	}
 	var outs [5]decoded
-	for i, b := range [][]byte{twin, own, stegoOut, minimalOut, sameLevel} {
+	for i, b := range [][]byte{twin, own, stegoOut, minimalOut, canonical} {
 		if outs[i], err = inspect(b); err != nil {
 			return carrierRun{}, err
 		}
@@ -398,39 +398,19 @@ func ffmpegTwin(ctx context.Context, container, codecName, carrierExt string, da
 	if err != nil {
 		return nil, errors.New(redactLocalPaths(err.Error()))
 	}
-	args = append(append(args, extra...), "-f", container, out)
-	if msg, err := exec.CommandContext(ctx, harnessBinary("MIST_FFMPEG", "ffmpeg"), args...).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("ffmpeg: %s", redactLocalPaths(fmt.Sprintf("%v: %s", err, bytes.TrimSpace(msg)), dir, in, out))
-	}
-	return os.ReadFile(out)
-}
-
-// mistLevel is the Vorbis quality level Mist opened its encoder at for the
-// carrier. It asks the encoder: libvorbis writes a nominal rate of 0 at some
-// sample rates, so matching rates cannot tell the levels apart.
-func mistLevel(target av.Format, data []byte) (int, error) {
-	pcm, info, _, err := decodeCarrier(bytes.NewReader(data))
-	if err != nil {
-		return 0, err
-	}
-	enc, err := openEncoder(target, pcm, info)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = enc.Close() }()
-	return enc.Info().Quality, nil
 	return out, nil
 }
 
 // mistTwin is the carrier through Mist's own encoder with nothing
-// embedded. Comparing it with the stego copy isolates the embedding from
-// everything else Mist's pipeline does differently from ffmpeg.
+// embedded, tags included, as Embed writes them. Comparing it with the
+// stego copy isolates the embedding from everything else Mist's pipeline
+// does differently from ffmpeg.
 func mistTwin(target av.Format, data []byte) ([]byte, error) {
 	pcm, info, meta, err := decodeCarrier(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
-	return plainEncode(target, pcm, info)
+	return plainEncode(target, pcm, info, meta)
 }
 
 func embedBytes(ctx context.Context, em *Emitter, data []byte, p Payload) ([]byte, error) {
@@ -449,16 +429,6 @@ type decoded struct {
 }
 
 func inspect(out []byte) (decoded, error) {
-	pcm, info, _, err := decodeCarrier(bytes.NewReader(out))
-	if err != nil {
-		return decoded{}, err
-	}
-	d := decoded{planes: pcm.Planes, trace: traceOf(out, pcm, info)}
-	if av.Lossless(info.NativeCodecID) {
-		d.vals = gridValues(pcm.Planes, av.SampleScale(info.SampleFmt))
-		return d, nil
-	}
-	_, pkts, err := readPackets(bytes.NewReader(out))
 	v, err := decodeValues(out)
 	if err != nil {
 		return decoded{}, err
@@ -998,10 +968,6 @@ func perceptualDrop(ctx context.Context, tool quality.Tool, carrierExt, ext stri
 	}
 	stegoScore, err := tool.Score(ctx, ref, filepath.Join(dir, "stego."+ext))
 	return cleanScore - stegoScore, err
-}
-
-func commit() string {
-	return inspectGit().Describe
 }
 
 func (s *HarnessSuite) TestLineageIntervalPinsASharedFamily() {

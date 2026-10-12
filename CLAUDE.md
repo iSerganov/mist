@@ -18,7 +18,6 @@ NewCatcher(priv []byte, opts ...CatcherOption) (*Catcher, error)
     Catcher.Listen(ctx, source string) (<-chan Result, error)
     Catcher.ListenReader(ctx, r io.Reader) (<-chan Result, error)
     Catcher.Extract(ctx, source *os.File) ([]Result, error)  // synchronous
-FrameCapacity() int
 Formats() []Format                       // what this FFmpeg build can write
 LookupFormat(name, codec string) (Format, error)
 EstimateCapacity(ctx, source, format, codec string) (Capacity, error)
@@ -28,13 +27,16 @@ WithCodec(name string) EmitterOption     // encoder override; ffmpeg's -c:a
 WithMaxRetries(n int) CatcherOption
 WithBackoff(d time.Duration) CatcherOption
 WithLogger(*slog.Logger) CatcherOption   // diagnostics only; never decrypt failures
+WithEmitProgress(ProgressFunc) EmitterOption
+WithCatchProgress(ProgressFunc) CatcherOption  // scan and assembly; never decrypt failures
+WithPartial() CatcherOption              // a span cut short becomes Result{Partial: true}
 Probe(source string) (Source, error)      // libav's stream facts, no decode
 Analyze(ctx, source string, AnalyzeOptions) (Analysis, error)  // single-file warden: Mist probability + other-tool Suspicion
 ```
 
 `Listen` / `Embed` `source` is a path, `file://` URL, or `http(s)://` URL. Finite files close the channel on EOF; live streams run until `ctx` is cancelled. Distinguish with `ctx.Err()` after range. A `Listen` called with an already-cancelled context returns a closed channel and no error. `Catcher` and `Emitter` copy keys at construction; do not add setters. Embed methods return `io.ReadCloser` (no `mist.Reader` type); the caller must Close it.
 
-Do not add `ErrNoMessage`. Failed AEAD / partial frame / empty frame are the same silent skip. Exposing "something was there but I could not decrypt" is a side channel. `ErrNoCapacity` is the opposite case and *must* be loud: it means the Emitter embedded into no frame at all, so the caller would otherwise get a silent no-op file. Telling the sender its own request failed leaks nothing to a warden.
+Do not add `ErrNoMessage`. Failed AEAD / partial frame / empty frame are the same silent skip. Exposing "something was there but I could not decrypt" is a side channel. `ErrNoCapacity` is the opposite case and *must* be loud: it means the Emitter embedded into no frame at all, so the caller would otherwise get a silent no-op file. Telling the sender its own request failed leaks nothing to a warden. `WithPartial` is the one opt-in exception on the reading side, and only after a span's first chunk has authenticated: it hands the key holder the prefix that arrived. A span ends at the first frame with room for a chunk (`spanRoom`, shared with `planSpan`) that fails to open.
 
 A demuxer read already in flight cannot be interrupted, so `Listen` relays the scan through a second channel (`relay`): the channel the caller ranges over closes as soon as `ctx` does, while the scan goroutine ends when its blocked read finally returns. `ListenReader` buffers a non-seekable reader whole (`asSeeker`), so live sources belong in `Listen`, not `ListenReader`.
 
@@ -90,7 +92,7 @@ libav's own logging defaults to `AV_LOG_FATAL`: failures already reach Go via re
 ```
 cmd/mist          cobra CLI: embed / catch / formats / estimate, colour output, signal handling
 emitter.go        NewEmitter, Embed / EmbedReader / EmbedFile → io.ReadCloser
-embed.go          carrier decode, encoder open, mux; FrameCapacity
+embed.go          carrier decode, encoder open, mux
 lossless.go       sample-domain embed + windower (the lossless half of embed/extract)
 format.go         Format, Formats, LookupFormat: which targets are writable
 span.go           planChunks/planSpan: split a payload across frames when it doesn't fit one
@@ -214,7 +216,7 @@ Copy packet bytes with `C.CBytes` / `C.GoBytes`. Every `Open*` has a matching `C
 
 ```
 mist embed --input <file|url> --data <text> [--key pub] [--output out.flac] [--out-codec alac]
-mist catch --input <file|url> --key <priv> [--timeout 30s]
+mist catch --input <file|url> --key <priv> [--timeout 30s] [--out-dir dir] [--partial]
 mist formats
 mist analyze [folder] [--reference original]   # browses subfolders too
 ```
@@ -279,7 +281,8 @@ must use public carrier ids: pass a corpus manifest, or accept anonymous
 scored; `MIST_HARNESS_UNSEAL=1` scores that split instead and leaves the
 development carriers out, so one run never trains on both. The fingerprint verdict
 compares Mist with the canonical workflow: Vorbis at the `-q:a` level Mist chose,
-lossless at ffmpeg's defaults. Default ffmpeg is a labeled second threat model.
+lossless at the frame size Mist's encoder uses (`encoderArgs`, shared with
+`Analyze`). Default ffmpeg is a labeled second threat model.
 `MIST_FFPROBE` (`FFPROBE`) supplies the audio-blind metadata warden. The confirmatory family is frozen: hcf-com, classifier, markov, key-aware, rich, selection (schema 6). `make corpus CORPUS_OUT=`
 writes a generated PCM set plus that holdout, and the directory must sit outside
 the checkout. Never commit local audio paths. It is never part of
@@ -295,7 +298,7 @@ the decoding and hands them `[]int32` values and `[][]float32` planes.
 
 Phase 1 is feature-complete end to end, with a `cmd/mist` CLI over it. All internal packages are implemented; `Emitter` embeds text and `Catcher` recovers it via `Listen` / `ListenReader` / `Extract`. Output is Ogg Vorbis or any lossless codec the installed FFmpeg can encode — verified end to end for FLAC, WAV, ALAC, WavPack, TTA, AIFF and CAF. `make harness` measures detectability and quality per output format, against a plain ffmpeg encode of the same carrier. A historical 84-carrier run (see `REPORT.md`; not bound to a Phase 0 manifest) found no detector's aggregate file AUC above 0.55 for FLAC or WAV, while the key-aware warden sat at chance. That is not undetectable: scored within one kind of audio, the classifier separated several categories. Bind any later claim to that run's commit, corpus name and independent lineage count. Embedding costs under 0.05 dB of SDR beyond a plain re-encode, and lossless output leaves digital silence untouched. A warden holding the original carrier can diff against it, which the harness cannot measure.
 
-Remaining Phase 1 gaps: `FrameCapacity()` is a heuristic for the Vorbis path only — it ignores the flippability ratio and so over-estimates real capacity (the true limit is enforced at `Embed` time), and it does not describe a lossless target at all, which holds far more (`EstimateCapacity`, and the `mist estimate` command built on it, report the real number instead, at the cost of decoding and re-encoding the carrier); `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either.
+Remaining Phase 1 gaps: `Embed` over `http(s)` buffers a finite file rather than streaming a live source; a scan goroutine parked in a blocking libav read outlives its context until that read returns; the lossless path buffers the whole carrier before encoding, so `Embed` is not yet streaming there either.
 
 ## Design principles
 

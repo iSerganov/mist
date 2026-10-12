@@ -105,16 +105,3 @@ func GroupPackets(pkts []codec.Packet, p Params) []Group {
 	}
 	return out
 }
-
-// Capacity is the payload bytes that fit in one frame after encryption
-// overhead, given nEligible coefficients and a constant embedding density.
-func Capacity(nEligible int, density float64, overhead int) int {
-	if nEligible <= 0 || density <= 0 {
-		return 0
-	}
-	bytes := int(float64(nEligible)*density) / 8
-	if bytes <= overhead {
-		return 0
-	}
-	return bytes - overhead
-}
