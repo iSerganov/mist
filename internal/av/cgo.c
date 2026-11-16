@@ -29,6 +29,7 @@
 extern int     mist_av_go_read(int id, uint8_t *buf, int buf_size);
 extern int     mist_av_go_write(int id, uint8_t *buf, int buf_size);
 extern int64_t mist_av_go_seek(int id, int64_t offset, int whence);
+extern int     mist_av_go_interrupted(int id);
 
 #define IO_BUF 4096
 
@@ -152,6 +153,17 @@ static int copy_packet(const AVPacket *src, mist_av_packet *dst)
 	if (skip != NULL && skip_size >= 8) {
 		dst->skip_start = AV_RL32(skip);
 		dst->skip_end = AV_RL32(skip + 4);
+	}
+	size_t extra_size = 0;
+	const uint8_t *extra = av_packet_get_side_data(src, AV_PKT_DATA_NEW_EXTRADATA, &extra_size);
+	if (extra != NULL && extra_size > 0) {
+		dst->extradata = av_malloc(extra_size);
+		if (dst->extradata == NULL) {
+			av_freep(&dst->data);
+			return AVERROR(ENOMEM);
+		}
+		memcpy(dst->extradata, extra, extra_size);
+		dst->extradata_size = (int)extra_size;
 	}
 	return 0;
 }
@@ -466,7 +478,7 @@ void mist_av_free(void *p)
 	av_free(p);
 }
 
-mist_av_io *mist_av_io_new(int handle, int writable)
+mist_av_io *mist_av_io_new(int handle, int writable, int seekable)
 {
 	mist_av_io *io = av_mallocz(sizeof(*io));
 	if (io == NULL) {
@@ -483,7 +495,7 @@ mist_av_io *mist_av_io_new(int handle, int writable)
 		io->buf, IO_BUF, writable, (void *)(intptr_t)handle,
 		writable ? NULL : read_cb,
 		writable ? write_cb : NULL,
-		seek_cb);
+		seekable ? seek_cb : NULL);
 	if (io->avio == NULL) {
 		av_free(io->buf);
 		av_free(io);
@@ -492,9 +504,9 @@ mist_av_io *mist_av_io_new(int handle, int writable)
 	/*
 	 * A seek callback is not enough. avio_alloc_context leaves seekable
 	 * clear, and the FLAC muxer will not rewrite STREAMINFO unless the
-	 * flag is set. The callback reports the size, so the IO is seekable.
+	 * flag is set. The callback reports the size too.
 	 */
-	io->avio->seekable = AVIO_SEEKABLE_NORMAL;
+	io->avio->seekable = seekable ? AVIO_SEEKABLE_NORMAL : 0;
 	return io;
 }
 
@@ -517,13 +529,27 @@ static int find_audio(AVFormatContext *fmt)
 	return idx;
 }
 
-mist_av_demuxer *mist_av_demuxer_open(const char *url, char *errbuf, int errlen)
+static int interrupt_cb(void *opaque)
+{
+	return mist_av_go_interrupted((int)(intptr_t)opaque);
+}
+
+mist_av_demuxer *mist_av_demuxer_open(const char *url, int interrupt, char *errbuf, int errlen)
 {
 	mist_av_demuxer *d = av_mallocz(sizeof(*d));
 	if (d == NULL) {
 		set_err(errbuf, errlen, "oom");
 		return NULL;
 	}
+	d->fmt = avformat_alloc_context();
+	if (d->fmt == NULL) {
+		set_err(errbuf, errlen, "oom");
+		av_free(d);
+		return NULL;
+	}
+	d->fmt->interrupt_callback.callback = interrupt_cb;
+	d->fmt->interrupt_callback.opaque = (void *)(intptr_t)interrupt;
+	/* On failure avformat_open_input frees the context it was given. */
 	int err = avformat_open_input(&d->fmt, url, NULL, NULL);
 	if (err < 0) {
 		set_averr(errbuf, errlen, err, "open");
@@ -805,6 +831,14 @@ int mist_av_muxer_write(mist_av_muxer *m, const mist_av_packet *pkt)
 	avpkt->pts = pkt->pts;
 	avpkt->dts = pkt->dts;
 	avpkt->duration = pkt->duration;
+	if (pkt->extradata_size > 0 && pkt->extradata != NULL) {
+		uint8_t *extra = av_packet_new_side_data(avpkt, AV_PKT_DATA_NEW_EXTRADATA, (size_t)pkt->extradata_size);
+		if (extra == NULL) {
+			av_packet_free(&avpkt);
+			return MIST_AV_ERR;
+		}
+		memcpy(extra, pkt->extradata, (size_t)pkt->extradata_size);
+	}
 	int err = av_interleaved_write_frame(m->fmt, avpkt);
 	av_packet_free(&avpkt);
 	return err < 0 ? MIST_AV_ERR : MIST_AV_OK;
@@ -1287,6 +1321,9 @@ void mist_av_packet_unref(mist_av_packet *pkt)
 	av_free(pkt->data);
 	pkt->data = NULL;
 	pkt->size = 0;
+	av_free(pkt->extradata);
+	pkt->extradata = NULL;
+	pkt->extradata_size = 0;
 }
 
 void mist_av_frame_unref(mist_av_frame *frame)

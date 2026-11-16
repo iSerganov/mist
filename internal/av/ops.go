@@ -1,6 +1,7 @@
 package av
 
 import (
+	"context"
 	"io"
 
 	"github.com/iSerganov/mist/internal/codec"
@@ -34,16 +35,18 @@ func ensureInit() error {
 	return Init()
 }
 
-// OpenDemuxer opens a local path or URL.
-func OpenDemuxer(url string) (*Demuxer, error) {
+// OpenDemuxer opens a local path or URL. Network IO, at open and in every
+// later read, gives up with an error once ctx is cancelled.
+func OpenDemuxer(ctx context.Context, url string) (*Demuxer, error) {
 	if err := ensureInit(); err != nil {
 		return nil, err
 	}
-	return avOpenDemuxer(url)
+	return avOpenDemuxer(ctx, url)
 }
 
 // OpenDemuxerReader opens a demuxer over an arbitrary reader (Embed's carrier).
-// The reader should implement io.Seeker; Ogg probing seeks.
+// libav seeks only when r implements io.Seeker. Without it the stream is
+// read front to back, which a container indexed at its end cannot survive.
 func OpenDemuxerReader(r io.Reader) (*Demuxer, error) {
 	if err := ensureInit(); err != nil {
 		return nil, err
@@ -51,9 +54,11 @@ func OpenDemuxerReader(r io.Reader) (*Demuxer, error) {
 	return avOpenDemuxerReader(r)
 }
 
-// NewMuxer starts an Ogg muxer writing to w.
-// info.Extradata must already hold the Vorbis setup headers from an Encoder.
-// w should implement io.Seeker so the muxer can patch granule positions.
+// NewMuxer starts a muxer for info.Container writing to w.
+// info.Extradata must already hold the codec headers from an Encoder.
+// When w implements io.Seeker the muxer goes back at the end to fill in
+// what it only then knows, such as FLAC's sample count and WAV's sizes.
+// Otherwise the header stays as first written, as ffmpeg leaves it on a pipe.
 func NewMuxer(w io.Writer, info AudioInfo) (*Muxer, error) {
 	if err := ensureInit(); err != nil {
 		return nil, err
@@ -217,21 +222,23 @@ func fixedCuts(n, size int) []int {
 // ToCodecPacket copies an av packet into the codec-layer view.
 func ToCodecPacket(p Packet) codec.Packet {
 	return codec.Packet{
-		Data:     p.Data,
-		PTS:      p.PTS,
-		DTS:      p.DTS,
-		Duration: p.Duration,
-		Flags:    p.Flags,
+		Data:         p.Data,
+		PTS:          p.PTS,
+		DTS:          p.DTS,
+		Duration:     p.Duration,
+		Flags:        p.Flags,
+		NewExtradata: p.NewExtradata,
 	}
 }
 
 // FromCodecPacket copies a codec-layer packet into an av packet.
 func FromCodecPacket(p codec.Packet) Packet {
 	return Packet{
-		Data:     p.Data,
-		PTS:      p.PTS,
-		DTS:      p.DTS,
-		Duration: p.Duration,
-		Flags:    p.Flags,
+		Data:         p.Data,
+		PTS:          p.PTS,
+		DTS:          p.DTS,
+		Duration:     p.Duration,
+		Flags:        p.Flags,
+		NewExtradata: p.NewExtradata,
 	}
 }

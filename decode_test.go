@@ -156,7 +156,7 @@ func (s *DecodeSuite) reencode(raw []byte, container string) []byte {
 	if target.Lossless {
 		s.Require().NoError(enc.Snap(pcm.Planes, pcm.Frames))
 	}
-	rc, err := encodeAndMux(enc, pcm, meta, nil)
+	rc, err := encodeAndMux(enc, pcm, meta)
 	s.Require().NoError(err)
 	defer func() { _ = rc.Close() }()
 	out, err := io.ReadAll(rc)

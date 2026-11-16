@@ -1,11 +1,11 @@
 package mist
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/iSerganov/mist/internal/av"
 )
@@ -40,6 +40,14 @@ func WithEmitProgress(f ProgressFunc) EmitterOption {
 	return func(e *Emitter) { e.progress = f }
 }
 
+// WithReseal seals the payload again, under a fresh ephemeral key, into
+// every stego frame that holds it, so a listener who joins late reads it
+// from the next frame. The payload must fit one frame: a re-sealed payload
+// is never spanned, and one that fits no frame is ErrNoCapacity.
+func WithReseal() EmitterOption {
+	return func(e *Emitter) { e.reseal = true }
+}
+
 // Emitter encrypts a payload for a recipient public key and embeds it
 // into a carrier. Construct it once with NewEmitter and share it. Methods
 // do not mutate the Emitter.
@@ -50,6 +58,7 @@ type Emitter struct {
 	codec      string
 	target     av.Format
 	progress   ProgressFunc
+	reseal     bool
 }
 
 // NewEmitter returns an Emitter for recipientPubKey.
@@ -76,27 +85,34 @@ func NewEmitter(recipientPubKey []byte, opts ...EmitterOption) (*Emitter, error)
 }
 
 // Embed opens source (a local file path, file:// URL, or http(s):// URL)
-// as the carrier, encrypts payload for the recipient, and returns a new
-// stego stream in the Emitter's output format.
-//
-// The payload is looped across fixed-duration stego frames, each
-// re-encrypted with a fresh ephemeral X25519 key, for the full duration
-// of the carrier. Suitable for both finite files and wrapping a live
-// encoder output — the returned reader produces output as fast as the
-// carrier does.
+// as the carrier, encrypts payload for the recipient, and returns the
+// stego stream in the Emitter's output format, complete. Every stego frame
+// not carrying the payload gets filler. A live source, a URL that states
+// no duration, has no end to wait for and is refused: use EmbedTo.
 func (e *Emitter) Embed(ctx context.Context, source string, payload Payload) (io.ReadCloser, error) {
 	if e == nil {
 		return nil, ErrInvalidKey
 	}
-	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-		return e.embedURL(ctx, source, payload)
+	return e.collect(ctx, payload, func() (input, error) { return openPath(ctx, source) })
+}
+
+// EmbedTo is Embed writing to dst as the carrier is read, holding about
+// one stego frame of audio in memory. When dst can seek, the container
+// header is completed at the end, as in a file. Otherwise it stays as
+// ffmpeg leaves it on a pipe. A failure, ErrNoCapacity included, can leave
+// dst written. A live source runs until ctx is cancelled, which returns nil.
+func (e *Emitter) EmbedTo(ctx context.Context, source string, dst io.Writer, payload Payload) error {
+	if e == nil {
+		return ErrInvalidKey
 	}
-	rc, err := openSource(source)
+	if dst == nil {
+		return ErrInvalidSource
+	}
+	c, plain, err := e.begin(ctx, payload, func() (input, error) { return openPath(ctx, source) })
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer func() { _ = rc.Close() }()
-	return e.embed(ctx, rc, payload)
+	return e.embedTo(ctx, c, dst, plain)
 }
 
 // EmbedReader is Embed over an already-open carrier (pipe, HTTP body,
@@ -109,7 +125,7 @@ func (e *Emitter) EmbedReader(ctx context.Context, carrier io.Reader, payload Pa
 	if carrier == nil {
 		return nil, ErrInvalidSource
 	}
-	return e.embed(ctx, carrier, payload)
+	return e.collect(ctx, payload, func() (input, error) { return openReader(carrier) })
 }
 
 // EmbedFile is Embed over an *os.File carrier. The file stays owned by
@@ -121,8 +137,28 @@ func (e *Emitter) EmbedFile(ctx context.Context, carrier *os.File, payload Paylo
 	if carrier == nil {
 		return nil, ErrInvalidSource
 	}
-	if _, err := carrier.Seek(0, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
+	return e.collect(ctx, payload, func() (input, error) {
+		if _, err := carrier.Seek(0, io.SeekStart); err != nil {
+			return input{}, carrierErr(err)
+		}
+		return openReader(carrier)
+	})
+}
+
+// collect runs the pipeline into memory. Only the compressed output is
+// held, and the buffer can seek, so the header is the one a file gets.
+func (e *Emitter) collect(ctx context.Context, payload Payload, open func() (input, error)) (io.ReadCloser, error) {
+	c, plain, err := e.begin(ctx, payload, open)
+	if err != nil {
+		return nil, err
 	}
-	return e.embed(ctx, carrier, payload)
+	if c.live {
+		c.close()
+		return nil, fmt.Errorf("%w: a live source has no end to wait for; use EmbedTo", ErrInvalidSource)
+	}
+	var buf seekBuf
+	if err := e.embedTo(ctx, c, &buf, plain); err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(buf.data)), nil
 }

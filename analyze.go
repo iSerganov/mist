@@ -150,7 +150,7 @@ type AnalyzeOptions struct {
 // fields ffprobe shows for its audio stream. It fails for a file with no
 // audio stream this FFmpeg build can decode.
 func Probe(source string) (Source, error) {
-	d, err := av.OpenDemuxer(source)
+	d, err := av.OpenDemuxer(context.Background(), source)
 	if err != nil {
 		return Source{}, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}
@@ -636,7 +636,7 @@ func plainEncode(target av.Format, pcm codec.PCM, info av.AudioInfo, meta av.Met
 			return nil, err
 		}
 	}
-	rc, err := encodeAndMux(enc, pcm, meta, nil)
+	rc, err := encodeAndMux(enc, pcm, meta)
 	if err != nil {
 		return nil, err
 	}

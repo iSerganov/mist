@@ -68,7 +68,7 @@ func runEstimate(ctx context.Context, o *estimateOptions) error {
 	}
 	printf("\n")
 	field("frames", fmt.Sprintf("%s  %d/%d usable", bar(usableFrac, 24), est.Usable, est.Frames), fmt.Sprintf("%d total", est.Frames))
-	field("frame cap", bold(humanBytes(int64(est.FrameCapacity))), "largest message that fits in a single frame")
+	field("frame cap", bold(humanBytes(int64(est.FrameCapacity))), "largest message sent in one frame")
 	field("total cap", bold(humanBytes(int64(est.TotalCapacity))), "largest message spanning every usable frame")
 
 	if est.TotalCapacity <= 0 {

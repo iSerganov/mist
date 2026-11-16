@@ -104,7 +104,7 @@ func (c *Catcher) Listen(ctx context.Context, source string) (<-chan Result, err
 	if ctx.Err() != nil {
 		return closed(), nil
 	}
-	d, err := av.OpenDemuxer(source)
+	d, err := av.OpenDemuxer(ctx, source)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCarrier, err)
 	}

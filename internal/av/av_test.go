@@ -2,6 +2,7 @@ package av
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -71,7 +72,7 @@ func (s *AVSuite) TestOpenDemuxer() {
 	path := filepath.Join(s.T().TempDir(), "sine.ogg")
 	s.Require().NoError(os.WriteFile(path, raw, 0o600))
 
-	d, err := OpenDemuxer(path)
+	d, err := OpenDemuxer(context.Background(), path)
 	s.Require().NoError(err)
 	defer func() { _ = d.Close() }()
 	got := d.Info()
@@ -90,7 +91,7 @@ func (s *AVSuite) TestCanDecode() {
 	path := filepath.Join(s.T().TempDir(), "sine.ogg")
 	s.Require().NoError(os.WriteFile(path, raw, 0o600))
 
-	d, err := OpenDemuxer(path)
+	d, err := OpenDemuxer(context.Background(), path)
 	s.Require().NoError(err)
 	defer func() { _ = d.Close() }()
 

@@ -31,86 +31,65 @@ func (s *SpanSuite) requireFormat(name string) {
 }
 
 // marshaledText is the wire-framed plaintext a text Payload turns into
-// before sealing — the byte stream planChunks/opener actually work with.
+// before sealing — the byte stream spanPlan/opener actually work with.
 func (s *SpanSuite) marshaledText(text string) []byte {
 	full, err := marshalPlain(Text(text), nil)
 	s.Require().NoError(err)
 	return full
 }
 
-// planChunks always prefers a single, unmodified frame over spanning, so
-// the common case pays no span overhead at all.
-func (s *SpanSuite) TestPlanChunksPrefersASingleFrame() {
-	full := bytes.Repeat([]byte{0xAB}, 10)
-	room := []int{100, 5, 100}
-	plan := planChunks(full, room)
-	s.Require().NotNil(plan)
-	s.Equal(full, plan[0])
-	s.Nil(plan[1])
-	s.Nil(plan[2])
-}
-
-// A single-fit search still looks for the first frame that alone has
-// room, skipping smaller ones ahead of it.
-func (s *SpanSuite) TestPlanChunksSkipsTooSmallFramesForASingleFit() {
-	full := bytes.Repeat([]byte{0xCD}, 90)
-	room := []int{100, 200} // needs EnvelopeOverhead(64)+90 = 154
-	plan := planChunks(full, room)
-	s.Require().NotNil(plan)
-	s.Nil(plan[0])
-	s.Equal(full, plan[1])
-}
-
-// When no single frame is large enough, planChunks spans the payload
-// across as many consecutive frames as it takes, opening with
-// MarshalSpanStart and continuing with MarshalSpanContinue.
-func (s *SpanSuite) TestPlanChunksSpansWhenNoSingleFrameFits() {
-	full := bytes.Repeat([]byte{0xEF}, 300)
-	room := []int{200, 200, 200} // none alone clears EnvelopeOverhead+300=364
-	plan := planChunks(full, room)
-	s.Require().NotNil(plan)
-
-	totalLen, chunk0, ok := wire.UnmarshalSpanStart(plan[0])
-	s.Require().True(ok)
-	s.Equal(uint32(len(full)), totalLen)
-
-	chunk1, ok := wire.UnmarshalSpanContinue(plan[1])
-	s.Require().True(ok)
-	chunk2, ok := wire.UnmarshalSpanContinue(plan[2])
-	s.Require().True(ok)
-
-	reassembled := append(append(append([]byte{}, chunk0...), chunk1...), chunk2...)
-	s.Equal(full, reassembled)
-}
-
-// A frame with no room at all is skipped over during spanning, the same
-// as one with no eligible residues at all — it neither starts nor
-// continues the span.
-func (s *SpanSuite) TestPlanChunksSkipsAZeroRoomFrameMidSpan() {
-	full := bytes.Repeat([]byte{0x11}, 90)
-	room := []int{100, 0, 100, 100} // no single frame clears 64+90=154
-	plan := planChunks(full, room)
-	s.Require().NotNil(plan)
-	s.Nil(plan[1], "the zero-room frame must carry nothing")
-
-	totalLen, chunk0, ok := wire.UnmarshalSpanStart(plan[0])
-	s.Require().True(ok)
-	s.Equal(uint32(len(full)), totalLen)
-	chunk2, ok := wire.UnmarshalSpanContinue(plan[2])
-	s.Require().True(ok)
-	chunk3, ok := wire.UnmarshalSpanContinue(plan[3])
-	s.Require().True(ok)
-
-	reassembled := append(append(append([]byte{}, chunk0...), chunk2...), chunk3...)
-	s.Equal(full, reassembled)
-}
-
-// A payload that fits nowhere, even split across every frame offered, is
-// reported as such — the caller turns that into ErrNoCapacity.
-func (s *SpanSuite) TestPlanChunksFailsWhenNothingFits() {
-	full := bytes.Repeat([]byte{0x22}, 1000)
-	room := []int{50, 50}
-	s.Nil(planChunks(full, room))
+// The placer sees one frame's room at a time, in stream order, and never
+// the frames still to come.
+func (s *SpanSuite) TestSpanPlan() {
+	small := bytes.Repeat([]byte{0xAB}, 10) // whole needs EnvelopeOverhead(64)+10 = 74
+	big := bytes.Repeat([]byte{0xCD}, 90)   // whole needs 64+90 = 154
+	tests := []struct {
+		title string
+		full  []byte
+		every bool
+		room  []int
+		want  []string // per frame: "whole", "start", "continue" or "" for filler
+	}{
+		{"a payload that fits the first frame with room goes there whole", small, false, []int{100, 5, 100}, []string{"whole", "", ""}},
+		{"frames too small to start a span are passed over", big, false, []int{0, 66, 200}, []string{"", "", "whole"}},
+		{"too big for the first frame with room it spans from there", big, false, []int{100, 200}, []string{"start", "continue"}},
+		{"a frame with no room neither starts nor continues a span", big, false, []int{100, 0, 100, 100}, []string{"start", "", "continue", "continue"}},
+		{"re-sealing repeats it in every frame that holds it", small, true, []int{100, 73, 0, 100}, []string{"whole", "", "", "whole"}},
+		{"nothing fits even spanned", bytes.Repeat([]byte{0x22}, 1000), false, []int{50, 50}, nil},
+		{"re-sealing never spans", big, true, []int{100, 100, 100}, nil},
+		{"no frames", small, false, nil, nil},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			plan := placeAll(tc.full, tc.room, tc.every)
+			if tc.want == nil {
+				s.Nil(plan)
+				return
+			}
+			s.Require().Len(plan, len(tc.want))
+			var spanned []byte
+			for i, kind := range tc.want {
+				switch kind {
+				case "whole":
+					s.Equal(tc.full, plan[i], "frame %d", i)
+				case "start":
+					total, chunk, ok := wire.UnmarshalSpanStart(plan[i])
+					s.Require().True(ok, "frame %d", i)
+					s.Equal(uint32(len(tc.full)), total)
+					spanned = append(spanned, chunk...)
+				case "continue":
+					chunk, ok := wire.UnmarshalSpanContinue(plan[i])
+					s.Require().True(ok, "frame %d", i)
+					spanned = append(spanned, chunk...)
+				default:
+					s.Nil(plan[i], "frame %d", i)
+				}
+			}
+			if spanned != nil {
+				s.Equal(tc.full, spanned)
+			}
+		})
+	}
 }
 
 // opener reassembles a payload from consecutive start/continue chunks,
@@ -277,7 +256,7 @@ func (s *SpanSuite) TestInterruptedSpan() {
 	msg := bytes.Repeat([]byte("abcdefghij"), 33)
 	full := s.marshaledText(string(msg))
 	room := EnvelopeOverhead + wire.SpanStartHeaderSize + 100
-	plan := planSpan(full, []int{room, room, room, room})
+	plan := placeAll(full, []int{room, room, room, room}, false)
 	s.Require().NotNil(plan[3])
 
 	sealed := func(i int) stego.Bits {
@@ -342,4 +321,18 @@ func (s *SpanSuite) TestInterruptedSpan() {
 			})
 		}
 	}
+}
+
+// placeAll runs a spanPlan over room, frame by frame as Embed does. It is
+// nil when the plan does not place all of full.
+func placeAll(full []byte, room []int, every bool) [][]byte {
+	p := &spanPlan{full: full, every: every}
+	out := make([][]byte, len(room))
+	for i, r := range room {
+		out[i] = p.place(r)
+	}
+	if !p.complete() {
+		return nil
+	}
+	return out
 }

@@ -1,10 +1,10 @@
 package mist
 
 import (
-	"context"
 	"errors"
 	"fmt"
 
+	"github.com/iSerganov/mist/internal/av"
 	"github.com/iSerganov/mist/internal/codec"
 	"github.com/iSerganov/mist/internal/crypto"
 	"github.com/iSerganov/mist/internal/frame"
@@ -21,51 +21,120 @@ import (
 // The cost is the same one the Vorbis path pays: a listener that joins
 // after the carrying frame recovers nothing.
 
-// embedSamples writes the sealed payload into pcm in place. scale is the
-// integer grid the chosen encoder quantizes to, so the samples this
-// leaves behind are ones it can represent exactly.
-func (e *Emitter) embedSamples(ctx context.Context, pcm codec.PCM, scale float32, plain []byte) error {
-	frames := sampleFrames(pcm, scale)
-	plan := planChunks(plain, sampleRooms(frames))
-	if plan == nil {
-		return noCapacity(plain)
-	}
-	for i, w := range frames {
-		if err := ctx.Err(); err != nil {
+// sampleStage is the lossless half of the pipeline. It moves each decoded
+// chunk onto the encoder's grid, cuts the stream into stego frames with
+// the same windower Listen reads them back with, embeds into each frame
+// and hands it to the encoder. One frame of samples is held at a time.
+type sampleStage struct {
+	pass
+	enc  *av.Encoder
+	mux  *packetWriter
+	win  *windower
+	rate int
+	read int64 // samples decoded so far
+	sent int64 // samples handed to the encoder so far
+}
+
+func (s *sampleStage) push(pcm codec.PCM) error {
+	if s.enc == nil {
+		if err := s.open(pcm); err != nil {
 			return err
 		}
-		var bits stego.Bits
-		if plan[i] != nil {
-			env, err := crypto.Seal(plan[i], e.pub)
-			if err != nil {
-				return err
-			}
-			bits = env.Marshal()
+	}
+	n := len(pcm.Planes[0])
+	// One decoded chunk is one Snap cut: ffmpeg resamples a frame at a
+	// time and that frame's remainder rounds differently from the rest.
+	if err := s.enc.Snap(pcm.Planes, []int{n}); err != nil {
+		return fmt.Errorf("%w: %v", ErrCarrier, err)
+	}
+	pcm.PTS = s.read
+	s.read += int64(n)
+	return s.embed(s.win.push(pcm))
+}
+
+func (s *sampleStage) open(pcm codec.PCM) error {
+	enc, err := openEncoder(s.e.target, pcm, s.src)
+	if err != nil {
+		return err
+	}
+	s.enc, s.rate = enc, pcm.SampleRate
+	s.win = newWindower(frameParams(pcm), av.SampleScale(enc.Info().SampleFmt))
+	if s.dst == nil {
+		return nil
+	}
+	s.mux, err = openMux(s.dst, enc.Info(), s.meta)
+	return err
+}
+
+func (s *sampleStage) embed(frames []sampleFrame) error {
+	for _, w := range frames {
+		chunk := s.place.place(w.Capacity())
+		if s.mux == nil {
+			continue
 		}
-		pos, err := crypto.PositionSeed(e.pub, w.index)
+		if err := s.e.embedWindow(w, chunk); err != nil {
+			return err
+		}
+		pkts, err := s.enc.Encode(w.pcm(s.rate, s.sent))
 		if err != nil {
 			return err
 		}
-		// A window too short to hold even one bit is left alone, the way
-		// a packet group with no eligible residues is.
-		if err := stego.ApplySamples(w.Samples, pos, bits); err != nil &&
-			!errors.Is(err, stego.ErrNoResidues) {
-			return fmt.Errorf("%w: %v", ErrCarrier, err)
+		s.sent += int64(w.N)
+		if err := s.mux.write(pkts); err != nil {
+			return err
 		}
-		e.progress.report(ProgressEmbed, i+1, len(frames))
+		s.report()
 	}
 	return nil
 }
 
-// sampleRooms is each lossless stego frame's capacity in bytes — pure
-// arithmetic over the window's sample count, so no encode is needed to
-// know it, unlike the Vorbis path's real residue count.
-func sampleRooms(frames []sampleFrame) []int {
-	rooms := make([]int, len(frames))
-	for i, w := range frames {
-		rooms[i] = w.Capacity()
+func (s *sampleStage) finish() error {
+	if s.enc == nil {
+		return ErrCarrier
 	}
-	return rooms
+	if err := s.embed(s.win.flush()); err != nil {
+		return err
+	}
+	if s.mux == nil {
+		return nil
+	}
+	pkts, err := s.enc.Flush()
+	if err != nil {
+		return err
+	}
+	if err := s.mux.write(pkts); err != nil {
+		return err
+	}
+	return s.mux.finish()
+}
+
+func (s *sampleStage) close() {
+	if s.mux != nil {
+		s.mux.close()
+	}
+	if s.enc != nil {
+		_ = s.enc.Close()
+	}
+}
+
+// embedWindow writes one stego frame into its samples in place: chunk
+// sealed for the recipient, or filler at the same density when it is nil.
+func (e *Emitter) embedWindow(w sampleFrame, chunk []byte) error {
+	bits, err := e.seal(chunk)
+	if err != nil {
+		return err
+	}
+	pos, err := crypto.PositionSeed(e.pub, w.index)
+	if err != nil {
+		return err
+	}
+	// A window too short to hold even one bit is left alone, the way
+	// a packet group with no eligible residues is.
+	if err := stego.ApplySamples(w.Samples, pos, bits); err != nil &&
+		!errors.Is(err, stego.ErrNoResidues) {
+		return fmt.Errorf("%w: %v", ErrCarrier, err)
+	}
+	return nil
 }
 
 // sampleFrame is one stego frame's worth of PCM, still pointing into the
@@ -78,27 +147,17 @@ type sampleFrame struct {
 	partial bool
 }
 
-// sampleFrames cuts pcm into consecutive frames. The window comes from
-// frame.Params, the same function the packet-domain grouper uses, so the
-// two domains cannot drift apart on where a frame begins.
-func sampleFrames(pcm codec.PCM, scale float32) []sampleFrame {
-	win := frameParams(pcm).Samples()
-	if win <= 0 || len(pcm.Planes) == 0 {
-		return nil
+// pcm is the frame's samples as the encoder takes them, pts samples into
+// the stream.
+func (f sampleFrame) pcm(rate int, pts int64) codec.PCM {
+	planes := make([][]float32, len(f.Planes))
+	for i, p := range f.Planes {
+		planes[i] = p[f.Off : f.Off+f.N]
 	}
-	var out []sampleFrame
-	for off := 0; off < pcm.NbSamples; off += win {
-		out = append(out, sampleFrame{
-			Samples: stego.Samples{
-				Planes: pcm.Planes,
-				Off:    off,
-				N:      min(win, pcm.NbSamples-off),
-				Scale:  scale,
-			},
-			index: int64(off / win),
-		})
+	return codec.PCM{
+		Planes: planes, NbSamples: f.N, Channels: len(planes),
+		SampleRate: rate, Format: codec.SampleFmtFLTP, PTS: pts,
 	}
-	return out
 }
 
 // windower reassembles a decoded lossless stream into the same frames

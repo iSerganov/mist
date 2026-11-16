@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -643,4 +644,71 @@ func (s *CLISuite) TestCatchMeterShowsScanAndAssembly() {
 			s.Equal("\r\x1b[K  → "+tc.want, s.stdout.String())
 		})
 	}
+}
+
+func (s *CLISuite) TestEmbedMeterShowsATotalOnlyWhenKnown() {
+	tests := []struct {
+		title string
+		p     mist.Progress
+		want  string
+	}{
+		{"file with a known length", mist.Progress{Stage: mist.ProgressEmbed, Done: 3, Total: 4}, "embedding frame 3/4"},
+		{"live stream", mist.Progress{Stage: mist.ProgressEmbed, Done: 3}, "embedding frame 3"},
+	}
+	for _, tc := range tests {
+		s.Run(tc.title, func() {
+			liveOn = true
+			s.stdout.Reset()
+			embedMeter(tc.p)
+			s.Equal("\r\x1b[K  → "+tc.want, s.stdout.String())
+		})
+	}
+}
+
+// The output only replaces what was at its path once the run has worked,
+// so an output that is the input reads all of the input first.
+func (s *CLISuite) TestEmbedIntoItsOwnInput() {
+	s.requireLibav()
+	dir := s.T().TempDir()
+	in := s.carrier(dir, 18*time.Second)
+
+	s.Require().NoError(s.run("embed", "--input", in, "--data", "in place", "--output", in))
+
+	_, priv := keyPaths(in)
+	s.stdout.Reset()
+	s.Require().NoError(s.run("catch", "--input", in, "--key", priv))
+	s.Contains(s.stdout.String(), "in place")
+	s.Empty(s.hiddenFiles(dir), "no temporary file is left behind")
+}
+
+func (s *CLISuite) TestFailedEmbedLeavesTheExistingOutput() {
+	s.requireLibav()
+	dir := s.T().TempDir()
+	in := s.carrier(dir, 2*time.Second)
+	stego := filepath.Join(dir, "out.ogg")
+	s.Require().NoError(os.WriteFile(stego, []byte("earlier output"), 0o600))
+	huge := string(bytes.Repeat([]byte("x"), 100_000))
+
+	err := s.run("embed", "--input", in, "--data", huge, "--output", stego)
+
+	s.Require().ErrorIs(err, mist.ErrNoCapacity)
+	got, err := os.ReadFile(stego)
+	s.Require().NoError(err)
+	s.Equal("earlier output", string(got))
+	s.Empty(s.hiddenFiles(dir), "no temporary file is left behind")
+}
+
+// hiddenFiles names the entries of dir that start with a dot, which is
+// where embed keeps its output until the run has succeeded.
+func (s *CLISuite) hiddenFiles(dir string) []string {
+	s.T().Helper()
+	entries, err := os.ReadDir(dir)
+	s.Require().NoError(err)
+	var names []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			names = append(names, e.Name())
+		}
+	}
+	return names
 }

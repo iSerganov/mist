@@ -189,7 +189,7 @@ func (s *LosslessSuite) TestOnlyLeastSignificantBitsMove() {
 
 	em, err := NewEmitter(mustPub(s), WithFormat("flac"))
 	s.Require().NoError(err)
-	s.Require().NoError(em.embedSamples(context.Background(), pcm, 1<<15, []byte("payload")))
+	s.embedWhole(em, pcm, 1<<15, []byte("payload"))
 
 	for i, was := range before {
 		delta := int(was*(1<<15)) - int(pcm.Planes[0][i]*(1<<15))
@@ -333,7 +333,7 @@ func (s *LosslessSuite) perturbed(pcm codec.PCM, payload Payload) int {
 	s.Require().NoError(err)
 	em, err := NewEmitter(mustPub(s), WithFormat("flac"))
 	s.Require().NoError(err)
-	s.Require().NoError(em.embedSamples(context.Background(), copyOf, 1<<15, plain))
+	s.embedWhole(em, copyOf, 1<<15, plain)
 
 	n := 0
 	for i, p := range copyOf.Planes {
@@ -388,4 +388,29 @@ func (s *LosslessSuite) TestSampleGridRoundTrip() {
 			s.LessOrEqual(got, int32(32767))
 		})
 	}
+}
+
+// embedWhole embeds plain into pcm in place, one stego frame at a time,
+// placed the way Embed places it.
+func (s *LosslessSuite) embedWhole(em *Emitter, pcm codec.PCM, scale float32, plain []byte) {
+	s.T().Helper()
+	plan := &spanPlan{full: plain}
+	for _, w := range sampleFrames(pcm, scale) {
+		s.Require().NoError(em.embedWindow(w, plan.place(w.Capacity())))
+	}
+	s.Require().True(plan.complete())
+}
+
+// sampleFrames cuts pcm into stego frames by plain arithmetic, pointing
+// into pcm's own planes. It is what the windower has to agree with.
+func sampleFrames(pcm codec.PCM, scale float32) []sampleFrame {
+	win := frameParams(pcm).Samples()
+	var out []sampleFrame
+	for off := 0; off < pcm.NbSamples; off += win {
+		out = append(out, sampleFrame{
+			Samples: stego.Samples{Planes: pcm.Planes, Off: off, N: min(win, pcm.NbSamples-off), Scale: scale},
+			index:   int64(off / win),
+		})
+	}
+	return out
 }

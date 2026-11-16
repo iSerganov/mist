@@ -23,20 +23,22 @@ func (e *Encoder) Window() int {
 	return e.info.FrameSize
 }
 
-// Encode implements codec.Encoder: it splits pcm into encoder-sized
-// windows, sends each, and returns whatever packets came back. pcm must
-// be the whole stream: its short last window is sent as it is, and libav
-// accepts a short frame only as the last one.
+// Encode implements codec.Encoder. It sends every whole encoder window in
+// pcm and holds what is left over for the next call, so a stream can
+// arrive in pieces of any size. libav accepts a short frame only as the
+// last one, and Flush is what sends it.
 func (e *Encoder) Encode(pcm codec.PCM) ([]codec.Packet, error) {
 	if e == nil || e.handle == nil {
 		return nil, ErrClosed
 	}
+	w := e.Window()
 	var out []codec.Packet
-	for _, chunk := range splitPCM(pcm, e.Window()) {
-		if err := e.Send(frameFromPCM(chunk)); err != nil && !errors.Is(err, ErrAgain) {
-			return out, err
+	for _, chunk := range splitPCM(e.join(pcm), w) {
+		if chunk.NbSamples < w {
+			e.held = clonePCM(chunk)
+			break
 		}
-		pkts, err := drainEnc(e)
+		pkts, err := e.sendPCM(chunk)
 		out = append(out, pkts...)
 		if err != nil {
 			return out, err
@@ -45,15 +47,63 @@ func (e *Encoder) Encode(pcm codec.PCM) ([]codec.Packet, error) {
 	return out, nil
 }
 
-// Flush implements codec.Encoder, draining the encoder's tail.
+// Flush implements codec.Encoder: it sends the short last window, if
+// Encode left one, and drains the encoder's tail.
 func (e *Encoder) Flush() ([]codec.Packet, error) {
 	if e == nil || e.handle == nil {
 		return nil, ErrClosed
 	}
+	var out []codec.Packet
+	if e.held.NbSamples > 0 {
+		pkts, err := e.sendPCM(e.held)
+		e.held = codec.PCM{}
+		out = pkts
+		if err != nil {
+			return out, err
+		}
+	}
 	if err := e.Send(Frame{}); err != nil && !errors.Is(err, ErrAgain) && !errors.Is(err, ErrEOF) {
+		return out, err
+	}
+	pkts, err := drainEnc(e)
+	return append(out, pkts...), err
+}
+
+func (e *Encoder) sendPCM(chunk codec.PCM) ([]codec.Packet, error) {
+	if err := e.Send(frameFromPCM(chunk)); err != nil && !errors.Is(err, ErrAgain) {
 		return nil, err
 	}
 	return drainEnc(e)
+}
+
+// join puts the samples the last Encode held back in front of p and
+// forgets them. The result keeps the held samples' PTS.
+func (e *Encoder) join(p codec.PCM) codec.PCM {
+	held := e.held
+	e.held = codec.PCM{}
+	if held.NbSamples == 0 {
+		return p
+	}
+	planes := pcmPlanes(p)
+	total := held.NbSamples + p.NbSamples
+	for i := range held.Planes {
+		if i < len(planes) {
+			held.Planes[i] = append(held.Planes[i], planes[i][:min(len(planes[i]), p.NbSamples)]...)
+		}
+		held.Planes[i] = append(held.Planes[i], make([]float32, total-len(held.Planes[i]))...)
+	}
+	held.NbSamples = total
+	return held
+}
+
+// clonePCM copies p's planes, which otherwise alias the caller's buffer.
+func clonePCM(p codec.PCM) codec.PCM {
+	planes := make([][]float32, len(p.Planes))
+	for i, pl := range p.Planes {
+		planes[i] = append([]float32(nil), pl...)
+	}
+	p.Planes = planes
+	return p
 }
 
 // Params returns the stream after open, including any extradata the

@@ -5,8 +5,9 @@ package av
 // Custom AVIO callbacks. Handles are integers in a Go map so libav never
 // stores a Go pointer (cgo forbids that). Read/write/seek are //export
 // entry points called from cgo.c; they look up the slot and copy into the
-// C buffer. A reader or writer that also implements io.Seeker is required
-// for Ogg, because probing and granule patching seek.
+// C buffer. libav is told the stream can seek only when a seek actually
+// works. A slot can instead hold a context, which libav's interrupt
+// callback polls during blocking network IO.
 
 /*
 #include "cgo.h"
@@ -15,14 +16,16 @@ package av
 import "C"
 
 import (
+	"context"
 	"io"
 	"sync"
 	"unsafe"
 )
 
 type ioSlot struct {
-	r io.Reader
-	w io.Writer
+	r   io.Reader
+	w   io.Writer
+	ctx context.Context
 }
 
 var (
@@ -32,10 +35,18 @@ var (
 )
 
 func registerIO(r io.Reader, w io.Writer) int {
+	return register(&ioSlot{r: r, w: w})
+}
+
+func registerInterrupt(ctx context.Context) int {
+	return register(&ioSlot{ctx: ctx})
+}
+
+func register(s *ioSlot) int {
 	ioMu.Lock()
 	defer ioMu.Unlock()
 	ioSeq++
-	ioTab[ioSeq] = &ioSlot{r: r, w: w}
+	ioTab[ioSeq] = s
 	return ioSeq
 }
 
@@ -66,6 +77,15 @@ func mist_av_go_read(id C.int, buf *C.uint8_t, bufSize C.int) C.int {
 		return 0
 	}
 	return -1
+}
+
+//export mist_av_go_interrupted
+func mist_av_go_interrupted(id C.int) C.int {
+	s := slot(int(id))
+	if s == nil || s.ctx == nil || s.ctx.Err() == nil {
+		return 0
+	}
+	return 1
 }
 
 //export mist_av_go_write
