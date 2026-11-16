@@ -2,65 +2,55 @@ package mist
 
 import "github.com/iSerganov/mist/internal/wire"
 
-// planChunks decides how to place full — the fully marshaled payload —
-// across a carrier's stego frames, given each frame's available room in
-// bytes (as stego.Capacity / Samples.Capacity report). It always prefers
-// writing full into a single frame, unmodified, over spanning: spanning is
-// only attempted when no one frame is large enough by itself, so a
-// message that already fits costs nothing extra and stays byte-for-byte
-// compatible with a non-spanning reader.
+// spanPlan places full, the fully marshaled payload, one stego frame at a
+// time as each frame's room becomes known, so the carrier is read once.
+// The payload goes whole and unmodified into the first frame with any room
+// when it fits there, so it stays readable by a catcher that predates
+// spanning. When that frame is too small, the span starts in it and takes
+// as many consecutive usable frames as it needs: the first chunk framed by
+// MarshalSpanStart, which carries the total length, every later one by
+// MarshalSpanContinue. A frame with no room neither starts nor continues it.
 //
-// The result is one entry per frame — nil for a frame that carries no
-// chunk this round, and the framed bytes to seal otherwise — or nil
-// entirely when full fits nowhere, even split across every frame offered.
-func planChunks(full []byte, room []int) [][]byte {
-	if i, ok := firstFit(full, room); ok {
-		out := make([][]byte, len(room))
-		out[i] = full
-		return out
-	}
-	return planSpan(full, room)
+// With every set (WithReseal) full instead goes whole into every frame that
+// holds it, and never spans.
+type spanPlan struct {
+	full    []byte
+	every   bool
+	off     int // bytes of full placed so far
+	started bool
 }
 
-func firstFit(full []byte, room []int) (int, bool) {
-	for i, r := range room {
-		if r >= EnvelopeOverhead+len(full) {
-			return i, true
+// place returns the framed bytes to seal into a frame with room bytes, or
+// nil for filler.
+func (p *spanPlan) place(room int) []byte {
+	if p.every || !p.started {
+		if fits(p.full, room) {
+			p.started, p.off = true, len(p.full)
+			return p.full
+		}
+		if p.every {
+			return nil
 		}
 	}
-	return 0, false
-}
-
-// planSpan is the multi-frame path: it walks the frames in order, filling
-// each one that has room with as much of full as fits, until full is
-// exhausted or the frames are. The first frame it uses opens the span
-// with MarshalSpanStart, carrying the total length so a reader knows when
-// reassembly is complete; every frame after that is MarshalSpanContinue,
-// since the total is already known.
-func planSpan(full []byte, room []int) [][]byte {
-	out := make([][]byte, len(room))
-	off, started := 0, false
-	for i, r := range room {
-		if off >= len(full) {
-			break
-		}
-		avail := spanRoom(r, !started)
-		if avail <= 0 {
-			continue
-		}
-		n := min(avail, len(full)-off)
-		if !started {
-			out[i] = wire.MarshalSpanStart(uint32(len(full)), full[off:off+n])
-			started = true
-		} else {
-			out[i] = wire.MarshalSpanContinue(full[off : off+n])
-		}
-		off += n
-	}
-	if off < len(full) {
+	avail := spanRoom(room, !p.started)
+	if p.off >= len(p.full) || avail <= 0 {
 		return nil
 	}
-	return out
+	chunk := p.full[p.off : p.off+min(avail, len(p.full)-p.off)]
+	p.off += len(chunk)
+	if p.started {
+		return wire.MarshalSpanContinue(chunk)
+	}
+	p.started = true
+	return wire.MarshalSpanStart(uint32(len(p.full)), chunk)
+}
+
+// complete reports whether all of full has been placed.
+func (p *spanPlan) complete() bool { return p.off >= len(p.full) }
+
+// fits reports whether a frame with room bytes holds full in one piece.
+func fits(full []byte, room int) bool {
+	return room >= EnvelopeOverhead+len(full)
 }
 
 func spanRoom(room int, first bool) int {

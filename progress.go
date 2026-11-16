@@ -12,15 +12,18 @@ const (
 )
 
 // Progress counts frames for ProgressEmbed and ProgressScan and message
-// bytes for ProgressAssemble. Total is 0 when it is not known, as on a live stream.
+// bytes for ProgressAssemble. Total is 0 when it is not known, as on a live
+// stream. For ProgressEmbed it follows the carrier's stated duration, and
+// rises to Done should the carrier run longer.
 type Progress struct {
 	Stage ProgressStage
 	Done  int
 	Total int
 }
 
-// ProgressFunc receives Progress reports on the goroutine doing the work,
-// so it must return quickly.
+// ProgressFunc receives Progress reports one at a time, never concurrently,
+// but not always on the caller's goroutine: a Vorbis embed reports from the
+// goroutine writing its output. It must return quickly.
 type ProgressFunc func(Progress)
 
 func (f ProgressFunc) report(stage ProgressStage, done, total int) {

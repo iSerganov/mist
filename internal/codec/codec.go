@@ -89,6 +89,9 @@ type Packet struct {
 	DTS      int64
 	Duration int64
 	Flags    int
+	// NewExtradata is codec headers the encoder revised after the stream
+	// began, to be handed to the muxer with this packet.
+	NewExtradata []byte
 }
 
 // Residue is one quantized residue symbol (a VQ codebook entry).

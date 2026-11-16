@@ -106,6 +106,11 @@ typedef struct mist_av_packet {
 	 * the end of what this packet decodes to. */
 	uint32_t skip_start;
 	uint32_t skip_end;
+	/* AV_PKT_DATA_NEW_EXTRADATA: codec headers an encoder revised after
+	 * the stream began. FLAC sends its final STREAMINFO this way at flush,
+	 * on a packet with no data. */
+	uint8_t *extradata;
+	int      extradata_size;
 } mist_av_packet;
 
 typedef struct mist_av_frame {
@@ -136,7 +141,9 @@ void mist_av_free(void *p);
 int mist_av_format_find(const char *name, const char *codec, mist_av_format *out);
 int mist_av_format_list(char *buf, int buflen);
 
-mist_av_demuxer *mist_av_demuxer_open(const char *url, char *errbuf, int errlen);
+/* interrupt is a Go handle: libav polls it during blocking network IO and
+ * gives up once the context behind it is cancelled. */
+mist_av_demuxer *mist_av_demuxer_open(const char *url, int interrupt, char *errbuf, int errlen);
 mist_av_demuxer *mist_av_demuxer_open_io(mist_av_io *io, char *errbuf, int errlen);
 int              mist_av_demuxer_audio_info(mist_av_demuxer *d, mist_av_audio_info *info);
 /* which is 0 for format tags and 1 for the audio stream. index walks them
@@ -178,7 +185,10 @@ int              mist_av_encoder_flush(mist_av_encoder *enc);
 int              mist_av_encoder_receive(mist_av_encoder *enc, mist_av_packet *pkt);
 void             mist_av_encoder_close(mist_av_encoder *enc);
 
-mist_av_io *mist_av_io_new(int handle, int writable);
+/* seekable says whether the Go reader or writer behind handle can seek.
+ * A muxer writing to one that cannot leaves its header as first written,
+ * the way ffmpeg does on a pipe. */
+mist_av_io *mist_av_io_new(int handle, int writable, int seekable);
 void        mist_av_io_free(mist_av_io *io);
 
 void mist_av_packet_unref(mist_av_packet *pkt);

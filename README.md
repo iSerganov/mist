@@ -87,10 +87,11 @@ footprint. A lossless output also leaves digital silence alone, exactly as a
 plain encoder does.
 
 **Audio is divided into frames, and the message goes into the first one with
-room for it.** The carrier is split into self-contained 8-second frames. A
-message that fits in one frame goes there and stops; a longer one spreads
-across as many *consecutive* frames as it needs, each independently sealed
-with its own ephemeral key. Every frame not carrying a piece of the message is
+room for it.** The carrier is split into self-contained 8-second frames and
+read once, front to back. A message that fits the first frame with room goes
+there and stops; a longer one spreads from that frame across as many
+*consecutive* frames as it needs, each independently sealed with its own
+ephemeral key. Every frame not carrying a piece of the message is
 filled with CSPRNG bytes at exactly the same density, so a carrying frame and
 an empty one are statistically indistinguishable — the padding is not
 decoration, it is what stops the payload's location being obvious. There is no
@@ -101,6 +102,15 @@ One consequence is worth knowing: a listener who joins a live broadcast after
 the message's frame (or, for a longer message, after its first frame) has
 passed recovers nothing, and a recording that loses that frame — or any one
 frame of a longer message's span — loses the message.
+
+Re-sealing (`--reseal`, `WithReseal`) is the opt-in answer for a broadcast: the
+message is sealed again, under a fresh key, into every frame that holds it, so
+a late listener reads it from the next whole frame. It has to fit one frame,
+because a re-sealed message is never spread over several. A late listener can
+only line up with the frames where the stream carries absolute time across the
+join. Ogg Vorbis does. A lossless stream joined midway does not yet: raw FLAC
+and WAV restart their clock, and libav mis-stamps the first packets of
+FLAC-in-Ogg.
 
 ## Requirements
 
@@ -183,6 +193,16 @@ mist embed --input song.ogg --data "the eagle lands at dawn"
 | `--key` | `-k` | no | Recipient **public** key file; a keypair is generated when omitted |
 | `--output` | `-o` | no | Destination file; its extension picks the format (default `<input>.stego.ogg`) |
 | `--out-codec` | | no | Encoder to use when the container holds more than one, e.g. `alac` for `.m4a` |
+| `--reseal` | | no | Repeat the message in every 8 s frame so a late listener still gets it; it must fit one frame |
+
+`embed` reads the carrier once, writes the output as it goes and keeps about
+one frame of audio in memory, whatever the carrier's length. The output goes to
+a hidden temporary file beside `--output` and replaces it only when the run
+succeeds, so a failed run leaves an existing file alone and `--output` may name
+the input itself. A message too big for the carrier is only known at its end,
+so that error comes after the work. An `http(s)` source with no known duration,
+such as a live stream, is written until it ends or you press Ctrl-C, which
+finishes the file properly.
 
 **The output format follows the `--output` extension**, the same way `ffmpeg`'s
 does:
@@ -312,7 +332,7 @@ mist estimate --input song.ogg
   source      vorbis · lossy  44100 Hz · 2ch · 128 kbps · 24s
 
   frames      ████████████████████████  3/3 usable  3 total
-  frame cap   77 B  largest message that fits in a single frame
+  frame cap   77 B  largest message sent in one frame
   total cap   241 B  largest message spanning every usable frame
 
   ✓ this carrier can be used with `mist embed`
@@ -334,8 +354,9 @@ and duration.
 It reports the real limit `embed` enforces: for Vorbis it groups the
 encoder's actual packets into stego frames and counts each one's genuinely
 eligible residues, and for a lossless target it computes each frame's sample
-capacity directly. `frame cap` is the largest message a single, unspanned
-frame can hold — what `embed` uses when a message fits in one frame outright.
+capacity directly. `frame cap` is the largest message `embed` writes into one
+frame unspanned: the room of the first frame with any, since a bigger message
+is spread from there.
 `total cap` is the largest message `embed` could carry overall by spreading it
 across every usable frame in turn, for one that doesn't. A carrier that
 cannot fit even the protocol envelope in any frame exits non-zero with the
@@ -356,7 +377,7 @@ mist estimate --input tiny.wav
   source      pcm_s16le · lossless  44100 Hz · 2ch · 1411 kbps · 0s
 
   frames      ░░░░░░░░░░░░░░░░░░░░░░░░  0/1 usable  1 total
-  frame cap   0 B  largest message that fits in a single frame
+  frame cap   0 B  largest message sent in one frame
   total cap   0 B  largest message spanning every usable frame
 
   ✗ mist: carrier has no frame with room for the payload — quiet or tonal audio
@@ -516,7 +537,25 @@ io.Copy(dst, stego)
 
 `Embed(ctx, source, payload)` takes a path or URL, `EmbedReader` an open
 `io.Reader`, and `EmbedFile` an `*os.File`. All three return an
-`io.ReadCloser` producing a new stego stream, which the caller must close.
+`io.ReadCloser` over the finished stego stream, which the caller must close.
+
+`EmbedTo(ctx, source, dst, payload)` writes to any `io.Writer` as the carrier is
+read, holding about one stego frame of audio in memory:
+
+```go
+emitter, err := mist.NewEmitter(pub, mist.WithFormat("ogg"), mist.WithReseal())
+err = emitter.EmbedTo(ctx, "https://radio.example.com/live.ogg", dst, mist.Text("on air"))
+```
+
+When `dst` can seek (a file) the container header is completed at the end.
+Otherwise, a pipe included, it is left as `ffmpeg` leaves it on a pipe, so a
+streamed FLAC states no length and a container that must seek, such as `.m4a`,
+fails. A failure, `ErrNoCapacity` included, can leave `dst` written: the carrier
+is read once, so a message too big for it is only known at its end. A URL that
+reports no duration is treated as live: cancelling `ctx` ends the stream
+cleanly and returns nil. `Embed` refuses such a source with `ErrInvalidSource`,
+because it returns a finished stream. Network reads give up as soon as `ctx` is
+cancelled.
 
 A `Payload` is a type and bytes. `mist.Text(s)`, `mist.Image(b)` and
 `mist.Audio(b)` build the first three; `mist.File(name, b)` also remembers a
@@ -548,7 +587,8 @@ useful for deriving an output filename from its `Ext`.
 anything out or needing a recipient key: `Source` (the carrier's own codec,
 container, rate, channels, bitrate and duration, straight from libav),
 `Frames` and `Usable` (how many have room to contribute), `FrameCapacity`
-(the largest plaintext a single, unspanned frame could carry), and
+(the largest plaintext `Embed` writes into one frame unspanned, set by the
+first frame with room), and
 `TotalCapacity` (the largest plaintext `Embed` could carry overall by
 spreading it across every usable frame when it doesn't fit in one).
 
@@ -582,6 +622,7 @@ reader in full before it starts.
 | `WithMaxRetries(n)` | Catcher | Tolerate transient read failures on a live source |
 | `WithBackoff(d)` | Catcher | Pause between those retries |
 | `WithLogger(*slog.Logger)` | Catcher | Receive diagnostics such as joining mid-frame |
+| `WithReseal()` | Emitter | Seal the message again into every frame that holds it, for late listeners |
 | `WithEmitProgress(f)` | Emitter | Call `f` after each frame is embedded |
 | `WithCatchProgress(f)` | Catcher | Call `f` for each frame scanned and each chunk of a spanned message received |
 | `WithPartial()` | Catcher | Return the start of a spanned message cut short, with `Result.Partial` set |
@@ -723,12 +764,15 @@ TTA, AIFF and CAF.
 
 Known gaps, all recorded in [CLAUDE.md](CLAUDE.md):
 
-- `Embed` over `http(s)` buffers a finite file rather than streaming a live source,
-  and the lossless path buffers the whole carrier before encoding.
+- `EmbedReader` still reads a reader that cannot seek into memory first. Live
+  sources belong in `EmbedTo` with a URL.
+- A late listener lines up with a re-sealed stream only in Ogg Vorbis. Lossless
+  streams joined midway are not realigned yet.
 - A listener that joins mid-frame cannot align to that frame; it says so once and
   resumes cleanly from the next one.
-- A scan goroutine parked in a blocking libav read outlives its context until the
-  read returns. `Listen`'s channel still closes immediately on cancellation, so
+- A read blocked inside a Go reader, such as a pipe behind `ListenReader`, cannot
+  be interrupted and outlives its context until it returns. Network reads from a
+  URL give up when the context ends. `Listen`'s channel still closes immediately on cancellation, so
   callers are unaffected.
 
 ## Security notes
@@ -799,7 +843,7 @@ that is publicly available.
 ```bash
 make build                       # -> bin/mist
 make keys                        # X25519 keypair via OpenSSL -> keys/mist.{pub,key}
-make embed INPUT=song.mp3 DATA="hello" OUTPUT=out.flac KEY=keys/mist.pub
+make embed INPUT=song.mp3 DATA="hello" OUTPUT=out.flac KEY=keys/mist.pub   # RESEAL=1 repeats it every frame
 make catch INPUT=out.flac KEY=keys/mist.key TIMEOUT=30s
 make formats                     # output formats this FFmpeg build can write
 make estimate INPUT=song.mp3 OUTPUT=out.flac   # capacity check, no key needed

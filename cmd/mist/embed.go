@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/iSerganov/mist"
@@ -19,6 +20,7 @@ type embedOptions struct {
 	file   string
 	key    string
 	codec  string
+	reseal bool
 }
 
 func newEmbedCmd() *cobra.Command {
@@ -46,6 +48,7 @@ func newEmbedCmd() *cobra.Command {
 	f.StringVarP(&o.key, "key", "k", "", "recipient public key file (a new keypair is created when omitted)")
 	f.StringVarP(&o.output, "output", "o", "", "destination file; its extension picks the format (default: <input>.stego.ogg)")
 	f.StringVar(&o.codec, "out-codec", "", "encoder to use when the container holds more than one (e.g. alac for .m4a)")
+	f.BoolVar(&o.reseal, "reseal", false, "repeat the message in every 8 s frame so a listener who joins late still gets it; it must fit one frame")
 	_ = cmd.MarkFlagRequired("input")
 	cmd.MarkFlagsOneRequired("data", "file")
 	cmd.MarkFlagsMutuallyExclusive("data", "file")
@@ -86,21 +89,21 @@ func runEmbed(ctx context.Context, o *embedOptions) error {
 	step("re-encoding carrier and embedding…")
 
 	started := time.Now()
-	emitter, err := mist.NewEmitter(pub, mist.WithFormat(output), mist.WithCodec(o.codec),
-		mist.WithEmitProgress(func(p mist.Progress) { meter("embedding frame %d/%d", p.Done, p.Total) }))
+	opts := []mist.EmitterOption{
+		mist.WithFormat(output), mist.WithCodec(o.codec),
+		mist.WithEmitProgress(embedMeter),
+	}
+	if o.reseal {
+		opts = append(opts, mist.WithReseal())
+	}
+	emitter, err := mist.NewEmitter(pub, opts...)
 	if err != nil {
 		return err
 	}
-	stream, err := emitter.Embed(ctx, o.input, payload)
+	written, err := embedToFile(ctx, emitter, o.input, output, payload)
 	if errors.Is(err, mist.ErrNoCapacity) {
 		return fmt.Errorf("%w — %s", err, capacityHint(format))
 	}
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stream.Close() }()
-
-	written, err := writeStream(output, stream)
 	if err != nil {
 		return err
 	}
@@ -111,6 +114,16 @@ func runEmbed(ctx context.Context, o *embedOptions) error {
 		return nil
 	}
 	return reportNewKeys(output, pub, priv)
+}
+
+// embedMeter shows the frame count, out of the total when the carrier
+// states one: a live stream has none.
+func embedMeter(p mist.Progress) {
+	if p.Total == 0 {
+		meter("embedding frame %d", p.Done)
+		return
+	}
+	meter("embedding frame %d/%d", p.Done, p.Total)
 }
 
 // recipientKey loads the given public key, or mints a keypair when none was
@@ -138,17 +151,43 @@ func reportNewKeys(output string, pub, priv []byte) error {
 	return nil
 }
 
-func writeStream(path string, r io.Reader) (int64, error) {
-	f, err := os.Create(path)
+// embedToFile embeds into a temporary file beside path and renames it over
+// path only once the run has succeeded. A failed run then leaves whatever
+// was at path untouched, and so does a run whose output is its own input
+// until the input has been read to the end.
+func embedToFile(ctx context.Context, em *mist.Emitter, input, path string, payload mist.Payload) (int64, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return 0, fmt.Errorf("create output: %w", err)
 	}
-	defer func() { _ = f.Close() }()
-	n, err := io.Copy(f, r)
-	if err != nil {
-		return n, fmt.Errorf("write output: %w", err)
+	err = em.EmbedTo(ctx, input, f, payload)
+	if err == nil {
+		err = finishOutput(f)
 	}
-	return n, f.Sync()
+	size, _ := f.Seek(0, io.SeekEnd)
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("write output: %w", cerr)
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(f.Name())
+		return 0, err
+	}
+	return size, nil
+}
+
+// finishOutput gives the temporary file the mode os.Create would under the
+// usual umask, since CreateTemp makes it private, and flushes it to disk.
+func finishOutput(f *os.File) error {
+	if err := f.Chmod(0o644); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	return nil
 }
 
 func humanBytes(n int64) string {

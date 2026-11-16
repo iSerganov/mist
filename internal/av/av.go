@@ -137,6 +137,10 @@ type Packet struct {
 	// Opus pre-skip, the part of an Ogg page past its granule position.
 	SkipStart uint32
 	SkipEnd   uint32
+	// NewExtradata is codec headers the encoder revised after the stream
+	// began. FLAC sends its final STREAMINFO this way when flushed, and a
+	// muxer that can seek writes it over the one in the file header.
+	NewExtradata []byte
 }
 
 // Frame is a decoded AVFrame of PCM samples.
@@ -186,6 +190,7 @@ type Decoder struct {
 type Encoder struct {
 	handle unsafe.Pointer
 	info   AudioInfo
+	held   codec.PCM
 }
 
 // Info returns the audio stream parameters discovered at open.

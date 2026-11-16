@@ -2,14 +2,9 @@ package mist
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/iSerganov/mist/internal/av"
-	"github.com/iSerganov/mist/internal/codec"
-	"github.com/iSerganov/mist/internal/codec/vorbis"
-	"github.com/iSerganov/mist/internal/frame"
 	"github.com/iSerganov/mist/internal/wire"
 )
 
@@ -42,9 +37,9 @@ type Capacity struct {
 	// TotalCapacity — the protocol envelope plus at least one byte, paid
 	// once by whichever usable frame Embed writes first.
 	Usable int
-	// FrameCapacity is the largest plaintext, in bytes, a single unspanned
-	// frame could carry — what Embed uses when the payload fits in one
-	// frame outright.
+	// FrameCapacity is the largest plaintext, in bytes, Embed writes into
+	// one frame unspanned. That is the first frame with room: a payload too
+	// big for it is spanned from there, even if a later frame is larger.
 	FrameCapacity int
 	// TotalCapacity is the largest plaintext, in bytes, Embed could carry
 	// overall by spanning the payload across every usable frame in turn
@@ -66,41 +61,13 @@ func EstimateCapacity(ctx context.Context, source, formatName, codecName string)
 	if err != nil {
 		return Capacity{}, err
 	}
-	pcm, info, err := decodeSource(source)
+	in, err := openPath(ctx, source)
 	if err != nil {
 		return Capacity{}, err
 	}
-	return estimatePCM(ctx, target, pcm, info)
-}
-
-func decodeSource(source string) (codec.PCM, av.AudioInfo, error) {
-	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-		pcm, info, _, err := decodeCarrierURL(source)
-		return pcm, info, err
-	}
-	rc, err := openSource(source)
+	info := in.d.Info()
+	rooms, err := (&Emitter{target: target}).measure(ctx, in)
 	if err != nil {
-		return codec.PCM{}, av.AudioInfo{}, err
-	}
-	defer func() { _ = rc.Close() }()
-	pcm, info, _, err := decodeCarrier(rc)
-	return pcm, info, err
-}
-
-func estimatePCM(ctx context.Context, target av.Format, pcm codec.PCM, info av.AudioInfo) (Capacity, error) {
-	enc, err := openEncoder(target, pcm, info)
-	if err != nil {
-		return Capacity{}, err
-	}
-	defer func() { _ = enc.Close() }()
-
-	var rooms []int
-	if target.Lossless {
-		if err := enc.Snap(pcm.Planes, pcm.Frames); err != nil {
-			return Capacity{}, fmt.Errorf("%w: %v", ErrCarrier, err)
-		}
-		rooms = sampleRooms(sampleFrames(pcm, av.SampleScale(enc.Info().SampleFmt)))
-	} else if rooms, err = residueRooms(ctx, enc, pcm); err != nil {
 		return Capacity{}, err
 	}
 	c := tabulateRooms(target, rooms)
@@ -120,32 +87,9 @@ func sourceOf(info av.AudioInfo) Source {
 	}
 }
 
-// residueRooms is the Vorbis path: only the encoder's actual residues say
-// how many are eligible, so the carrier is encoded for real.
-func residueRooms(ctx context.Context, enc *av.Encoder, pcm codec.PCM) ([]int, error) {
-	pkts, err := enc.Encode(pcm)
-	if err != nil {
-		return nil, err
-	}
-	flushed, err := enc.Flush()
-	if err != nil {
-		return nil, err
-	}
-	vc := vorbis.New()
-	if err := vc.Load(enc.Info().Extradata); err != nil {
-		return nil, fmt.Errorf("%w: setup", err)
-	}
-	groups := frame.GroupPackets(append(pkts, flushed...), frameParams(pcm))
-	if len(groups) == 0 {
-		return nil, ErrCarrier
-	}
-	return groupRooms(ctx, vc, groups)
-}
-
-// tabulateRooms reports both the single largest frame's capacity
-// (FrameCapacity, what Embed uses when the payload fits in one frame) and
-// the total capacity spanning every usable frame would offer
-// (TotalCapacity) — the same accounting planSpan does, without needing an
+// tabulateRooms reports both what Embed writes unspanned (FrameCapacity)
+// and the total capacity spanning every usable frame would offer
+// (TotalCapacity) — the same accounting spanPlan does, without needing an
 // actual payload to run it against: the first usable frame pays the
 // larger span-start header, every one after it the smaller continuation
 // header.
@@ -156,8 +100,8 @@ func tabulateRooms(target av.Format, rooms []int) Capacity {
 	}
 	spanHeader := wire.SpanStartHeaderSize
 	for _, room := range rooms {
-		if single := room - envelopeFloor; single > c.FrameCapacity {
-			c.FrameCapacity = single
+		if c.Usable == 0 {
+			c.FrameCapacity = max(c.FrameCapacity, room-envelopeFloor)
 		}
 		avail := room - EnvelopeOverhead - spanHeader
 		if avail <= 0 {

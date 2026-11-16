@@ -54,7 +54,9 @@ func (s *ProgressSuite) TestEmbedReportsEveryFrameInOrder() {
 	}
 }
 
-func (s *ProgressSuite) TestEmbedReportsNothingBeforeNoCapacity() {
+// The carrier is read once, so its frames are written, and reported, before
+// the end shows the payload never fitted. That is still a loud failure.
+func (s *ProgressSuite) TestEmbedReportsItsFramesAndStillFailsOnNoCapacity() {
 	s.requireFormat("flac")
 	pub, _, err := GenerateKeyPair()
 	s.Require().NoError(err)
@@ -65,7 +67,7 @@ func (s *ProgressSuite) TestEmbedReportsNothingBeforeNoCapacity() {
 	_, err = em.EmbedReader(context.Background(), bytes.NewReader(s.pcmCarrier(100*time.Millisecond)), Text("too big"))
 
 	s.ErrorIs(err, ErrNoCapacity)
-	s.Empty(*got)
+	s.Equal([]Progress{{Stage: ProgressEmbed, Done: 1, Total: 1}}, *got)
 }
 
 func (s *ProgressSuite) TestCatchAssemblesASpanToItsLength() {

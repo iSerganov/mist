@@ -17,6 +17,7 @@ package av
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -32,7 +33,7 @@ func avInit() error {
 	return nil
 }
 
-func avOpenDemuxer(url string) (*Demuxer, error) {
+func avOpenDemuxer(ctx context.Context, url string) (*Demuxer, error) {
 	csrc := C.CString(url)
 	defer C.free(unsafe.Pointer(csrc))
 	errbuf := (*C.char)(C.malloc(errBufLen))
@@ -41,11 +42,13 @@ func avOpenDemuxer(url string) (*Demuxer, error) {
 	}
 	defer C.free(unsafe.Pointer(errbuf))
 
-	ptr := C.mist_av_demuxer_open(csrc, errbuf, errBufLen)
+	id := registerInterrupt(ctx)
+	ptr := C.mist_av_demuxer_open(csrc, C.int(id), errbuf, errBufLen)
 	if ptr == nil {
+		forgetIO(id)
 		return nil, fmt.Errorf("%w: %s", ErrOpen, C.GoString(errbuf))
 	}
-	d := &Demuxer{handle: unsafe.Pointer(ptr)}
+	d := &Demuxer{handle: unsafe.Pointer(ptr), closer: ioCloser{id: id}}
 	if err := avDemuxInfo(d); err != nil {
 		_ = avDemuxClose(d)
 		return nil, err
@@ -55,7 +58,7 @@ func avOpenDemuxer(url string) (*Demuxer, error) {
 
 func avOpenDemuxerReader(r io.Reader) (*Demuxer, error) {
 	id := registerIO(r, nil)
-	ioh := C.mist_av_io_new(C.int(id), 0)
+	ioh := C.mist_av_io_new(C.int(id), 0, canSeek(r))
 	if ioh == nil {
 		forgetIO(id)
 		return nil, fmt.Errorf("%w: io", ErrOpen)
@@ -83,7 +86,7 @@ func avOpenDemuxerReader(r io.Reader) (*Demuxer, error) {
 
 func avNewMuxer(w io.Writer, info AudioInfo) (*Muxer, error) {
 	id := registerIO(nil, w)
-	ioh := C.mist_av_io_new(C.int(id), 1)
+	ioh := C.mist_av_io_new(C.int(id), 1, canSeek(w))
 	if ioh == nil {
 		forgetIO(id)
 		return nil, fmt.Errorf("%w: io", ErrOpen)
@@ -429,6 +432,18 @@ func avEncConvert(e *Encoder, planes [][]float32, n int) ([][]int32, error) {
 	return res, nil
 }
 
+// canSeek tries a seek rather than trusting the method set: an *os.File
+// always has Seek, but on a pipe it fails, and a muxer told it can seek
+// there writes a file it cannot finish without reporting an error.
+func canSeek(v any) C.int {
+	s, ok := v.(io.Seeker)
+	if ok {
+		_, err := s.Seek(0, io.SeekCurrent)
+		ok = err == nil
+	}
+	return C.int(boolInt(ok))
+}
+
 func boolInt(b bool) int {
 	if b {
 		return 1
@@ -580,11 +595,17 @@ func cPacket(p Packet) (C.mist_av_packet, func()) {
 	cp.duration = C.int64_t(p.Duration)
 	cp.skip_start = C.uint32_t(p.SkipStart)
 	cp.skip_end = C.uint32_t(p.SkipEnd)
-	if len(p.Data) == 0 {
-		return cp, func() {}
+	if len(p.Data) > 0 {
+		cp.data = (*C.uint8_t)(C.CBytes(p.Data))
 	}
-	cp.data = (*C.uint8_t)(C.CBytes(p.Data))
-	return cp, func() { C.free(unsafe.Pointer(cp.data)) }
+	if len(p.NewExtradata) > 0 {
+		cp.extradata = (*C.uint8_t)(C.CBytes(p.NewExtradata))
+		cp.extradata_size = C.int(len(p.NewExtradata))
+	}
+	return cp, func() {
+		C.free(unsafe.Pointer(cp.data))
+		C.free(unsafe.Pointer(cp.extradata))
+	}
 }
 
 func goPacket(p C.mist_av_packet) Packet {
@@ -592,15 +613,20 @@ func goPacket(p C.mist_av_packet) Packet {
 	if p.data != nil && p.size > 0 {
 		data = C.GoBytes(unsafe.Pointer(p.data), p.size)
 	}
+	var extra []byte
+	if p.extradata != nil && p.extradata_size > 0 {
+		extra = C.GoBytes(unsafe.Pointer(p.extradata), p.extradata_size)
+	}
 	return Packet{
-		Data:        data,
-		StreamIndex: int(p.stream_index),
-		Flags:       int(p.flags),
-		PTS:         int64(p.pts),
-		DTS:         int64(p.dts),
-		Duration:    int64(p.duration),
-		SkipStart:   uint32(p.skip_start),
-		SkipEnd:     uint32(p.skip_end),
+		Data:         data,
+		NewExtradata: extra,
+		StreamIndex:  int(p.stream_index),
+		Flags:        int(p.flags),
+		PTS:          int64(p.pts),
+		DTS:          int64(p.dts),
+		Duration:     int64(p.duration),
+		SkipStart:    uint32(p.skip_start),
+		SkipEnd:      uint32(p.skip_end),
 	}
 }
 

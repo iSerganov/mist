@@ -2,11 +2,14 @@
 
 package av
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 func avInit() error { return errUnimplemented }
 
-func avOpenDemuxer(string) (*Demuxer, error) { return nil, errUnimplemented }
+func avOpenDemuxer(context.Context, string) (*Demuxer, error) { return nil, errUnimplemented }
 
 func avOpenDemuxerReader(io.Reader) (*Demuxer, error) { return nil, errUnimplemented }
 
